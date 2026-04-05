@@ -1,0 +1,100 @@
+{
+  "name": "smallstore",
+  "version": "0.1.0",
+  "description": "Universal storage layer — one API, 17+ backends. Memory, SQLite, Upstash, Airtable, Notion, Cloudflare KV/D1/DO/R2, and more.",
+  "type": "module",
+  "module": "./dist/esm/mod.js",
+  "types": "./dist/types/mod.d.ts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/types/mod.d.ts", "default": "./dist/esm/mod.js" }
+    },
+    "./presets": {
+      "import": { "types": "./dist/types/presets.d.ts", "default": "./dist/esm/presets.js" }
+    },
+    "./config": {
+      "import": { "types": "./dist/types/config.d.ts", "default": "./dist/esm/config.js" }
+    },
+    "./search": {
+      "import": { "types": "./dist/types/src/search/mod.d.ts", "default": "./dist/esm/src/search/mod.js" }
+    },
+    "./graph": {
+      "import": { "types": "./dist/types/src/graph/mod.d.ts", "default": "./dist/esm/src/graph/mod.js" }
+    },
+    "./episodic": {
+      "import": { "types": "./dist/types/src/episodic/mod.d.ts", "default": "./dist/esm/src/episodic/mod.js" }
+    },
+    "./disclosure": {
+      "import": { "types": "./dist/types/src/disclosure/mod.d.ts", "default": "./dist/esm/src/disclosure/mod.js" }
+    },
+    "./blob-middleware": {
+      "import": { "types": "./dist/types/src/blob-middleware/mod.d.ts", "default": "./dist/esm/src/blob-middleware/mod.js" }
+    },
+    "./views": {
+      "import": { "types": "./dist/types/src/views/mod.d.ts", "default": "./dist/esm/src/views/mod.js" }
+    },
+    "./materializers": {
+      "import": { "types": "./dist/types/src/materializers/mod.d.ts", "default": "./dist/esm/src/materializers/mod.js" }
+    },
+    "./http": {
+      "import": { "types": "./dist/types/src/http/mod.d.ts", "default": "./dist/esm/src/http/mod.js" }
+    },
+    "./sync": {
+      "import": { "types": "./dist/types/src/sync.d.ts", "default": "./dist/esm/src/sync.js" }
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "deno run -A scripts/build-npm.ts"
+  },
+  "keywords": [
+    "storage",
+    "key-value",
+    "database",
+    "adapter",
+    "universal",
+    "airtable",
+    "notion",
+    "upstash",
+    "redis",
+    "cloudflare",
+    "r2",
+    "kv",
+    "d1",
+    "sqlite",
+    "graph",
+    "episodic-memory",
+    "blob-storage",
+    "search",
+    "vector-search",
+    "bm25"
+  ],
+  "author": "Jan Zheng",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/janzheng/smallstore"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@aws-sdk/s3-request-presigner": "^3.0.0",
+    "@notionhq/client": "^2.3.0",
+    "unstorage": "^1.17.0"
+  },
+  "peerDependencies": {
+    "hono": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hono": { "optional": true }
+  },
+  "optionalDependencies": {
+    "@zvec/zvec": "^0.2.1"
+  }
+}

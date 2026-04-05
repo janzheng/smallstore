@@ -1,0 +1,19 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:hono@^4.10.3": "4.12.4"
+  },
+  "npm": {
+    "hono@4.12.4": {
+      "integrity": "sha512-ooiZW1Xy8rQ4oELQ++otI2T9DsKpV0M6c6cO6JGx4RTfav9poFFLlet9UMXHZnoM1yG0HWGlQLswBGX3RZmHtg=="
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "jsr:@std/cli@1",
+      "jsr:@std/dotenv@0.225",
+      "jsr:@std/path@1",
+      "npm:hono@^4.10.3"
+    ]
+  }
+}

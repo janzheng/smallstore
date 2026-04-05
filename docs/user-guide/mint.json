@@ -1,0 +1,44 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "Smallstore",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#6366F1",
+    "light": "#818CF8",
+    "dark": "#4F46E5"
+  },
+  "navigation": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        "index",
+        "getting-started"
+      ]
+    },
+    {
+      "group": "Configuration",
+      "pages": [
+        "adapters",
+        "presets",
+        "routing",
+        "env-vars"
+      ]
+    },
+    {
+      "group": "Features",
+      "pages": [
+        "graph-store",
+        "episodic-memory",
+        "blob-middleware",
+        "views",
+        "http-api",
+        "standalone-server",
+        "sync"
+      ]
+    }
+  ]
+}

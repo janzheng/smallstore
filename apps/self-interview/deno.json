@@ -1,0 +1,30 @@
+{
+  "name": "self-interview",
+  "exports": "./mod.ts",
+  "tasks": {
+    "serve": "deno run --allow-all mod.ts",
+    "serve:watch": "deno run --allow-all --watch mod.ts",
+    "deploy:dev": "deno deploy --app 'self-interview'",
+    "deploy:prod": "deno deploy --app 'self-interview' --prod"
+  },
+  "imports": {
+    "hono": "npm:hono@^4.10.3",
+    "@std/dotenv": "jsr:@std/dotenv@^0.225.0",
+    "@std/path": "jsr:@std/path@^1.0.0",
+    "@std/cli": "jsr:@std/cli@^1.0.0"
+  },
+  "lock": false,
+  "compilerOptions": {
+    "strict": true,
+    "lib": [
+      "deno.ns",
+      "deno.unstable",
+      "dom",
+      "dom.iterable"
+    ]
+  },
+  "deploy": {
+    "org": "yawnxyz",
+    "app": "self-interview"
+  }
+}

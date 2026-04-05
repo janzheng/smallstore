@@ -1,0 +1,56 @@
+{
+  "name": "@smallstore/core",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts",
+    "./adapters/memory": "./src/adapters/memory.ts",
+    "./adapters/upstash": "./src/adapters/upstash.ts",
+    "./adapters/airtable": "./src/adapters/airtable.ts",
+    "./adapters/notion": "./src/adapters/notion.ts",
+    "./adapters/sheetlog": "./src/adapters/sheetlog.ts",
+    "./adapters/sqlite": "./src/adapters/sqlite.ts",
+    "./adapters/structured-sqlite": "./src/adapters/structured-sqlite.ts",
+    "./adapters/local-json": "./src/adapters/local-json.ts",
+    "./adapters/local-file": "./src/adapters/local-file.ts",
+    "./adapters/deno-fs": "./src/adapters/deno-fs.ts",
+    "./adapters/overlay": "./src/adapters/overlay.ts",
+    "./adapters/r2-direct": "./src/adapters/r2-direct.ts",
+    "./adapters/f2-r2": "./src/adapters/f2-r2.ts",
+    "./adapters/unstorage": "./src/adapters/unstorage.ts",
+    "./adapters/cloudflare-kv": "./src/adapters/cloudflare-kv.ts",
+    "./adapters/cloudflare-d1": "./src/adapters/cloudflare-d1.ts",
+    "./adapters/cloudflare-do": "./src/adapters/cloudflare-do.ts",
+    "./adapters/cloudflare-r2": "./src/adapters/cloudflare-r2.ts",
+    "./search": "./src/search/mod.ts",
+    "./graph": "./src/graph/mod.ts",
+    "./episodic": "./src/episodic/mod.ts",
+    "./disclosure": "./src/disclosure/mod.ts",
+    "./blob-middleware": "./src/blob-middleware/mod.ts",
+    "./views": "./src/views/mod.ts",
+    "./materializers": "./src/materializers/mod.ts",
+    "./http": "./src/http/mod.ts",
+    "./sync": "./src/sync.ts",
+    "./vfs": "./apps/cli/vfs.ts",
+    "./presets": "./presets.ts",
+    "./config": "./config.ts"
+  },
+  "publish": {
+    "include": [
+      "mod.ts",
+      "presets.ts",
+      "config.ts",
+      "src/**/*.ts",
+      "apps/cli/vfs.ts",
+      "LICENSE",
+      "README.md"
+    ],
+    "exclude": [
+      "src/**/examples/",
+      "src/**/tests/",
+      "src/**/*.test.ts",
+      "src/**/*.manual.ts",
+      "**/*.examples.ts"
+    ]
+  }
+}

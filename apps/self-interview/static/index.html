@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Self-Interview</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<div x-data="interviewApp()" x-init="init()" class="app-layout">
+
+  <!-- Loading overlay -->
+  <div x-show="initializing" class="init-overlay">
+    <div class="init-spinner"></div>
+    <p>Loading...</p>
+  </div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" :class="{ 'sidebar--open': sidebarOpen }">
+    <div class="sidebar__header">
+      <h1 class="sidebar__title">Self-Interview</h1>
+      <button class="sidebar__close" @click="sidebarOpen = false">&times;</button>
+    </div>
+
+    <!-- Mission picker (shown when no active session) -->
+    <template x-if="!session">
+      <div class="sidebar__section">
+        <h2 class="sidebar__label">New Interview</h2>
+        <div class="mission-list">
+          <template x-for="m in missions" :key="m.slug">
+            <button class="mission-card" @click="selectedMission = m.slug; customMissionText = ''" :class="{ 'mission-card--active': selectedMission === m.slug }">
+              <span class="mission-card__name" x-text="m.name"></span>
+              <span class="mission-card__desc" x-text="m.description"></span>
+            </button>
+          </template>
+          <button class="mission-card" @click="selectedMission = '__custom__'" :class="{ 'mission-card--active': selectedMission === '__custom__' }">
+            <span class="mission-card__name">Custom</span>
+            <span class="mission-card__desc">Describe your own interview mission</span>
+          </button>
+        </div>
+
+        <!-- Custom mission input -->
+        <div class="sidebar__section" x-show="selectedMission === '__custom__'" x-collapse>
+          <h2 class="sidebar__label">Describe Your Mission</h2>
+          <textarea
+            class="input custom-mission-textarea"
+            x-model="customMissionText"
+            placeholder="e.g. Interview me about my startup idea for an AI-powered recipe app. Help me think through the market, features, and business model."
+            rows="4"
+          ></textarea>
+          <p class="settings-hint">What should the interviewer focus on? Be specific — this becomes their guide. (10+ characters)</p>
+        </div>
+
+        <div class="sidebar__actions">
+          <input type="text" class="input" placeholder="Session name..." x-model="newSessionName">
+          <button class="btn btn--primary" @click="startSession()" :disabled="!canStart || starting">
+            <span x-show="!starting">Start Interview</span>
+            <span x-show="starting">Starting...</span>
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <!-- Session info (shown when active) -->
+    <template x-if="session">
+      <div class="sidebar__section">
+        <h2 class="sidebar__label">Session</h2>
+        <div class="session-info">
+          <div class="session-info__row">
+            <span class="session-info__key">Name</span>
+            <span class="session-info__val" x-text="session"></span>
+          </div>
+          <div class="session-info__row">
+            <span class="session-info__key">Mission</span>
+            <span class="session-info__val" x-text="status?.mission || '—'"></span>
+          </div>
+          <div class="session-info__row">
+            <span class="session-info__key">Messages</span>
+            <span class="session-info__val" x-text="status?.stats?.totalMessages || 0"></span>
+          </div>
+          <div class="session-info__row">
+            <span class="session-info__key">Notes</span>
+            <span class="session-info__val" x-text="status?.noteCount || 0"></span>
+          </div>
+          <div class="session-info__row">
+            <span class="session-info__key">Tokens</span>
+            <span class="session-info__val" x-text="status?.stats?.activeTokens || 0"></span>
+          </div>
+          <div class="session-info__row" x-show="status?.stats?.archivedMessages > 0">
+            <span class="session-info__key">Archived</span>
+            <span class="session-info__val" x-text="status?.stats?.archivedMessages"></span>
+          </div>
+          <div class="session-info__row" x-show="status?.stats?.summaryNodes > 0">
+            <span class="session-info__key">Summaries</span>
+            <span class="session-info__val" x-text="status?.stats?.summaryNodes"></span>
+          </div>
+        </div>
+
+        <button class="btn btn--sm btn--ghost" @click="endSession()">End Session</button>
+      </div>
+    </template>
+
+    <!-- Notes panel -->
+    <template x-if="session && notes.length > 0">
+      <div class="sidebar__section">
+        <h2 class="sidebar__label">Notes <span class="badge" x-text="notes.length"></span></h2>
+        <div class="notes-list">
+          <template x-for="note in notes" :key="note.id">
+            <div class="note-card">
+              <span class="note-card__cat" x-text="note.category"></span>
+              <p class="note-card__text" x-text="note.text"></p>
+              <p class="note-card__quote" x-show="note.quote" x-text="note.quote"></p>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+
+    <!-- Settings -->
+    <div class="sidebar__section">
+      <h2 class="sidebar__label" @click="settingsOpen = !settingsOpen" style="cursor:pointer">
+        Settings
+        <span x-text="settingsOpen ? '\u25B4' : '\u25BE'" style="font-size:10px"></span>
+        <span x-show="aiConfig.apiKey" class="badge" style="background:var(--color-text-muted);margin-left:auto">custom</span>
+      </h2>
+      <div x-show="settingsOpen" x-collapse>
+        <div class="settings-form">
+          <label class="settings-label">API Key</label>
+          <input type="password" class="input" placeholder="sk-... or gsk_..." x-model="aiConfig.apiKey" @change="saveSettings()">
+          <label class="settings-label">API Endpoint</label>
+          <input type="text" class="input" placeholder="https://api.openai.com/v1" x-model="aiConfig.baseUrl" @change="saveSettings()">
+          <label class="settings-label">Model</label>
+          <input type="text" class="input" placeholder="gpt-4o-mini" x-model="aiConfig.model" @change="saveSettings()">
+          <p class="settings-hint">Leave blank to use server defaults. Supports any OpenAI-compatible API (Groq, Together, Ollama, LM Studio, etc.)</p>
+          <button class="btn btn--sm btn--ghost" x-show="aiConfig.apiKey || aiConfig.baseUrl || aiConfig.model" @click="clearSettings()">Clear overrides</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Past sessions -->
+    <template x-if="!session && sessions.length > 0">
+      <div class="sidebar__section">
+        <h2 class="sidebar__label">Past Sessions</h2>
+        <div class="session-list">
+          <template x-for="s in sessions" :key="s.name">
+            <div class="session-item">
+              <button class="session-item__name" @click="resumeSession(s.name)" x-text="s.name"></button>
+              <span class="session-item__meta" x-text="s.missionName + ' \u00b7 ' + s.noteCount + ' notes'"></span>
+              <button class="session-item__delete" @click.stop="deleteSession(s.name)" title="Delete">&times;</button>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+  </aside>
+
+  <!-- Main chat area -->
+  <main class="chat-area">
+    <!-- Mobile header -->
+    <header class="chat-header">
+      <button class="chat-header__menu" @click="sidebarOpen = !sidebarOpen">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <span class="chat-header__title" x-text="session ? session : 'Self-Interview'"></span>
+      <span class="chat-header__status" x-show="session" x-text="status?.mission || ''"></span>
+    </header>
+
+    <!-- Messages -->
+    <div class="messages" x-ref="messages">
+      <!-- Empty state -->
+      <template x-if="!session && messages.length === 0">
+        <div class="empty-state">
+          <h2>Welcome to Self-Interview</h2>
+          <p>Choose a mission and start a session to begin your interview.</p>
+        </div>
+      </template>
+
+      <template x-for="(msg, i) in messages" :key="i">
+        <div class="message" :class="'message--' + msg.role">
+          <div class="message__bubble">
+            <div class="message__content" x-html="renderMarkdown(msg.content)"></div>
+          </div>
+        </div>
+      </template>
+
+      <!-- Typing indicator -->
+      <template x-if="loading">
+        <div class="message message--assistant">
+          <div class="message__bubble">
+            <div class="typing-indicator">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Input area -->
+    <div class="input-area" x-show="session">
+      <form @submit.prevent="sendMessage()" class="input-area__form">
+        <textarea
+          class="input-area__textarea"
+          x-model="userInput"
+          @keydown.enter.meta.prevent="sendMessage()"
+          @keydown.enter.ctrl.prevent="sendMessage()"
+          placeholder="Type your response..."
+          :disabled="loading"
+          x-ref="input"
+          rows="1"
+          @input="autoResize($event)"
+        ></textarea>
+        <button type="submit" class="btn btn--primary btn--send" :disabled="!userInput.trim() || loading">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </form>
+      <div class="input-area__hint">
+        <span x-show="!loading">Cmd+Enter to send</span>
+        <span x-show="loading" class="input-area__thinking">Thinking...</span>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

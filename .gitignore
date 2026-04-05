@@ -1,0 +1,21 @@
+# Test data (created by live-adapters.test.ts)
+tests/.data/
+
+# Local data (created by serve.ts, examples, apps)
+data/
+examples/*/data/
+apps/*/data/
+
+# Environment files
+.env
+.env.local
+
+# OS files
+.DS_Store
+
+# Deno
+.deno/
+
+# npm build output
+dist/
+node_modules/
