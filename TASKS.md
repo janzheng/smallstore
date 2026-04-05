@@ -57,16 +57,17 @@
 
 ## Now
 
-- [ ] Publish to JSR (`deno publish`) #jsr-publish
-- [ ] Publish to npm (`deno task build:npm && cd dist && npm publish`) #npm-publish
-- [ ] Make repo public on GitHub #github-public
+- [x] [done: published @yawnxyz/smallstore@0.1.0] Publish to JSR (`deno publish`) #jsr-publish
+- [x] [done: github.com/janzheng/smallstore] Make repo public on GitHub #github-public
 
 ## Soon
 
-- [ ] Add back to coverflow as a dependency (jsr:@smallstore/core or npm:smallstore) #coverflow-dep
+- [ ] Add back to coverflow as a dependency (jsr:@yawnxyz/smallstore) #coverflow-dep
 - [ ] Verify coverflow still works with smallstore as external dep #coverflow-verify
 
 ## Future
 
+- [ ] Publish to npm (`deno task build:npm && cd dist && npm publish`) #npm-publish
+- [ ] Test and validate npm build works in Node.js projects #npm-validate
 - [ ] Re-rank provider (Cohere/Jina) #retrieval-rerank
 - [ ] Context window provider (token-budget-aware slicing) #retrieval-context

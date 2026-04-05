@@ -10,24 +10,12 @@ Smallstore is a universal storage abstraction layer for JavaScript and TypeScrip
 
 ## Installation
 
-### Deno
-
 ```bash
 deno add jsr:@yawnxyz/smallstore
 ```
 
 ```typescript
 import { createSmallstore, createMemoryAdapter } from "@yawnxyz/smallstore";
-```
-
-### Node.js
-
-```bash
-npm install smallstore
-```
-
-```typescript
-import { createSmallstore, createMemoryAdapter } from "smallstore";
 ```
 
 ## Basic usage
@@ -321,11 +309,7 @@ See `.env.example` for the required environment variables.
 ## Publishing
 
 ```bash
-# JSR (Deno)
 deno publish --no-check --allow-slow-types
-
-# npm
-deno task build:npm && cd dist && npm publish
 ```
 
 ## License
