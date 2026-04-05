@@ -15,7 +15,7 @@
  * ```
  */
 
-import type { Context } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 
 // ============================================================================
 // Configuration
@@ -197,7 +197,14 @@ export class ResponseCacheStore {
   }
 
   /** Get cache statistics */
-  getStats() {
+  getStats(): {
+    entries: number;
+    hits: number;
+    misses: number;
+    staleHits: number;
+    hitRate: number;
+    swrInFlight: number;
+  } {
     return {
       entries: this.cache.size,
       hits: this.hits,
@@ -364,7 +371,7 @@ export function responseCache(userConfig: ResponseCacheConfig = {}): {
  * Simple version that returns just the middleware function (for easy `app.use()`).
  * The returned function has a `destroy()` method to stop the cleanup timer.
  */
-export function responseCacheMiddleware(config: ResponseCacheConfig = {}) {
+export function responseCacheMiddleware(config: ResponseCacheConfig = {}): MiddlewareHandler & { destroy: () => void } {
   const { middleware, store } = responseCache(config);
   const fn = middleware as typeof middleware & { destroy: () => void };
   fn.destroy = () => store.destroy();

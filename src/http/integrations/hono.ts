@@ -21,7 +21,7 @@
  * ```
  */
 
-import type { Context, Hono } from 'hono';
+import type { Context, Hono, MiddlewareHandler } from 'hono';
 import type { SmallstoreRequest, SmallstoreResponse, SmallstoreInstance } from '../types.ts';
 import * as handlers from '../handlers.ts';
 import { cacheHeaders, type CacheHeadersConfig } from '../middleware/cache-headers.ts';
@@ -451,7 +451,7 @@ export function createHonoRouter(
  * app.use('/api/smallstore/*', smallstoreMiddleware(smallstore));
  * ```
  */
-export function smallstoreMiddleware(smallstore: SmallstoreInstance) {
+export function smallstoreMiddleware(smallstore: SmallstoreInstance): MiddlewareHandler {
   return async (c: Context, next: () => Promise<void>) => {
     // Add smallstore to context for use in handlers
     c.set('smallstore', smallstore);

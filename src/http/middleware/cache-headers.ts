@@ -15,7 +15,7 @@
  * ```
  */
 
-import type { Context } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import { simpleHash } from '../../utils/cache-key.ts';
 
 // ============================================================================
@@ -116,7 +116,7 @@ function computeETag(body: unknown): string {
  * - Skips mutation methods (POST, PUT, PATCH, DELETE)
  * - Sets `Vary: Accept, Accept-Encoding` for correct CDN keying
  */
-export function cacheHeaders(userConfig: CacheHeadersConfig = {}) {
+export function cacheHeaders(userConfig: CacheHeadersConfig = {}): MiddlewareHandler {
   const config: Required<CacheHeadersConfig> = { ...DEFAULT_CONFIG, ...userConfig };
 
   return async (c: Context, next: () => Promise<void>) => {

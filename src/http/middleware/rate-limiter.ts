@@ -15,7 +15,7 @@
  * ```
  */
 
-import type { Context } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 
 // ============================================================================
 // Configuration
@@ -152,7 +152,12 @@ export class RateLimiterStore {
   }
 
   /** Get stats */
-  getStats() {
+  getStats(): {
+    activeBuckets: number;
+    allowed: number;
+    blocked: number;
+    blockRate: number;
+  } {
     return {
       activeBuckets: this.buckets.size,
       allowed: this.allowed,
@@ -228,7 +233,7 @@ export function rateLimiter(userConfig: RateLimitConfig = {}): {
  * Simple version that returns just the middleware function.
  * The returned function has a `destroy()` method to stop the cleanup timer.
  */
-export function rateLimiterMiddleware(config: RateLimitConfig = {}) {
+export function rateLimiterMiddleware(config: RateLimitConfig = {}): MiddlewareHandler & { destroy: () => void } {
   const { middleware, store } = rateLimiter(config);
   const fn = middleware as typeof middleware & { destroy: () => void };
   fn.destroy = () => store.destroy();

@@ -146,14 +146,14 @@ export interface R2DirectAdapterConfig {
 // Used by buildAdaptersFromEnv() and presets.ts.
 // ============================================================================
 
-export function resolveUpstashEnv() {
+export function resolveUpstashEnv(): { url: string | undefined; token: string | undefined } {
   return {
     url: getEnv('SM_UPSTASH_URL') || getEnv('UPSTASH_REDIS_REST_URL'),
     token: getEnv('SM_UPSTASH_TOKEN') || getEnv('UPSTASH_REDIS_REST_TOKEN'),
   };
 }
 
-export function resolveAirtableEnv() {
+export function resolveAirtableEnv(): { apiKey: string | undefined; baseId: string | undefined; table: string | undefined } {
   return {
     apiKey: getEnv('SM_AIRTABLE_API_KEY') || getEnv('AIRTABLE_API_KEY'),
     baseId: getEnv('SM_AIRTABLE_BASE_ID') || getEnv('AIRTABLE_BASE_ID'),
@@ -161,27 +161,27 @@ export function resolveAirtableEnv() {
   };
 }
 
-export function resolveNotionEnv() {
+export function resolveNotionEnv(): { secret: string | undefined; databaseId: string | undefined } {
   return {
     secret: getEnv('SM_NOTION_SECRET') || getEnv('NOTION_API_KEY'),
     databaseId: getEnv('SM_NOTION_DATABASE_ID') || getEnv('NOTION_DATABASE_ID'),
   };
 }
 
-export function resolveSheetlogEnv() {
+export function resolveSheetlogEnv(): { sheetUrl: string | undefined; sheet: string } {
   return {
     sheetUrl: getEnv('SM_SHEET_URL') || getEnv('SHEET_URL'),
     sheet: getEnv('SM_SHEET_NAME') || getEnv('SHEET_NAME') || 'Sheet1',
   };
 }
 
-export function resolveCloudflareWorkersEnv() {
+export function resolveCloudflareWorkersEnv(): { baseUrl: string | undefined } {
   return {
     baseUrl: getEnv('SM_WORKERS_URL') || getEnv('COVERFLOW_WORKERS_URL'),
   };
 }
 
-export function resolveR2Env() {
+export function resolveR2Env(): { accountId: string | undefined; accessKeyId: string | undefined; secretAccessKey: string | undefined; bucketName: string | undefined } {
   return {
     accountId: getEnv('SM_R2_ACCOUNT_ID') || getEnv('R2_ACCOUNT_ID'),
     accessKeyId: getEnv('SM_R2_ACCESS_KEY_ID') || getEnv('R2_ACCESS_KEY_ID'),
@@ -190,7 +190,7 @@ export function resolveR2Env() {
   };
 }
 
-export function resolveF2Env() {
+export function resolveF2Env(): { f2Url: string | undefined; authKey: string | undefined } {
   return {
     f2Url: getEnv('F2_DEFAULT_URL') || getEnv('F2_URL') || getEnv('FUZZYFILE_URL'),
     authKey: getEnv('F2_AUTH_KEY') || getEnv('F2_DELETE_AUTH_KEY'),

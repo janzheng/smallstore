@@ -21,7 +21,7 @@
  * ```
  */
 
-import type { Context } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 
 // ============================================================================
 // Types — keep minimal; we only need get/set/delete/keys from the adapter
@@ -259,7 +259,16 @@ export class DistributedCacheStore {
   }
 
   /** Get cache statistics */
-  getStats() {
+  getStats(): {
+    l1Entries: number;
+    l1Hits: number;
+    l2Hits: number;
+    misses: number;
+    totalRequests: number;
+    l1HitRate: number;
+    l2HitRate: number;
+    overallHitRate: number;
+  } {
     return {
       l1Entries: this.l1.size,
       l1Hits: this.l1Hits,
@@ -421,7 +430,7 @@ export function distributedCache(userConfig: DistributedCacheConfig): {
  * Simple version that returns just the middleware function.
  * The returned function has a `destroy()` method to stop the cleanup timer.
  */
-export function distributedCacheMiddleware(config: DistributedCacheConfig) {
+export function distributedCacheMiddleware(config: DistributedCacheConfig): MiddlewareHandler & { destroy: () => void } {
   const { middleware, store } = distributedCache(config);
   const fn = middleware as typeof middleware & { destroy: () => void };
   fn.destroy = () => store.destroy();
