@@ -342,7 +342,7 @@ export class LocalJsonAdapter implements StorageAdapter {
   /**
    * Get storage statistics
    */
-  getStats() {
+  getStats(): { baseDir: string; cacheSize: number; pendingWrites: number } {
     return {
       baseDir: this.config.baseDir,
       cacheSize: this.cache.size,

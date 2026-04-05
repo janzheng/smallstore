@@ -334,7 +334,7 @@ export function createSkill(options: {
 /**
  * Example skills that can be used as starting points
  */
-export const EXAMPLE_SKILLS = {
+export const EXAMPLE_SKILLS: Record<string, Skill> = {
   /** Skill for data exploration */
   dataExplorer: createSkill({
     name: 'data-explorer',

@@ -36,7 +36,7 @@ export function getCloudflareWorkersUrl(): string {
  *   namespace: 'my-app',
  * });
  */
-export function getCloudflareConfig() {
+export function getCloudflareConfig(): { baseUrl: string } {
   return {
     baseUrl: getCloudflareWorkersUrl(),
   };

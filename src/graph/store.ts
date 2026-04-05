@@ -44,7 +44,7 @@ import type {
 } from './types.ts';
 import { bfs, type TraversalContext } from './traversal.ts';
 import { GraphQueryBuilder, executeQuery, findPath, findByPattern } from './query.ts';
-import type { TraversalPattern } from './types.ts';
+import type { TraversalPattern, GraphPath } from './types.ts';
 
 // ============================================================================
 // Bound Query Builder
@@ -717,7 +717,7 @@ export class GraphStore {
    * @param toId - Target node ID
    * @returns Path or null if no path exists
    */
-  async findPath(fromId: string, toId: string) {
+  async findPath(fromId: string, toId: string): Promise<GraphPath | null> {
     const context = this.createTraversalContext();
     return findPath(fromId, toId, context);
   }
