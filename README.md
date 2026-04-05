@@ -1,20 +1,38 @@
 # Smallstore
 
-Universal storage layer — one API, 17+ backends.
+Smallstore is a universal storage abstraction layer for JavaScript and TypeScript. It provides a single API that works across 17+ storage backends, from in-memory stores to cloud services like Upstash, Airtable, Notion, and Cloudflare.
 
-Store JSON, blobs, arrays, and vectors across Memory, SQLite, Upstash, Airtable, Notion, Google Sheets, Cloudflare KV/D1/DO/R2, and more. Includes full-text search, graph relationships, episodic memory, views, and an HTTP API.
+- **Unified interface** -- `get`, `set`, `delete`, `keys` work the same regardless of backend
+- **Path-based routing** -- mount different adapters at different key prefixes
+- **Built-in search** -- BM25 full-text search and vector similarity search
+- **Graph and episodic modules** -- relationship traversal and time-aware memory
+- **HTTP API** -- expose any store as a REST API with Hono
 
-## Install
+## Installation
+
+### Deno
 
 ```bash
-# Deno
 deno add jsr:@yawnxyz/smallstore
+```
 
-# npm
+```typescript
+import { createSmallstore, createMemoryAdapter } from "@yawnxyz/smallstore";
+```
+
+### Node.js
+
+```bash
 npm install smallstore
 ```
 
-## Quick Start
+```typescript
+import { createSmallstore, createMemoryAdapter } from "smallstore";
+```
+
+## Basic usage
+
+Create a store, then use `set()`, `get()`, `delete()`, and `keys()` to manage data.
 
 ```typescript
 import { createSmallstore, createMemoryAdapter } from "@yawnxyz/smallstore";
@@ -24,107 +42,105 @@ const store = createSmallstore({
   defaultAdapter: "memory",
 });
 
-// Set and get data
 await store.set("users/alice", { name: "Alice", role: "admin" });
 const alice = await store.get("users/alice");
+// { name: "Alice", role: "admin" }
 
-// List keys by prefix
 const userKeys = await store.keys("users/");
+// ["users/alice"]
 
-// Delete
 await store.delete("users/alice");
 ```
 
 ## Presets
 
-Skip manual configuration with built-in presets:
+Presets provide one-line configurations for common setups:
 
 ```typescript
-import { createSmallstore } from "@yawnxyz/smallstore";
-
 // In-memory (testing, prototyping)
 const store = createSmallstore({ preset: "memory" });
 
 // Local JSON files on disk
 const store = createSmallstore({ preset: "local" });
 
-// SQLite for structured/queryable storage
+// SQLite with full-text search
 const store = createSmallstore({ preset: "local-sqlite" });
 
-// Cloud: Upstash + R2 (reads env vars automatically)
+// Cloud storage via Upstash + R2 (reads env vars)
 const store = createSmallstore({ preset: "cloud" });
 
-// Hybrid: local primary + cloud backup
+// Local primary with cloud backup
 const store = createSmallstore({ preset: "hybrid" });
 ```
 
 ## Adapters
 
-| Adapter | Type | Best For |
-|---------|------|----------|
-| **Memory** | Built-in | Testing, caching, prototyping |
-| **SQLite** | Local | Structured queries, FTS, local persistence |
-| **Structured SQLite** | Local | Typed SQL tables with column definitions |
-| **Local JSON** | Local | Simple file-based persistence |
-| **Local File** | Local | Raw binary/blob storage on disk |
-| **Deno FS** | Local | Real directory as a store |
-| **Upstash** | Cloud | Redis-style KV, serverless-friendly |
-| **Airtable** | Cloud | Structured data with a spreadsheet UI |
-| **Notion** | Cloud | Database pages with rich properties |
-| **Google Sheets** | Cloud | Spreadsheet storage via Sheetlog |
-| **Cloudflare KV** | Cloud | Edge-distributed key-value |
-| **Cloudflare D1** | Cloud | Edge SQL database |
-| **Cloudflare DO** | Cloud | Durable Objects (strong consistency) |
-| **Cloudflare R2** | Cloud | S3-compatible object storage |
-| **R2 Direct** | Cloud | R2 via AWS SDK (presigned URLs) |
-| **F2-R2** | Cloud | R2 via F2 proxy service |
-| **Unstorage** | Cloud | Any unstorage driver (Redis, S3, etc.) |
-| **Overlay** | Composite | Copy-on-write read-through layer |
+Each adapter wraps a different storage backend behind the same interface.
 
-### Using Cloud Adapters
+### Local adapters
+
+| Adapter | Description |
+|---------|-------------|
+| Memory | In-memory store. No persistence. Useful for testing and caching. |
+| SQLite | Local database with FTS5 full-text search support. |
+| Structured SQLite | Typed SQL tables with column definitions and indexes. |
+| Local JSON | Reads and writes JSON files to disk. |
+| Local File | Raw binary and blob storage on the local filesystem. |
+| Deno FS | Maps a real directory tree as a key-value store. |
+
+### Cloud adapters
+
+| Adapter | Description |
+|---------|-------------|
+| Upstash | Redis-compatible key-value store. Serverless-friendly. |
+| Airtable | Structured records with a spreadsheet UI. |
+| Notion | Database pages with typed properties (text, email, etc.). |
+| Google Sheets | Spreadsheet storage via the Sheetlog proxy. |
+| Cloudflare KV | Edge-distributed key-value with eventual consistency. |
+| Cloudflare D1 | Edge SQL database. |
+| Cloudflare DO | Durable Objects with strong consistency. |
+| Cloudflare R2 | S3-compatible object storage. |
+| R2 Direct | R2 access via AWS SDK with presigned URL support. |
+| F2-R2 | R2 access via the F2 proxy service. |
+| Unstorage | Wraps any [unstorage](https://unstorage.unjs.io/) driver. |
+
+### Composite adapters
+
+| Adapter | Description |
+|---------|-------------|
+| Overlay | Copy-on-write layer over another adapter. Changes are local until committed. |
+
+### Example: multiple adapters
 
 ```typescript
 import {
   createSmallstore,
+  createMemoryAdapter,
   createUpstashAdapter,
-  createAirtableAdapter,
-  createNotionAdapter,
-  createCloudflareKVAdapter,
   createR2DirectAdapter,
 } from "@yawnxyz/smallstore";
 
 const store = createSmallstore({
   adapters: {
-    cache: createUpstashAdapter({
-      url: Deno.env.get("UPSTASH_URL")!,
-      token: Deno.env.get("UPSTASH_TOKEN")!,
-    }),
-    contacts: createAirtableAdapter({
-      apiKey: Deno.env.get("AIRTABLE_API_KEY")!,
-      baseId: Deno.env.get("AIRTABLE_BASE_ID")!,
-      tableName: "Contacts",
-    }),
-    docs: createNotionAdapter({
-      secret: Deno.env.get("NOTION_SECRET")!,
-      databaseId: Deno.env.get("NOTION_DATABASE_ID")!,
-    }),
-    kv: createCloudflareKVAdapter({
-      baseUrl: Deno.env.get("CF_WORKERS_URL")!,
+    cache: createMemoryAdapter(),
+    kv: createUpstashAdapter({
+      url: Deno.env.get("UPSTASH_URL"),
+      token: Deno.env.get("UPSTASH_TOKEN"),
     }),
     files: createR2DirectAdapter({
-      accountId: Deno.env.get("R2_ACCOUNT_ID")!,
-      accessKeyId: Deno.env.get("R2_ACCESS_KEY_ID")!,
-      secretAccessKey: Deno.env.get("R2_SECRET_ACCESS_KEY")!,
+      accountId: Deno.env.get("R2_ACCOUNT_ID"),
+      accessKeyId: Deno.env.get("R2_ACCESS_KEY_ID"),
+      secretAccessKey: Deno.env.get("R2_SECRET_ACCESS_KEY"),
       bucketName: "my-bucket",
     }),
   },
-  defaultAdapter: "cache",
+  defaultAdapter: "kv",
 });
 ```
 
-## Path-Based Routing (Mounts)
+## Path-based routing
 
-Route keys to specific adapters by prefix:
+The `mounts` option routes keys to specific adapters based on their prefix:
 
 ```typescript
 const store = createSmallstore({
@@ -141,87 +157,74 @@ const store = createSmallstore({
   },
 });
 
-// Automatically routed:
-await store.set("users/alice", data);       // -> sqlite
-await store.set("uploads/photo.jpg", blob); // -> r2
-await store.set("cache/temp", value);       // -> memory
+await store.set("users/alice", data);       // routed to sqlite
+await store.set("uploads/photo.jpg", blob); // routed to r2
+await store.set("cache/temp", value);       // routed to memory
 ```
 
 ## Search
 
-Built-in full-text search (BM25) and vector search:
+Smallstore includes pluggable search providers for full-text and vector search.
+
+### BM25 full-text search
 
 ```typescript
-import {
-  createSmallstore,
-  createMemoryAdapter,
-  MemoryBm25SearchProvider,
-  MemoryVectorSearchProvider,
-} from "@yawnxyz/smallstore";
+import { MemoryBm25SearchProvider } from "@yawnxyz/smallstore";
 
-const store = createSmallstore({
-  adapters: { memory: createMemoryAdapter() },
-  defaultAdapter: "memory",
-});
+const search = new MemoryBm25SearchProvider();
+await search.index("doc1", { title: "Quantum Computing", body: "Qubits are..." });
+await search.index("doc2", { title: "Classical Physics", body: "Newton's laws..." });
 
-// BM25 text search
-const bm25 = new MemoryBm25SearchProvider();
-await bm25.index("doc1", { title: "Quantum Computing", body: "..." });
-const results = await bm25.search("quantum");
+const results = await search.search("quantum");
+// [{ key: "doc1", score: 0.82, ... }]
+```
 
-// Vector search (with embedding function)
-const vec = new MemoryVectorSearchProvider({
+### Vector similarity search
+
+```typescript
+import { MemoryVectorSearchProvider } from "@yawnxyz/smallstore";
+
+const search = new MemoryVectorSearchProvider({
   dimensions: 384,
   embed: myEmbedFunction,
 });
-await vec.index("doc1", { text: "..." });
-const similar = await vec.search("related query");
+
+await search.index("doc1", { text: "Machine learning fundamentals" });
+const similar = await search.search("deep learning basics");
 ```
 
-## Graph Store
+## Graph store
 
-Store and traverse relationships between entities:
+The graph module stores nodes and edges in any Smallstore adapter, enabling relationship queries and traversal.
 
 ```typescript
-import { createGraphStore, createSmallstore, createMemoryAdapter } from "@yawnxyz/smallstore";
-
-const store = createSmallstore({
-  adapters: { memory: createMemoryAdapter() },
-  defaultAdapter: "memory",
-});
+import { createGraphStore } from "@yawnxyz/smallstore";
 
 const graph = createGraphStore(store);
 
 await graph.addNode({ id: "alice", type: "person", data: { name: "Alice" } });
 await graph.addNode({ id: "bob", type: "person", data: { name: "Bob" } });
-await graph.addEdge({ source: "alice", target: "bob", type: "knows", data: { since: 2024 } });
+await graph.addEdge({ source: "alice", target: "bob", type: "knows" });
 
-// Traverse
 const friends = await graph.query({ from: "alice", edge: "knows" });
 ```
 
-## Episodic Memory
+## Episodic memory
 
-Time-aware storage with decay, sequences, and recall:
+Time-aware storage with importance decay and recall strategies.
 
 ```typescript
-import { createEpisodicStore, createSmallstore, createMemoryAdapter } from "@yawnxyz/smallstore";
-
-const store = createSmallstore({
-  adapters: { memory: createMemoryAdapter() },
-  defaultAdapter: "memory",
-});
+import { createEpisodicStore } from "@yawnxyz/smallstore";
 
 const episodes = createEpisodicStore(store);
 
 await episodes.record({
   type: "conversation",
-  data: { topic: "project planning", summary: "..." },
-  tags: ["work", "planning"],
+  data: { topic: "project planning" },
+  tags: ["work"],
   importance: 0.8,
 });
 
-// Recall recent important episodes
 const recalled = await episodes.recall({
   tags: ["work"],
   minImportance: 0.5,
@@ -231,7 +234,7 @@ const recalled = await episodes.recall({
 
 ## HTTP API
 
-Expose any store as an HTTP API with Hono:
+Expose any store as REST endpoints using Hono:
 
 ```typescript
 import { Hono } from "hono";
@@ -244,31 +247,35 @@ const store = createSmallstore({
 
 const app = new Hono();
 app.route("/api/store", createHonoRouter(store));
-
-// GET    /api/store/:key
-// PUT    /api/store/:key
-// DELETE /api/store/:key
-// GET    /api/store/ (list collections)
-
 Deno.serve(app.fetch);
 ```
 
-## Views & Materializers
+**Endpoints:**
 
-Create computed views and export data in multiple formats:
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/:key` | Retrieve a value |
+| `PUT` | `/:key` | Set a value |
+| `DELETE` | `/:key` | Delete a value |
+| `GET` | `/` | List all collections |
+
+## Materializers
+
+Export data in multiple output formats:
 
 ```typescript
 import { materializeCsv, materializeMarkdown, materializeJson } from "@yawnxyz/smallstore";
 
-// Materialize data as CSV, JSON, Markdown, YAML, or plain text
 const csv = materializeCsv(data);
 const md = materializeMarkdown(data);
 const json = materializeJson(data, { pretty: true });
 ```
 
+Supported formats: JSON, CSV, Markdown, YAML, plain text.
+
 ## VFS (Virtual Filesystem)
 
-Bash-like interface for agents and CLI tools:
+A bash-like interface for programmatic or agent-driven access:
 
 ```typescript
 import { vfs } from "@yawnxyz/smallstore";
@@ -284,37 +291,37 @@ await vfs.exec(state, "grep name users/");
 
 ## Examples
 
-Run examples with `deno task`:
+The repository includes runnable examples:
 
-| Task | Description |
-|------|-------------|
-| `deno task clipper` | Data clipper with 45 validation checks |
-| `deno task crm` | Mini CRM with 51 validation checks |
+| Command | Description |
+|---------|-------------|
+| `deno task clipper` | Data clipper with validation checks |
+| `deno task crm` | Mini CRM application |
 | `deno task gallery` | Media gallery with simulated mode |
-| `deno task paste` | Markdown paste bin (needs R2 credentials) |
-| `deno task auth` | Auth system with sessions |
-| `deno task api` | HTTP API server on :8787 |
-| `deno task cli` | CLI tool with VFS commands |
+| `deno task paste` | Markdown paste bin (requires R2 credentials) |
+| `deno task auth` | Authentication system with sessions |
+| `deno task api` | HTTP API server on port 8787 |
+| `deno task cli` | CLI with VFS commands |
 
 ## Testing
 
 ```bash
-# Run all offline tests (no credentials needed)
+# Offline tests (no credentials required)
 deno test --no-check --allow-all tests/*.test.ts
 
-# Run live adapter tests (needs .env with credentials)
+# Live adapter tests (requires .env credentials)
 deno test --no-check --allow-all tests/live-adapters.test.ts
 
-# Type check
+# Type checking
 deno check mod.ts
 ```
 
-Copy `.env.example` to `.env` and fill in credentials for live adapter tests.
+See `.env.example` for the required environment variables.
 
 ## Publishing
 
 ```bash
-# JSR
+# JSR (Deno)
 deno publish --no-check --allow-slow-types
 
 # npm
@@ -323,4 +330,4 @@ deno task build:npm && cd dist && npm publish
 
 ## License
 
-MIT
+[MIT](./LICENSE)
