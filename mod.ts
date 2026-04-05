@@ -1,46 +1,26 @@
 /**
- * Smallstore - Big surface area for small pockets of data storage
- * 
- * A standalone, architecture-first storage abstraction library with:
- * - Collection-based addressing ("favorites", "research/papers/2024")
- * - Smart routing (analyze data → route to best adapter)
- * - Heterogeneous data (JSON, arrays, blobs, vectors in one collection)
- * - Multiple backends (Memory, Upstash, SQLite, R2, Cloudflare Workers, etc.)
- * - Full-text search (FTS5/BM25), views, retrievers
- * - Structured SQL tables with typed columns
- * 
+ * Smallstore -- universal storage layer with one API and 17+ backends.
+ *
+ * Provides a unified `get`/`set`/`delete`/`keys` interface across Memory,
+ * SQLite, Upstash, Airtable, Notion, Google Sheets, Cloudflare KV/D1/DO/R2,
+ * and more. Includes full-text search, graph relationships, episodic memory,
+ * views, materializers, and an HTTP API.
+ *
  * @example
  * ```typescript
- * import { createSmallstore, createMemoryAdapter, createUpstashAdapter } from '@smallstore/core';
+ * import { createSmallstore, createMemoryAdapter } from "@yawnxyz/smallstore";
  *
- * // Create instance
- * const storage = createSmallstore({
- *   adapters: {
- *     memory: createMemoryAdapter(),
- *     upstash: createUpstashAdapter({ url: '...', token: '...' }),
- *   },
- *   defaultAdapter: 'memory',
+ * const store = createSmallstore({
+ *   adapters: { memory: createMemoryAdapter() },
+ *   defaultAdapter: "memory",
  * });
- * 
- * // Store heterogeneous data (smart routing!)
- * await storage.set("podcast-research-2024", {
- *   episodes: [...],      // Array
- *   transcripts: [...],   // Large blobs
- *   notes: "..."          // Small text
- * });
- * 
- * // Folder-like paths
- * await storage.set("research/papers/2024/quantum", paperData);
- * 
- * // Get data
- * const data = await storage.get("podcast-research-2024");
- * 
- * // List collection
- * const keys = await storage.keys("research/papers");
- * 
- * // Get schema (what's stored where)
- * const schema = await storage.getSchema("podcast-research-2024");
+ *
+ * await store.set("users/alice", { name: "Alice", role: "admin" });
+ * const alice = await store.get("users/alice");
+ * const keys = await store.keys("users/");
  * ```
+ *
+ * @module
  */
 
 // ============================================================================
