@@ -27,13 +27,11 @@ import { retryFetch, type RetryFetchOptions } from '../utils/retry-fetch.ts';
 import { debug } from '../utils/debug.ts';
 
 // Type declaration for Cloudflare Workers KV (when not in Workers environment)
-declare global {
-  interface KVNamespace {
-    get(key: string, type?: 'text' | 'json' | 'arrayBuffer' | 'stream'): Promise<any>;
-    put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
-    delete(key: string): Promise<void>;
-    list(options?: { prefix?: string }): Promise<{ keys: Array<{ name: string }> }>;
-  }
+interface KVNamespace {
+  get(key: string, type?: 'text' | 'json' | 'arrayBuffer' | 'stream'): Promise<any>;
+  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+  delete(key: string): Promise<void>;
+  list(options?: { prefix?: string }): Promise<{ keys: Array<{ name: string }> }>;
 }
 
 // ============================================================================
