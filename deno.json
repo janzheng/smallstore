@@ -1,6 +1,6 @@
 {
   "name": "@yawnxyz/smallstore",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "exports": "./mod.ts",
   "tasks": {
     "build:npm": "deno run -A scripts/build-npm.ts",
@@ -97,7 +97,9 @@
       "presets.ts",
       "config.ts",
       "src/**/*.ts",
-      "apps/cli/**/*.ts"
+      "apps/cli/**/*.ts",
+      "README.md",
+      "LICENSE"
     ],
     "exclude": [
       "src/**/examples/",
