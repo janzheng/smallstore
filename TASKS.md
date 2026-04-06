@@ -62,12 +62,44 @@
 
 ## Soon
 
-- [ ] Add back to coverflow as a dependency (jsr:@yawnxyz/smallstore) #coverflow-dep
-- [ ] Verify coverflow still works with smallstore as external dep #coverflow-verify
+- [x] [done: deno.json import map → jsr:@yawnxyz/smallstore@^0.1.4, 40 files updated] Add back to coverflow as a dependency #coverflow-dep
+- [x] [done: deno check passes, only pre-existing coverflow errors remain] Verify coverflow still works with smallstore as external dep #coverflow-verify
+
+## Done This Session (2026-04-05)
+
+- [x] [fixed: added ttl? param to set() for interface compliance] DO adapter signature mismatch #bug-fix
+- [x] [fixed: PIPELINE_DO → COVERFLOW_DO in types.ts, do-handler.ts, index.ts] DO binding name mismatch in coverflow-workers #bug-fix
+- [x] [done: all 7 DO checks pass — SET, GET, HAS, KEYS, DELETE, CLEAR, CAPABILITIES] Cloudflare DO adapter live and tested #validation
+
+## Notion SDK v5 Migration (2026-04-06)
+
+- [x] [done: f3d3581] Bump @notionhq/client from ^2.3.0 to ^5.16.0
+  - [x] Replace hardcoded npm:@notionhq/client@^2.0.0 with bare specifiers
+  - [x] Fix type import path: api-endpoints.d.ts → build/src/api-endpoints.d.ts
+  - [x] Migrate archived → in_trash in all request bodies
+  - [x] Update API version from 2022-06-28 to 2025-09-03
+  - [x] Update build-npm.ts dependency and mapping versions
+- [ ] Publish updated smallstore to JSR (bump version in deno.json, `deno publish`) #jsr-publish
+  - [*] Current JSR version @yawnxyz/smallstore@0.1.4 still uses v2 SDK
+  - [*] Coverflow imports smallstore from JSR — coverflow's own Notion code is on v5 but JSR smallstore is v2
+- [ ] Re-run Notion live adapter tests after JSR publish #validation
+  - [*] Last pass was on v2 SDK — need to confirm CRUD still works with v5
+- [!] queryDatabase callers may need migration to queryDataSource #discovered
+  - [*] v5 split "databases" (containers) from "data sources" (tables)
+  - [*] Existing queryDatabase calls may fail if Notion workspace uses multi-source databases
+  - [*] notionModern.ts has conditional fallback logic, but adapter.ts uses client.queryDatabase directly
+
+## Dependency Notes
+
+- [*] zod stays on v3 for now — zodex ^0.3.0 (used in coverflow shared/ai/) requires zod 3.x
+  - [*] zodex 4.x requires zod ^4.0 as peer dep — they must upgrade together
+  - [*] zod 4 has breaking API changes across 598+ files in coverflow
+  - [*] @notionhq/client v5 and @modelcontextprotocol/sdk v1.29 both accept zod ^3.25 || ^4.0 — no forced upgrade
+  - [*] When zod 4 migration happens, smallstore's Zod schemas will need updating too
 
 ## Future
 
 - [ ] Publish to npm (`deno task build:npm && cd dist && npm publish`) #npm-publish
 - [ ] Test and validate npm build works in Node.js projects #npm-validate
-- [ ] Re-rank provider (Cohere/Jina) #retrieval-rerank
-- [ ] Context window provider (token-budget-aware slicing) #retrieval-context
+- [ ] Migrate coverflow-workers into smallstore-owned worker `-> foxfire .brief/smallstore-workers-takeover.md` #infra
+- [*] LLM/agent features → see [TASKS-MAP.md Phase 8](./TASKS-MAP.md) (rerank, context window, RAG pipeline, semantic recall, working memory, etc.)
