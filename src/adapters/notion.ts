@@ -21,7 +21,7 @@ import { MemoryBm25SearchProvider } from '../search/memory-bm25-provider.ts';
 import { NotionModernClient } from '../clients/notion/notionModern.ts';
 import type {
   PageObjectResponse,
-} from 'npm:@notionhq/client@^2.0.0/api-endpoints.d.ts';
+} from '@notionhq/client/build/src/api-endpoints.d.ts';
 import {
   throwUnsupportedOperation,
   throwValidationError,
@@ -159,7 +159,7 @@ export class NotionDatabaseAdapter implements StorageAdapter {
     this.notionSecret = config.notionSecret;
     this.client = new NotionModernClient({
       notionSecret: config.notionSecret,
-      notionVersion: '2022-06-28', // Use v4 API compatible with @notionhq/client@2.x
+      notionVersion: '2025-09-03', // v5 API with data source support
       keyResolver: config.keyResolver,
       autoTransform: config.autoTransform !== false,
     });
@@ -323,14 +323,14 @@ export class NotionDatabaseAdapter implements StorageAdapter {
       const page = await this.findPageByKey(key);
       if (!page) return;
       
-      // Archive page (Notion doesn't support hard delete)
+      // Trash page (Notion doesn't support hard delete)
       await this.client.updatePage({
         page_id: page.id,
-        archived: true,
+        in_trash: true,
       });
       try { this._searchProvider.remove(key); } catch { /* ignore */ }
     } catch (error: any) {
-      // Idempotent: if page already archived/deleted, that's fine
+      // Idempotent: if page already trashed/deleted, that's fine
       if (error?.code === 'object_not_found' || error?.status === 404) {
         return;
       }
@@ -348,10 +348,10 @@ export class NotionDatabaseAdapter implements StorageAdapter {
       // Clean and format the ID
       const cleanId = this.cleanNotionId(recordId);
       
-      // Archive the page (Notion doesn't support hard delete)
+      // Trash the page (Notion doesn't support hard delete)
       await this.client.updatePage({
         page_id: cleanId,
-        archived: true,
+        in_trash: true,
       });
       
       debug(`[NotionAdapter] ✅ Archived record: ${cleanId}`);

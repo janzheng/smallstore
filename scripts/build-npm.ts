@@ -61,7 +61,7 @@ await build({
       node: ">=18.0.0",
     },
     dependencies: {
-      "@notionhq/client": "^2.3.0",
+      "@notionhq/client": "^5.16.0",
       "@aws-sdk/client-s3": "^3.0.0",
       "@aws-sdk/s3-request-presigner": "^3.0.0",
       "unstorage": "^1.17.0",
@@ -82,25 +82,23 @@ await build({
   importMap: "./deno.json",
   mappings: {
     // Direct npm: specifiers used in source files
-    // These must match the npm: specifiers used directly in source files
-    // (as opposed to bare imports resolved via deno.json import map)
-    "npm:hono@^4.10.3": {
+    "npm:hono@^4": {
       name: "hono",
-      version: "^4.10.3",
+      version: "^4.0.0",
     },
-    "npm:@notionhq/client@^2.0.0": {
+    "npm:@notionhq/client@^5": {
       name: "@notionhq/client",
-      version: "^2.3.0",
+      version: "^5.16.0",
     },
-    "npm:@aws-sdk/client-s3@^3.0.0": {
+    "npm:@aws-sdk/client-s3@3": {
       name: "@aws-sdk/client-s3",
       version: "^3.0.0",
     },
-    "npm:@aws-sdk/s3-request-presigner@^3.0.0": {
+    "npm:@aws-sdk/s3-request-presigner@3": {
       name: "@aws-sdk/s3-request-presigner",
       version: "^3.0.0",
     },
-    "npm:unstorage@^1.17.0": {
+    "npm:unstorage@^1": {
       name: "unstorage",
       version: "^1.17.0",
     },

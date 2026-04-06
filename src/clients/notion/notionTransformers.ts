@@ -11,7 +11,7 @@
 import type {
   CreatePageParameters,
   UpdatePageParameters,
-} from 'npm:@notionhq/client@^2.0.0/api-endpoints.d.ts';
+} from '@notionhq/client/build/src/api-endpoints.d.ts';
 
 // ============================================================================
 // CORE TRANSFORMATION FUNCTIONS

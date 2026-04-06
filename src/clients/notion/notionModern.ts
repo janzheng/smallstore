@@ -17,7 +17,7 @@
  * We use `NotionApiResponse` for the most common pattern (objects with .id, .results, etc).
  */
 
-import { Client } from 'npm:@notionhq/client@^2.0.0';
+import { Client } from '@notionhq/client';
 import {
   resolveNotionApiKey,
   resolveNotionVersion,
@@ -44,7 +44,7 @@ import type {
   UpdatePageParameters,
   CreateDatabaseParameters,
   UpdateDatabaseParameters,
-} from 'npm:@notionhq/client@^2.0.0/api-endpoints.d.ts';
+} from '@notionhq/client/build/src/api-endpoints.d.ts';
 
 /**
  * Helper type for Notion API responses that the SDK types don't fully expose.
@@ -170,19 +170,19 @@ export class NotionModernClient {
     const cleanId = formatNotionIdWithDashes(page_id);
     return await this.client.pages.update({
       page_id: cleanId,
-      archived: true
-    });
+      in_trash: true
+    } as any);
   }
 
   /**
-   * Restore an archived page
+   * Restore a trashed page
    */
   async restorePage(page_id: string): Promise<PageObjectResponse | PartialPageObjectResponse> {
     const cleanId = formatNotionIdWithDashes(page_id);
     return await this.client.pages.update({
       page_id: cleanId,
-      archived: false
-    });
+      in_trash: false
+    } as any);
   }
 
   // ============================================================================
@@ -505,8 +505,8 @@ export class NotionModernClient {
     const cleanId = formatNotionIdWithDashes(block_id);
     return await this.client.blocks.update({
       block_id: cleanId,
-      archived: true
-    });
+      in_trash: true
+    } as any);
   }
 
   // ============================================================================
