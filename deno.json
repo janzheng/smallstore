@@ -8,6 +8,7 @@
     "./adapters/airtable": "./src/adapters/airtable.ts",
     "./adapters/notion": "./src/adapters/notion.ts",
     "./adapters/sheetlog": "./src/adapters/sheetlog.ts",
+    "./adapters/google-sheets-csv": "./src/adapters/google-sheets-csv.ts",
     "./adapters/sqlite": "./src/adapters/sqlite.ts",
     "./adapters/structured-sqlite": "./src/adapters/structured-sqlite.ts",
     "./adapters/local-json": "./src/adapters/local-json.ts",
