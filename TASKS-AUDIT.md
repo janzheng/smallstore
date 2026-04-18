@@ -1,8 +1,8 @@
 # Smallstore — Pre-0.1.8 Audit
 
-Focused sweep of this session's changes (new features + 7 bug fixes). Findings only — no fixes applied. Created 2026-04-17.
+Focused sweep of this session's changes (new features + 7 bug fixes). Findings only — no fixes applied. Created 2026-04-17. **Wave 3 added 2026-04-18** covering paging + JSONL job-log feature (post-b24338f commits).
 
-**Totals: 47 actionable findings across 5 agents / 2 waves**
+**Totals: 47 + 11 = 58 actionable findings across 8 agents / 3 waves**
 
 > **Deployment context:** Public JSR library (`@yawnxyz/smallstore`) consumed by coverflow-v3 (production Deno service, multi-user). Treat race conditions, error-swallowing, and wiring failures as real.
 > `#local-real` = affects every caller / every session.
@@ -110,6 +110,37 @@ Focused sweep of this session's changes (new features + 7 bug fixes). Findings o
 
 ---
 
+## Wave 3 — Paging + JSONL job logs (2026-04-18, post-b24338f)
+
+Three agents swept the new surface: `src/utils/job-log.ts`, `serve.ts` new `/_sync` routes, `src/mcp-server.ts` sync tools, and the adapter `listKeys()` implementations. 20 candidate findings reduced to 11 after verification — dropped false positives around Notion hasMore (actually correct), CF KV list_complete (handled), JSONL atomicity (PIPE_BUF applies to pipes not regular files), `.catch(()=>{})` (is the handler, not missing), and intentional error swallowing in `job-log.append()` (documented best-effort).
+
+### P2 — Moderate (worth fixing before publish; none are stoppers)
+
+- [x] **A200** [fixed: createJobLog moved INSIDE the IIFE so the outer handler has no awaits between has() and set(); lockPath is computed deterministically from jobId + dataDir so the response still includes logPath] Lock TOCTOU race in POST /_sync #race-condition #at-scale-only
+- [x] **A224** [fixed: cursor accepted as stringified non-negative integer (round-trips the adapter's own output); non-numeric cursor throws rather than silently restarting at offset 0; adapter now emits `cursor: String(nextOffset)` when `hasMore` — tested with 2 new cases] SQLite listKeys cursor handling #wiring #local-real
+- [ ] **A220** Cursor + offset precedence undocumented — Airtable/Upstash silently prefer `cursor` (offset-skip disabled when cursor is set via `!options.cursor` guard). Correct behavior, but no user-facing doc says so; passing both silently drops one. `src/adapters/airtable.ts:462`, `src/adapters/upstash.ts:375` #ux #local-real
+
+### P3 — Low (cosmetic, at-scale-only, or UX polish)
+
+- [ ] **A201** `summarizeJob` reads entire JSONL file via `Deno.readTextFile` (up to n=2000 events), so `GET /_sync/jobs?limit=50` reads 50 full files in parallel. Fine for small job counts; no rotation/cleanup so log dir grows forever. `src/utils/job-log.ts:108-123, 154-183` #resource-leak #at-scale-only
+- [ ] **A203** `generateJobId` uses `Date.now()` truncated to seconds + 6-char `Math.random()` suffix — ~2^31 space per second, but burst-parallel requests in the same second have non-trivial collision probability (~P=1e-6 per 1k/sec). Consider `crypto.randomUUID()` or `crypto.getRandomValues()`. `src/utils/job-log.ts:42-46` #logic-bug #at-scale-only
+- [ ] **A222** `parseInt("999x", 10)` returns 999 silently — `handleListKeys` validates `Number.isFinite(limit) && limit >= 0` but lets parseInt's leniency through, so "999x" is accepted as 999. Use `Number(limitRaw)` + `Number.isInteger` instead. `src/http/handlers.ts:436-443` #ux #local-real
+- [ ] **A228** `?limit=0` passes validation and returns `{keys: [], hasMore: true, total: N}` — confusing UX (empty but hasMore). Either reject `limit === 0` or special-case to `hasMore: false`. `src/http/handlers.ts:438` #ux #local-real
+- [ ] **A204** `sm_sync_jobs` / `GET /_sync/jobs` fires `Promise.all` over `summarizeJob` for up to `limit` jobs — 50 concurrent full-file reads at default. Acceptable at dev scale; cap parallelism if job dir grows. `serve.ts:269-271` #ux #at-scale-only
+- [ ] **A242** Weak `(last as any).result` / `(last as any).message` casts in `summarizeJob` — only safe because caller contract writes exactly these fields in `completed`/`failed` events. Narrow with event-typed union instead. `src/utils/job-log.ts:179-180` #type-safety #local-real
+- [ ] **A244** Default tail window hardcoded at 50 events in `tailJobLog(path, n=50)` and `summarizeJob` calls `tailJobLog(path, 2000)` — no const. Both are magic numbers for what "enough of the log" means. `src/utils/job-log.ts:106, 164` #magic-number #local-real
+- [ ] **A243** `config.preset as any` cast in `serve.ts:75` — bypasses type safety on preset resolution; not a bug today but narrows the compiler's ability to catch a future preset-shape change. `serve.ts:75` #type-safety #local-real
+
+### Verified fine (dropped from audit)
+
+- Notion `listKeys` `hasMore` logic at `src/adapters/notion.ts:449` — checked the boolean composition, no off-by-one
+- CloudflareKV `list_complete` handling — correctly breaks the outer loop at `src/adapters/cloudflare-kv.ts:418`
+- JSONL write atomicity — single `write()` per line with O_APPEND is atomic at the kernel for regular files (PIPE_BUF only applies to pipes/FIFOs)
+- Background-sync `.catch(() => {})` at `serve.ts:258` — this IS the rejection handler (intentional, error already in JSONL)
+- `job-log.append()` error swallowing — documented best-effort: log-writing errors must not tear down the job
+
+---
+
 ## Fix-First List (blocking 0.1.8 publish — my recommendation)
 
 **Tier 0 — Regressions introduced this session (MUST fix):**
@@ -129,6 +160,9 @@ Focused sweep of this session's changes (new features + 7 bug fixes). Findings o
 - A008 index() symmetric guard (root cause fix — larger change)
 - A010-A013 MCP/HTTP security/sync issues (pre-existing auth deferral)
 - A020-A091, A100-A104 (edge cases, ergonomics, at-scale-only)
+
+**Wave 3 (paging + JSONL job-log feature, post-b24338f):**
+- Nothing blocking. A200 (lock race) + A224 (SQLite cursor silently ignored) are worth a small patch before publish; everything else is at-scale-only / cosmetic / UX polish.
 
 ---
 

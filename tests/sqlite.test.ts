@@ -289,3 +289,39 @@ Deno.test('SQLiteAdapter - listKeys with no limit returns all matching keys', as
 
   adapter.close();
 });
+
+Deno.test('SQLiteAdapter - listKeys round-trips cursor as stringified offset', async () => {
+  const adapter = createSQLiteAdapter({ url: ':memory:' });
+  for (let i = 0; i < 10; i++) await adapter.set(`k-${String(i).padStart(2, '0')}`, { i });
+
+  const page1 = await adapter.listKeys({ limit: 3 });
+  assertEquals(page1.keys.length, 3);
+  assertEquals(page1.hasMore, true);
+  assertEquals(page1.cursor, '3');
+
+  const page2 = await adapter.listKeys({ limit: 3, cursor: page1.cursor });
+  assertEquals(page2.keys.length, 3);
+  assertEquals(page2.keys[0], 'k-03');
+  assertEquals(page2.cursor, '6');
+
+  const last = await adapter.listKeys({ limit: 100, cursor: '9' });
+  assertEquals(last.keys.length, 1);
+  assertEquals(last.hasMore, false);
+  assertEquals(last.cursor, undefined);
+
+  adapter.close();
+});
+
+Deno.test('SQLiteAdapter - listKeys rejects non-numeric cursor (cross-adapter mix-up guard)', async () => {
+  const adapter = createSQLiteAdapter({ url: ':memory:' });
+  for (let i = 0; i < 3; i++) await adapter.set(`k-${i}`, { i });
+
+  // An opaque Notion/Airtable cursor would be non-numeric. The adapter
+  // catches the error and returns empty — NOT silently restart at offset 0,
+  // which would have returned duplicates.
+  const page = await adapter.listKeys({ cursor: 'opaque-notion-cursor-abc123' });
+  assertEquals(page.keys.length, 0);
+  assertEquals(page.hasMore, false);
+
+  adapter.close();
+});

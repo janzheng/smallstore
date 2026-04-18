@@ -230,7 +230,23 @@ export class SQLiteAdapter implements StorageAdapter {
   async listKeys(options: KeysPageOptions = {}): Promise<KeysPage> {
     try {
       this.ensureTable();
-      const { prefix, limit, offset } = options;
+      const { prefix, limit, offset, cursor } = options;
+
+      // SQLite uses numeric offsets for pagination. A cursor is accepted as
+      // a stringified non-negative integer (what this adapter emits below)
+      // so callers can round-trip it. Anything else is almost certainly a
+      // cross-adapter mix-up; reject rather than silently restart at 0.
+      let effectiveOffset = Math.max(0, offset ?? 0);
+      if (cursor !== undefined) {
+        const parsed = Number(cursor);
+        if (!Number.isInteger(parsed) || parsed < 0) {
+          throw new Error(
+            `SQLiteAdapter.listKeys: cursor "${cursor}" is not a non-negative integer. ` +
+            `SQLite uses numeric offsets; pass { offset } or a stringified integer as cursor.`
+          );
+        }
+        effectiveOffset = parsed;
+      }
 
       // Total matching count (cheap on indexed key column)
       const totalRow = prefix
@@ -238,7 +254,7 @@ export class SQLiteAdapter implements StorageAdapter {
         : this.db.prepare(`SELECT COUNT(*) AS n FROM "${this.table}"`).get() as { n: number };
       const total = totalRow?.n ?? 0;
 
-      const off = Math.max(0, offset ?? 0);
+      const off = effectiveOffset;
       // SQLite requires LIMIT when using OFFSET — use -1 for "no limit" semantics.
       const lim = limit !== undefined ? limit : -1;
       const rows = prefix
@@ -250,10 +266,13 @@ export class SQLiteAdapter implements StorageAdapter {
           ).all(lim, off) as Array<{ key: string }>;
 
       const keys = rows.map(r => r.key);
+      const nextOffset = off + keys.length;
+      const hasMore = nextOffset < total;
       return {
         keys,
-        hasMore: off + keys.length < total,
+        hasMore,
         total,
+        ...(hasMore ? { cursor: String(nextOffset) } : {}),
       };
     } catch (error) {
       console.error(`[SQLiteAdapter] Error in listKeys:`, error);

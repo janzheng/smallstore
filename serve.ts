@@ -217,18 +217,20 @@ app.post('/_sync', requireAuth, async (c) => {
 
   const wait = c.req.query('wait') === 'true';
   const jobId = generateJobId('sync');
-  const log = await createJobLog({ jobId, dataDir: config.dataDir });
+  const dataDir = config.dataDir ?? './data';
+  const logPath = `${dataDir.replace(/\/+$/, '')}/jobs/${jobId}.jsonl`;
 
-  // Pipe syncAdapters' per-item onProgress into the JSONL log.
-  const optsWithProgress: SyncAdapterOptions = {
-    ...safeOptions,
-    onProgress: (evt) => { log.append({ event: 'progress', ...evt }); },
-  };
-
+  // Claim the lock synchronously — no awaits between has() and set() — so
+  // two concurrent POSTs on the same pair can't both pass the check. The
+  // file open happens inside the IIFE so it runs under the lock.
   const run = (async () => {
+    const log = await createJobLog({ jobId, dataDir });
     await log.append({ event: 'started', source, target, options: safeOptions });
     try {
-      const result = await syncAdapters(src, tgt, optsWithProgress);
+      const result = await syncAdapters(src, tgt, {
+        ...safeOptions,
+        onProgress: (evt) => { log.append({ event: 'progress', ...evt }); },
+      });
       await log.append({ event: 'completed', result });
       return result;
     } catch (err) {
@@ -246,17 +248,17 @@ app.post('/_sync', requireAuth, async (c) => {
   if (wait) {
     try {
       const result = await run;
-      return c.json({ jobId, logPath: log.path, source, target, result });
+      return c.json({ jobId, logPath, source, target, result });
     } catch (err) {
       const name = err instanceof Error ? err.name : 'Error';
-      return c.json({ error: 'InternalServerError', message: `sync failed (${name})`, jobId, logPath: log.path }, 500);
+      return c.json({ error: 'InternalServerError', message: `sync failed (${name})`, jobId, logPath }, 500);
     }
   }
 
   // Background mode — fire-and-forget at the HTTP level. Attach a handler so
   // an unhandled rejection doesn't trip Deno; the error is already in the log.
   run.catch(() => { /* already written to JSONL */ });
-  return c.json({ jobId, logPath: log.path, source, target, status: 'running' }, 202);
+  return c.json({ jobId, logPath, source, target, status: 'running' }, 202);
 });
 
 // List recent sync jobs (newest first). Reads directly from the jobs
