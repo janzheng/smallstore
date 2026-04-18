@@ -245,12 +245,11 @@ Deno.test({
 });
 
 Deno.test({
-  name: 'integration/local-json-bm25 — KNOWN GAP: index does NOT reconstruct on reopen',
+  name: 'integration/local-json-bm25 — index auto-rebuilds from disk on reopen',
   ...opts,
   fn: async () => {
     const tmp = await Deno.makeTempDir({ prefix: 'ss-search-ljson-reopen-' });
     try {
-      // First instance: seed
       const a1 = createLocalJsonAdapter({ baseDir: tmp });
       const s1 = createSmallstore({
         adapters: { local: a1, memory: createMemoryAdapter() },
@@ -261,7 +260,6 @@ Deno.test({
       await a1.flush();
       await a1.dispose();
 
-      // Second instance: new adapter on the same dir
       const a2 = createLocalJsonAdapter({ baseDir: tmp });
       const s2 = createSmallstore({
         adapters: { local: a2, memory: createMemoryAdapter() },
@@ -269,20 +267,9 @@ Deno.test({
         metadataAdapter: 'memory',
       });
 
-      // Files on disk survive; index does NOT auto-rebuild on reopen.
-      const r0 = await s2.search('notes', { type: 'bm25', query: 'quantum' });
-      assertEquals(
-        r0.length,
-        0,
-        'LocalJsonAdapter does not rebuild BM25 index from disk on reopen — this is a gap (see src/adapters/local-json.ts:46-79)',
-      );
-
-      // But re-indexing via set() restores it.
-      const existing = await s2.get('notes/n1');
-      assert(existing, 'data should be readable from disk');
-      await s2.set('notes/n1', existing);
-      const r1 = await s2.search('notes', { type: 'bm25', query: 'quantum' });
-      assertEquals(r1.length, 1);
+      // Lazy hydration on first search rebuilds the BM25 index from disk.
+      const r = await s2.search('notes', { type: 'bm25', query: 'quantum' });
+      assertEquals(r.length, 1);
 
       await a2.dispose();
     } finally {
@@ -503,7 +490,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: 'integration/memory-hybrid — KNOWN BUG: router does not forward hybridAlpha to provider',
+  name: 'integration/memory-hybrid — router forwards hybridAlpha to provider',
   ...opts,
   fn: async () => {
     const bm25 = new MemoryBm25SearchProvider();
@@ -512,7 +499,6 @@ Deno.test({
       dimensions: 16,
       metric: 'cosine',
     });
-    // Use a distinctive defaultAlpha so we can detect whether it got overridden.
     const hybrid = new MemoryHybridSearchProvider({ bm25, vector, defaultAlpha: 0.5 });
     const memory = createMemoryAdapterWithProvider(hybrid);
     const store = createSmallstore({
@@ -526,26 +512,16 @@ Deno.test({
 
     const query = 'aaaa bbbb cccc dddd gradient';
 
-    // Calling router.search with hybridAlpha=0 SHOULD produce vector-dominated ranking
-    // (semantic first), but the router (src/router.ts:1161-1169) does not forward
-    // hybridAlpha in SearchProviderOptions. The provider falls back to defaultAlpha (0.5).
     const rVecRouter = await store.search('hy', { type: 'hybrid', query, hybridAlpha: 0 });
     const rVecDirect = await hybrid.search(query, { type: 'hybrid', hybridAlpha: 0, collection: 'hy', limit: 20 });
 
-    // Direct call honors hybridAlpha=0: semantic wins.
     assert(
       rVecDirect[0].key.includes('semantic'),
       `direct provider call should put semantic first with alpha=0, got ${rVecDirect[0].key}`,
     );
-
-    // Router path: this assertion documents the bug. If/when the router is fixed
-    // to forward hybridAlpha, flip this assertion.
-    assertEquals(
+    assert(
       rVecRouter[0].path.includes('semantic'),
-      false,
-      'BUG: router.search should forward hybridAlpha so semantic ranks first at alpha=0. ' +
-      'See src/router.ts:1161-1169 — hybridAlpha is not included in SearchProviderOptions. ' +
-      'When fixed, this test should be updated to assert semantic IS first.',
+      `router should forward hybridAlpha=0 and put semantic first, got ${rVecRouter[0].path}`,
     );
   },
 });

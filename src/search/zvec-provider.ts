@@ -186,10 +186,13 @@ export class ZvecSearchProvider implements SearchProvider {
       };
     });
 
-    // Collection scoping
+    // Skip internal metadata/index keys + collection scoping
+    const nonInternal = mapped.filter(r =>
+      !r.key.startsWith('smallstore:meta:') && !r.key.startsWith('smallstore:index:')
+    );
     const filtered = options?.collection
-      ? mapped.filter(r => r.key.includes(options.collection!))
-      : mapped;
+      ? nonInternal.filter(r => r.key.includes(options.collection!))
+      : nonInternal;
 
     if (options?.threshold !== undefined) {
       return filtered.filter(r => r.score >= options.threshold!);

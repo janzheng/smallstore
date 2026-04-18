@@ -1166,6 +1166,8 @@ export class SmartRouter implements Smallstore {
       vector: options.vector,
       topK: options.topK,
       query: options.query,
+      hybridAlpha: options.hybridAlpha,
+      metric: options.metric,
     });
 
     // Map to SearchResult format

@@ -50,6 +50,7 @@ export class LocalJsonAdapter implements StorageAdapter {
   private writeTimer: number | null = null;
   private debounceMs = 50; // Debounce writes
   private _searchProvider = new MemoryBm25SearchProvider();
+  private _hydratePromise: Promise<void> | null = null;
 
   // Adapter capabilities
   readonly capabilities: AdapterCapabilities = {
@@ -75,7 +76,33 @@ export class LocalJsonAdapter implements StorageAdapter {
   };
 
   get searchProvider(): SearchProvider {
-    return this._searchProvider;
+    // Lazy-hydrate the BM25 index from on-disk files the first time any
+    // search-provider method runs. Fresh adapter instances over an existing
+    // baseDir otherwise have an empty index until every key is re-set.
+    const hydrate = () => {
+      if (!this._hydratePromise) {
+        this._hydratePromise = (async () => {
+          const keys = await this.keys();
+          for (const k of keys) {
+            const v = await this.get(k);
+            if (v !== null) this._searchProvider.index(k, v);
+          }
+        })();
+      }
+      return this._hydratePromise;
+    };
+    const provider = this._searchProvider;
+    return {
+      get name() { return provider.name; },
+      get supportedTypes() { return provider.supportedTypes; },
+      index: (key, value) => provider.index(key, value),
+      remove: (key) => provider.remove(key),
+      async search(query, options) {
+        await hydrate();
+        return provider.search(query, options);
+      },
+      rebuild: (prefix) => provider.rebuild?.(prefix),
+    } as SearchProvider;
   }
 
   private _unloadHandler: (() => void) | null = null;

@@ -110,6 +110,8 @@ export class MemoryBm25SearchProvider implements SearchProvider {
     const scores: Array<{ key: string; score: number; text: string }> = [];
 
     for (const [key, doc] of this.docs) {
+      // Skip internal metadata/index keys
+      if (key.startsWith('smallstore:meta:') || key.startsWith('smallstore:index:')) continue;
       // Collection scoping
       if (options?.collection && !key.includes(options.collection)) continue;
 

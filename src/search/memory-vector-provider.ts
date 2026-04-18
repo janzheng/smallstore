@@ -84,6 +84,8 @@ export class MemoryVectorSearchProvider implements SearchProvider {
     const scored: Array<{ key: string; score: number; text: string }> = [];
 
     for (const [key, entry] of this.entries) {
+      // Skip internal metadata/index keys
+      if (key.startsWith('smallstore:meta:') || key.startsWith('smallstore:index:')) continue;
       // Collection scoping
       if (options?.collection && !key.includes(options.collection)) continue;
 
