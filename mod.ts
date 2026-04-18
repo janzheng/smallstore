@@ -153,6 +153,8 @@ export type { AirtableAdapterConfig, AirtableSchemaMapping } from './src/adapter
 export { AirtableAdapter, createAirtableAdapter } from './src/adapters/airtable.ts';
 export type { SheetlogConfig } from './src/adapters/sheetlog.ts';
 export { SheetlogAdapter, createSheetlogAdapter } from './src/adapters/sheetlog.ts';
+export type { GoogleSheetsCsvConfig } from './src/adapters/google-sheets-csv.ts';
+export { GoogleSheetsCsvAdapter, createGoogleSheetsCsvAdapter } from './src/adapters/google-sheets-csv.ts';
 
 // Cloudflare Workers adapters
 export { CloudflareKVAdapter, createCloudflareKVAdapter } from './src/adapters/cloudflare-kv.ts';

@@ -6,6 +6,8 @@
     "jsr:@std/assert@*": "1.0.19",
     "jsr:@std/assert@0.217": "0.217.0",
     "jsr:@std/assert@1": "1.0.19",
+    "jsr:@std/bytes@^1.0.6": "1.0.6",
+    "jsr:@std/csv@1": "1.0.6",
     "jsr:@std/dotenv@*": "0.225.6",
     "jsr:@std/dotenv@0.225": "0.225.6",
     "jsr:@std/encoding@1": "1.0.10",
@@ -15,11 +17,13 @@
     "jsr:@std/path@0.217": "0.217.0",
     "jsr:@std/path@1": "1.1.4",
     "jsr:@std/path@^1.1.4": "1.1.4",
+    "jsr:@std/streams@^1.0.9": "1.0.17",
     "jsr:@std/yaml@1": "1.0.10",
     "npm:@aws-sdk/client-s3@3": "3.1019.0",
     "npm:@aws-sdk/s3-request-presigner@3": "3.1019.0",
     "npm:@notionhq/client@2": "2.3.0",
     "npm:@notionhq/client@^2.3.0": "2.3.0",
+    "npm:@notionhq/client@^5.16.0": "5.16.0",
     "npm:@upstash/redis@^1.34.0": "1.37.0",
     "npm:hono@^4.10.3": "4.12.10",
     "npm:unstorage@^1.17.0": "1.17.5_@upstash+redis@1.37.0"
@@ -48,6 +52,15 @@
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
       "dependencies": [
         "jsr:@std/internal"
+      ]
+    },
+    "@std/bytes@1.0.6": {
+      "integrity": "f6ac6adbd8ccd99314045f5703e23af0a68d7f7e58364b47d2c7f408aeb5820a"
+    },
+    "@std/csv@1.0.6": {
+      "integrity": "52ef0e62799a0028d278fa04762f17f9bd263fad9a8e7f98c14fbd371d62d9fd",
+      "dependencies": [
+        "jsr:@std/streams"
       ]
     },
     "@std/dotenv@0.225.6": {
@@ -79,6 +92,12 @@
       "integrity": "1d2d43f39efb1b42f0b1882a25486647cb851481862dc7313390b2bb044314b5",
       "dependencies": [
         "jsr:@std/internal"
+      ]
+    },
+    "@std/streams@1.0.17": {
+      "integrity": "7859f3d9deed83cf4b41f19223d4a67661b3d3819e9fc117698f493bf5992140",
+      "dependencies": [
+        "jsr:@std/bytes"
       ]
     },
     "@std/yaml@1.0.10": {
@@ -621,6 +640,9 @@
         "@types/node-fetch",
         "node-fetch"
       ]
+    },
+    "@notionhq/client@5.16.0": {
+      "integrity": "sha512-0mxHJNQBLbcG2Y4+oM+XNySr/3zKtK7FKjWhrUo8TB3WCdwtUMhvuooNmEjOo8NLL9qmKm7cCR4GtEsuTD+SNg=="
     },
     "@smithy/abort-controller@4.2.12": {
       "integrity": "sha512-xolrFw6b+2iYGl6EcOL7IJY71vvyZ0DJ3mcKtpykqPe2uscwtzDZJa1uVQXyP7w9Dd+kGwYnPbMsJrGISKiY/Q==",
@@ -1362,7 +1384,7 @@
       "jsr:@std/yaml@1",
       "npm:@aws-sdk/client-s3@3",
       "npm:@aws-sdk/s3-request-presigner@3",
-      "npm:@notionhq/client@^2.3.0",
+      "npm:@notionhq/client@^5.16.0",
       "npm:@upstash/redis@^1.34.0",
       "npm:hono@^4.10.3",
       "npm:unstorage@^1.17.0"

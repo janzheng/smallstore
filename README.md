@@ -84,6 +84,7 @@ Each adapter wraps a different storage backend behind the same interface.
 | Airtable | Structured records with a spreadsheet UI. |
 | Notion | Database pages with typed properties (text, email, etc.). |
 | Google Sheets | Spreadsheet storage via the Sheetlog proxy. |
+| Google Sheets CSV | Read-only public/shared sheets via CSV export URL. No OAuth. |
 | Cloudflare KV | Edge-distributed key-value with eventual consistency. |
 | Cloudflare D1 | Edge SQL database. |
 | Cloudflare DO | Durable Objects with strong consistency. |
