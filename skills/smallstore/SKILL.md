@@ -123,6 +123,19 @@ Call mcp__smallstore__sm_sync with source_adapter: "airtable", target_adapter: "
 
 One-liner migration pattern: mount both adapters in `.smallstore.json`, call `sm_sync` with `dryRun: true`, review the diff, then re-run without `dryRun`.
 
+For long syncs (thousands of records), pass `background: true` so `sm_sync` returns a `jobId` immediately and the sync runs with its progress streamed to a JSONL file under `<dataDir>/jobs/<jobId>.jsonl`. Poll `sm_sync_status` or `tail -f` the file directly:
+
+```
+Call mcp__smallstore__sm_sync with source_adapter: "airtable", target_adapter: "notion", background: true
+# → { jobId: "sync-2026-04-18T...", logPath: "...", status: "running" }
+
+Call mcp__smallstore__sm_sync_status with jobId: "sync-2026-04-18T..."
+# → { status: "running" | "completed" | "failed", events: [...], ... }
+
+Call mcp__smallstore__sm_sync_jobs
+# → { jobs: [...] }  # recent runs, newest first — useful for post-mortem
+```
+
 ### `sm_write` append pattern
 
 To append to a sheet/log instead of overwriting, write to a unique key (e.g. timestamp) under the same collection:

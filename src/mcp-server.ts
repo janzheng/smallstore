@@ -256,12 +256,13 @@ const TOOLS = [
   },
   {
     name: 'sm_sync',
-    description: 'Sync data between two configured adapters (push/pull/bidirectional). Wraps syncAdapters() via the server\'s /_sync endpoint. source_adapter/target_adapter are ADAPTER names (e.g. "notion", "local"), not collection names.',
+    description: 'Sync data between two configured adapters (push/pull/bidirectional). Wraps syncAdapters() via the server\'s /_sync endpoint. source_adapter/target_adapter are ADAPTER names (e.g. "notion", "local"), not collection names. By default waits for completion and returns the result inline; pass background:true for long-running syncs that write progress to a JSONL log (poll `sm_sync_status` or tail the file).',
     inputSchema: {
       type: 'object',
       properties: {
         source_adapter: { type: 'string', description: 'Source adapter name (e.g. "notion", "local"). Must match an adapter configured on the server. Call sm_adapters to list available adapter names.' },
         target_adapter: { type: 'string', description: 'Target adapter name. Must match an adapter configured on the server.' },
+        background: { type: 'boolean', description: 'When true, return a jobId + logPath immediately and run the sync in the background. Default: false (wait for completion).' },
         options: {
           type: 'object',
           description: 'SyncAdapterOptions: { mode?: "push"|"pull"|"sync", prefix?, targetPrefix?, overwrite?, skipUnchanged?, dryRun?, batchDelay?, syncId?, conflictResolution?: "source-wins"|"target-wins"|"skip" }. Function-valued options (transform/onProgress) are not supported over HTTP.',
@@ -279,6 +280,28 @@ const TOOLS = [
         },
       },
       required: ['source_adapter', 'target_adapter'],
+    },
+  },
+  {
+    name: 'sm_sync_status',
+    description: 'Check the status of a sync job by its jobId. Returns the summary + the last N events from the JSONL log. Use with background: true sync calls.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        jobId: { type: 'string', description: 'Job ID returned from sm_sync (background mode).' },
+        tail: { type: 'number', description: 'Max events to return (default 50). Pass a very large number or string "all" for everything.' },
+      },
+      required: ['jobId'],
+    },
+  },
+  {
+    name: 'sm_sync_jobs',
+    description: 'List recent sync jobs (newest first) with their status + summary. Useful for post-mortem after a crash or to see what ran overnight.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max jobs to return (default 50).' },
+      },
     },
   },
   {
@@ -367,9 +390,34 @@ async function callTool(name: string, args: Args): Promise<unknown> {
     case 'sm_sync': {
       const source = requireString(args, 'source_adapter');
       const target = requireString(args, 'target_adapter');
+      const background = args.background === true;
       const options = (args.options as Record<string, unknown> | undefined) ?? {};
-      const r = await http('POST', '/_sync', { source, target, options });
+      // Default: wait=true so sm_sync blocks + returns the result inline,
+      // preserving the prior sync-then-return shape. background=true returns
+      // the jobId so callers can poll with sm_sync_status.
+      const path = background ? '/_sync' : '/_sync?wait=true';
+      const r = await http('POST', path, { source, target, options });
       if (!r.ok) throw new Error(formatHttpError('sm_sync failed', r));
+      return r.body;
+    }
+
+    case 'sm_sync_status': {
+      const jobId = requireString(args, 'jobId');
+      if (!/^[A-Za-z0-9._-]+$/.test(jobId)) {
+        throw new Error('sm_sync_status: invalid jobId');
+      }
+      const tail = args.tail;
+      const qs = tail !== undefined ? `?tail=${encodeURIComponent(String(tail))}` : '';
+      const r = await http('GET', `/_sync/jobs/${encodeURIComponent(jobId)}${qs}`);
+      if (!r.ok) throw new Error(formatHttpError('sm_sync_status failed', r));
+      return r.body;
+    }
+
+    case 'sm_sync_jobs': {
+      const limit = args.limit;
+      const qs = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : '';
+      const r = await http('GET', `/_sync/jobs${qs}`);
+      if (!r.ok) throw new Error(formatHttpError('sm_sync_jobs failed', r));
       return r.body;
     }
 

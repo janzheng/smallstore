@@ -37,6 +37,7 @@ import { loadConfig, buildAdapters, type SmallstoreServerConfig } from './config
 import { resolvePreset } from './presets.ts';
 import { syncAdapters, type SyncAdapterOptions } from './src/sync.ts';
 import type { StorageAdapter } from './src/adapters/adapter.ts';
+import { createJobLog, generateJobId, listJobs, summarizeJob, tailJobLog } from './src/utils/job-log.ts';
 
 // ============================================================================
 // Build Routing Config from Mounts
@@ -177,6 +178,11 @@ app.get('/_adapters', requireAuth, (c) => {
 });
 
 // Adapter-to-adapter sync (wraps syncAdapters() with named adapters).
+// Default mode is BACKGROUND: the request returns immediately with a jobId +
+// log path; progress is appended line-by-line to `<dataDir>/jobs/<jobId>.jsonl`
+// so callers can `tail -f` the file or poll `/_sync/jobs/:id` for the last
+// events. Pass `?wait=true` to block the request until sync completes (the
+// previous synchronous behavior) — useful for scripts and tests.
 app.post('/_sync', requireAuth, async (c) => {
   let body: { source?: string; target?: string; options?: SyncAdapterOptions };
   try {
@@ -208,23 +214,83 @@ app.post('/_sync', requireAuth, async (c) => {
   if (syncLocks.has(lockKey)) {
     return c.json({ error: 'Conflict', message: `sync already running for ${lockKey}` }, 409);
   }
-  const job = (async () => {
+
+  const wait = c.req.query('wait') === 'true';
+  const jobId = generateJobId('sync');
+  const log = await createJobLog({ jobId, dataDir: config.dataDir });
+
+  // Pipe syncAdapters' per-item onProgress into the JSONL log.
+  const optsWithProgress: SyncAdapterOptions = {
+    ...safeOptions,
+    onProgress: (evt) => { log.append({ event: 'progress', ...evt }); },
+  };
+
+  const run = (async () => {
+    await log.append({ event: 'started', source, target, options: safeOptions });
     try {
-      return await syncAdapters(src, tgt, safeOptions);
+      const result = await syncAdapters(src, tgt, optsWithProgress);
+      await log.append({ event: 'completed', result });
+      return result;
+    } catch (err) {
+      const name = err instanceof Error ? err.name : 'Error';
+      const message = err instanceof Error ? err.message : String(err);
+      await log.append({ event: 'failed', error: name, message });
+      throw err;
     } finally {
+      await log.close();
       syncLocks.delete(lockKey);
     }
   })();
-  syncLocks.set(lockKey, job);
+  syncLocks.set(lockKey, run);
 
-  try {
-    const result = await job;
-    return c.json({ source, target, result });
-  } catch (err) {
-    // Sanitize the error — adapter errors can contain tokens or paths.
-    const name = err instanceof Error ? err.name : 'Error';
-    return c.json({ error: 'InternalServerError', message: `sync failed (${name})` }, 500);
+  if (wait) {
+    try {
+      const result = await run;
+      return c.json({ jobId, logPath: log.path, source, target, result });
+    } catch (err) {
+      const name = err instanceof Error ? err.name : 'Error';
+      return c.json({ error: 'InternalServerError', message: `sync failed (${name})`, jobId, logPath: log.path }, 500);
+    }
   }
+
+  // Background mode — fire-and-forget at the HTTP level. Attach a handler so
+  // an unhandled rejection doesn't trip Deno; the error is already in the log.
+  run.catch(() => { /* already written to JSONL */ });
+  return c.json({ jobId, logPath: log.path, source, target, status: 'running' }, 202);
+});
+
+// List recent sync jobs (newest first). Reads directly from the jobs
+// directory — no in-memory state to reconcile across restarts.
+app.get('/_sync/jobs', requireAuth, async (c) => {
+  const jobs = await listJobs(config.dataDir);
+  const limitParam = c.req.query('limit');
+  const limit = limitParam ? Math.max(1, parseInt(limitParam, 10)) : 50;
+  const slice = jobs.slice(0, limit);
+  const withSummaries = await Promise.all(
+    slice.map(async (j) => ({ ...j, ...(await summarizeJob(j.path)) })),
+  );
+  return c.json({ jobs: withSummaries, total: jobs.length, truncated: jobs.length > limit });
+});
+
+// Tail events from a specific job's JSONL log. ?tail=N returns the last N
+// events (default 50); ?tail=all returns everything.
+app.get('/_sync/jobs/:id', requireAuth, async (c) => {
+  const jobId = c.req.param('id');
+  // Reject traversal — jobId must be a plain filename segment.
+  if (!/^[A-Za-z0-9._-]+$/.test(jobId)) {
+    return c.json({ error: 'BadRequest', message: 'invalid jobId' }, 400);
+  }
+  const path = `${config.dataDir.replace(/\/+$/, '')}/jobs/${jobId}.jsonl`;
+  try {
+    await Deno.stat(path);
+  } catch {
+    return c.json({ error: 'NotFound', message: `no such job: ${jobId}` }, 404);
+  }
+  const tailParam = c.req.query('tail');
+  const n = tailParam === 'all' ? Number.MAX_SAFE_INTEGER : Math.max(1, parseInt(tailParam ?? '50', 10));
+  const events = await tailJobLog(path, n);
+  const summary = await summarizeJob(path);
+  return c.json({ jobId, path, ...summary, events });
 });
 
 // Mount smallstore routes at /api

@@ -226,7 +226,7 @@ function extractText(resp: JsonRpcResponse): { text: string; isError: boolean } 
 // 1. tools/list
 // ============================================================================
 
-Deno.test('MCP: tools/list returns all 7 tools with inputSchemas', async () => {
+Deno.test('MCP: tools/list returns all expected tools with inputSchemas', async () => {
   const mock = await startMockServer();
   const mcp = startMcp({ SMALLSTORE_URL: mock.url });
   try {
@@ -235,7 +235,10 @@ Deno.test('MCP: tools/list returns all 7 tools with inputSchemas', async () => {
     const result = resp.result as { tools: Array<{ name: string; description: string; inputSchema: unknown }> };
     assertExists(result?.tools);
     const names = result.tools.map((t) => t.name).sort();
-    assertEquals(names, ['sm_adapters', 'sm_delete', 'sm_list', 'sm_query', 'sm_read', 'sm_sync', 'sm_write']);
+    assertEquals(names, [
+      'sm_adapters', 'sm_delete', 'sm_list', 'sm_query', 'sm_read',
+      'sm_sync', 'sm_sync_jobs', 'sm_sync_status', 'sm_write',
+    ]);
     for (const tool of result.tools) {
       assertExists(tool.description, `${tool.name} missing description`);
       assertExists(tool.inputSchema, `${tool.name} missing inputSchema`);
@@ -382,7 +385,7 @@ Deno.test('MCP: sm_adapters forwards to GET /_adapters', async () => {
   }
 });
 
-Deno.test('MCP: sm_sync POSTs {source,target,options} to /_sync', async () => {
+Deno.test('MCP: sm_sync POSTs to /_sync?wait=true by default (blocks for result)', async () => {
   const mock = await startMockServer();
   mock.setResponder(() => ({ status: 200, body: { source: 'memory', target: 'local', result: { migrated: 3 } } }));
   const mcp = startMcp({ SMALLSTORE_URL: mock.url });
@@ -397,12 +400,66 @@ Deno.test('MCP: sm_sync POSTs {source,target,options} to /_sync', async () => {
     assertEquals(mock.requests.length, 1);
     const req = mock.requests[0];
     assertEquals(req.method, 'POST');
-    assertEquals(req.path, '/_sync');
+    // Default is wait=true so callers get the result inline.
+    assertEquals(req.path, '/_sync?wait=true');
     assertEquals(req.body, {
       source: 'memory',
       target: 'local',
       options: { mode: 'push', dryRun: true },
     });
+  } finally {
+    await mcp.close();
+    await mock.stop();
+  }
+});
+
+Deno.test('MCP: sm_sync background:true posts to /_sync (no wait param)', async () => {
+  const mock = await startMockServer();
+  mock.setResponder(() => ({ status: 202, body: { jobId: 'sync-abc', logPath: '/tmp/x.jsonl', status: 'running' } }));
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    const resp = await callTool(mcp, 'sm_sync', {
+      source_adapter: 'memory',
+      target_adapter: 'local',
+      background: true,
+    });
+    const { isError, text } = extractText(resp);
+    assertEquals(isError, false);
+    assertEquals(mock.requests[0].path, '/_sync');
+    const body = JSON.parse(text) as { jobId: string };
+    assertEquals(body.jobId, 'sync-abc');
+  } finally {
+    await mcp.close();
+    await mock.stop();
+  }
+});
+
+Deno.test('MCP: sm_sync_status forwards to GET /_sync/jobs/:id', async () => {
+  const mock = await startMockServer();
+  mock.setResponder(() => ({ status: 200, body: { jobId: 'sync-x', status: 'completed', events: [] } }));
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    const resp = await callTool(mcp, 'sm_sync_status', { jobId: 'sync-x', tail: 10 });
+    const { isError } = extractText(resp);
+    assertEquals(isError, false);
+    assertEquals(mock.requests[0].method, 'GET');
+    assertEquals(mock.requests[0].path, '/_sync/jobs/sync-x?tail=10');
+  } finally {
+    await mcp.close();
+    await mock.stop();
+  }
+});
+
+Deno.test('MCP: sm_sync_jobs forwards to GET /_sync/jobs', async () => {
+  const mock = await startMockServer();
+  mock.setResponder(() => ({ status: 200, body: { jobs: [], total: 0 } }));
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    const resp = await callTool(mcp, 'sm_sync_jobs', { limit: 20 });
+    const { isError } = extractText(resp);
+    assertEquals(isError, false);
+    assertEquals(mock.requests[0].method, 'GET');
+    assertEquals(mock.requests[0].path, '/_sync/jobs?limit=20');
   } finally {
     await mcp.close();
     await mock.stop();
