@@ -76,8 +76,14 @@ export class CacheManager {
       // Check if expired
       const now = Date.now();
       if (cached.cachedAt + cached.ttl < now) {
-        // Expired - delete it
+        // Expired — delete it and drop tracking so totalBytes doesn't drift
+        // upward from ghost entries over the cache's lifetime.
         await this.adapter.delete(cacheKey);
+        const tracked = this.entries.get(cacheKey);
+        if (tracked) {
+          this.totalBytes -= tracked.size;
+          this.entries.delete(cacheKey);
+        }
         this.stats.misses++;
         return null;
       }
@@ -124,9 +130,13 @@ export class CacheManager {
       query: options,
     };
     
-    try {
-      const entrySize = estimateSize(cached);
+    const entrySize = estimateSize(cached);
 
+    // Snapshot tracking state so we can roll back evictions if adapter.set throws.
+    const trackingSnapshot = new Map(this.entries);
+    const totalSnapshot = this.totalBytes;
+
+    try {
       // Enforce max-size with configured eviction policy.
       if (this.maxBytes > 0 && this.config.evictionPolicy !== 'ttl-only') {
         const existing = this.entries.get(cacheKey);
@@ -146,6 +156,13 @@ export class CacheManager {
       this.entries.set(cacheKey, { size: entrySize, lastAccess: ++this.accessTick });
       this.totalBytes += entrySize;
     } catch (error) {
+      // Roll back in-process tracking so evictions that committed to the
+      // adapter don't leave us reporting phantom free space. The adapter-side
+      // evictions are already gone (that's a visible effect of the attempted
+      // write), but keeping tracking consistent with adapter state avoids
+      // further drift.
+      this.entries = trackingSnapshot;
+      this.totalBytes = totalSnapshot;
       console.error('[CacheManager] Error setting cache:', error);
       // Don't throw - caching is best-effort
     }

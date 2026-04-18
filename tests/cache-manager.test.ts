@@ -388,6 +388,26 @@ Deno.test({
 });
 
 Deno.test({
+  name: 'CacheManager - TTL-expired get() drops tracking (no phantom drift)',
+  ...opts,
+  fn: async () => {
+    const { manager } = makeManager({ maxCacheSize: '10KB', evictionPolicy: 'lru' });
+
+    await manager.set('col/a', { filter: {} }, { id: 'a' }, 10); // 10ms TTL
+    const before = (manager as any).totalBytes;
+    assert(before > 0, 'set should populate totalBytes');
+
+    await new Promise(r => setTimeout(r, 20)); // wait past TTL
+
+    // Expired read — should delete + drop tracking
+    const hit = await manager.get('col/a', { filter: {} });
+    assertEquals(hit, null);
+    assertEquals((manager as any).totalBytes, 0, 'totalBytes should drop back to 0');
+    assertEquals((manager as any).entries.size, 0, 'entries map should be empty');
+  },
+});
+
+Deno.test({
   name: 'CacheManager - get() touches lastAccess (LRU "recent" protection)',
   ...opts,
   fn: async () => {

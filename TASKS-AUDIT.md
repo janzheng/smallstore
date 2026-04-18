@@ -28,20 +28,18 @@ Focused sweep of this session's changes (new features + 7 bug fixes). Findings o
 - [x] **A006** [fixed: `if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)` in parseRows] CSV BOM stripping #bug-fix
 - [x] **A007** [fixed: keyRows() throws `keyColumn "X" not found in CSV header` listing available columns] CSV keyColumn validation #bug-fix
 
-### Search-provider root cause (filter is a patch, not fix) — defer
+### Search-provider root cause (now fixed)
 
-- [ ] **A008** `index()` / `remove()` have no symmetric guard across the search providers. Internal keys still reach the index at write time; the search-time filter only hides them. Root fix: reject internal keys at `index()`. `src/search/*-provider.ts` #contract-violation #local-real #deferred
+- [x] **A008** [fixed: shared `isInternalKey()` in src/utils/path.ts covers meta/index/view/_viewdata/_cache prefixes; all 4 search providers guard at index() time + keep search-time filter as defense-in-depth] index()-time guard for internal keys #bug-fix
 
 ---
 
-## P1 — MCP / HTTP security + data-loss (pre-existing, not introduced this session)
+## P1 — MCP / HTTP security + data-loss (now fixed)
 
-These all affect `/_adapters` and `/_sync` endpoints added in this session. Deployed localhost-only, so "real" mostly for a malicious local process, but still significant.
-
-- [ ] **A010** `/_adapters` and `/_sync` have **zero auth**. Leaks mount config; anyone on the machine can trigger syncs. `serve.ts:143-180` #security #local-real
-- [ ] **A011** `/_sync` passes raw `baseline` / `baselineAdapter` options through after stripping only function-valued keys. A malformed `baseline` mis-classifies every key as a conflict; with `conflictResolution: 'source-wins'` this silently destroys data. `baselineAdapter` is typed `StorageAdapter` but arrives as a plain object — the first `.set()` throws mid-sync, leaving partial writes. `serve.ts:170-174`, `src/sync.ts:82-85` #data-loss #security #local-real
-- [ ] **A012** `/_sync` has no self-sync guard (`source === target`) — undefined behavior; for `mode: 'sync'` can corrupt baselines. `serve.ts:153-180` #logic-bug #data-loss #local-real
-- [ ] **A013** Concurrent `/_sync` calls on the same `source+target` interleave reads/writes; no lock. Baselines end up nondeterministic (`src/sync.ts:742-751`). Can resurrect deleted keys or cause false conflicts on next run. `serve.ts:153-180` #race-condition #data-loss #local-real
+- [x] **A010** [fixed: optional SMALLSTORE_TOKEN bearer auth gates /_adapters + /_sync; open if unset for backwards compat] Auth on admin endpoints #bug-fix
+- [x] **A011** [fixed: SYNC_OPTION_WHITELIST restricts to mode/conflictResolution/dryRun/prefix/syncId; baseline + baselineAdapter dropped] /_sync option passthrough #bug-fix
+- [x] **A012** [fixed: 400 BadRequest when source === target] Self-sync guard #bug-fix
+- [x] **A013** [fixed: in-process Map<sourceーtarget, Promise> prevents concurrent runs on the same pair; returns 409 Conflict if one is already in flight] Concurrent sync lock #bug-fix
 
 ---
 
@@ -49,8 +47,8 @@ These all affect `/_adapters` and `/_sync` endpoints added in this session. Depl
 
 ### CacheManager LRU (new this session)
 
-- [ ] **A020** TTL-expired `get()` deletes from adapter but never updates `this.entries` / `this.totalBytes`. Over time `totalBytes` drifts upward from ghost entries → premature eviction. `src/utils/cache-manager.ts:78-83` #logic-bug #local-real
-- [ ] **A021** Torn state: `evictUntilFits()` mutates tracking BEFORE `adapter.set()`. If `set()` throws, evictions landed but new entry didn't — headroom lost forever. `src/utils/cache-manager.ts:131-147` #data-loss #local-real
+- [x] **A020** [fixed: TTL-expired get() now drops tracking + totalBytes alongside adapter.delete()] TTL drift #bug-fix
+- [x] **A021** [fixed: entries + totalBytes snapshot taken before evict; restored on adapter.set() rejection] Torn state on set throw #bug-fix
 - [ ] **A022** Concurrent `set()` on disjoint keys: both read pre-state `totalBytes`, both decide no eviction, both land → can exceed `maxBytes`. Double-evict in `evictUntilFits` can make `totalBytes` negative. `src/utils/cache-manager.ts:127-147` #race-condition #at-scale-only
 - [ ] **A023** Oversized single entry (`bytesNeeded > maxBytes`) evicts everything then lands anyway — contract quietly violated. `src/utils/cache-manager.ts:158-172` #contract-violation #local-real
 - [ ] **A024** `estimateSize` uses `.length` on JSON — UTF-16 code units, not UTF-8 bytes. Non-ASCII undercounts. `src/utils/cache-manager.ts:353-355` #contract-violation #at-scale-only
@@ -58,13 +56,13 @@ These all affect `/_adapters` and `/_sync` endpoints added in this session. Depl
 
 ### retryFetch 304 handling (new this session)
 
-- [ ] **A030** `CACHE_VALID` is a string-message sentinel. Any wrapper that prepends context breaks the match. Should be a typed error class. `src/utils/external-fetcher.ts:53,95`, `src/router.ts:3001` #error-handling #local-real
+- [x] **A030** [fixed: `CacheValidError` class exported from external-fetcher; router now uses `err instanceof CacheValidError` — survives message wrapping] Typed CacheValidError #bug-fix
 - [ ] **A031** 304 without conditional headers bypasses the fetch but `fetchExternal` still throws CACHE_VALID — if `source.cacheKey` is unset, caller gets a bare sentinel error with no data. `src/utils/external-fetcher.ts:94-96`, `src/router.ts:3001-3007` #error-handling #local-real
 
 ### Search providers
 
-- [ ] **A040** Filter prefix set is incomplete — also need to exclude `smallstore:view:*`, `smallstore:_views:*`, `smallstore:_viewdata:*`, `_cache/`. Grep shows these prefixes exist in views/ and cache-key.ts. `src/search/memory-bm25-provider.ts:114`, `memory-vector-provider.ts:88`, `zvec-provider.ts:191` #logic-bug #local-real
-- [ ] **A041** Zvec topk inflated by internal keys — filter runs AFTER `querySync({topk: limit})`, so internal keys consume slots. Asymmetric with BM25/Vector which pre-filter then slice. `src/search/zvec-provider.ts:172-195` #logic-bug #at-scale-only
+- [x] **A040** [fixed: isInternalKey helper covers all 6 prefixes (meta/index/view/_views/_viewdata/_cache)] Filter prefix set #bug-fix
+- [x] **A041** [fixed: index()-time guard means internal keys never reach zvec's vector store, so topk inflation is no longer possible] Zvec topk #bug-fix
 - [ ] **A042** Router still drops `SearchOptions.filter` and `SearchOptions.path` (defined in types but not forwarded). Two-sided gap with `SearchProviderOptions` which also doesn't define them. `src/router.ts:1161`, `src/types.ts:1504-1621` #wiring #local-real
 - [ ] **A043** `metric` pass-through is dead code — both `MemoryVectorSearchProvider` and `ZvecSearchProvider` use the metric baked in at construction; the forwarded per-call value is ignored. `src/router.ts:1170`, `src/search/memory-vector-provider.ts:144-150` #dead-code #local-real
 - [ ] **A044** Collection scoping via `key.includes(collection)` is loose — `"docs"` matches `"old-docs"`, `"docs-archive"`. Amplified now that internal-key filter is the only guard. `src/search/memory-bm25-provider.ts:116`, `memory-vector-provider.ts:90`, `zvec-provider.ts:194` #logic-bug #at-scale-only
@@ -99,7 +97,7 @@ These all affect `/_adapters` and `/_sync` endpoints added in this session. Depl
 
 ### MCP / HTTP (more)
 
-- [ ] **A090** `/_sync` error body leaks internal messages verbatim. `serve.ts:176-179` #security #local-real
+- [x] **A090** [fixed: /_sync now returns `sync failed (<ErrorName>)` — no message body to leak tokens/paths] Error message sanitization #bug-fix
 - [ ] **A091** Long `/_sync` holds connection — no job-ID / streaming. Client disconnect doesn't cancel the server operation. `serve.ts:174`, `src/sync.ts:769` #resource-leak #ux #local-real
 
 ### LocalJson / Memory / data-ops (more)

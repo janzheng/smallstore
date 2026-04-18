@@ -16,6 +16,7 @@
 
 import type { SearchProvider, SearchProviderOptions, SearchProviderResult } from '../types.ts';
 import { extractSearchableText } from './text-extractor.ts';
+import { isInternalKey } from '../utils/path.ts';
 
 /** Configuration for ZvecSearchProvider */
 export interface ZvecConfig {
@@ -117,6 +118,7 @@ export class ZvecSearchProvider implements SearchProvider {
 
   /** Index a key/value — extracts text and computes embedding */
   async index(key: string, value: any): Promise<void> {
+    if (isInternalKey(key)) return;
     const text = extractSearchableText(value);
     if (!text) return;
 
@@ -186,10 +188,8 @@ export class ZvecSearchProvider implements SearchProvider {
       };
     });
 
-    // Skip internal metadata/index keys + collection scoping
-    const nonInternal = mapped.filter(r =>
-      !r.key.startsWith('smallstore:meta:') && !r.key.startsWith('smallstore:index:')
-    );
+    // Defense in depth: index() already filters internal keys.
+    const nonInternal = mapped.filter(r => !isInternalKey(r.key));
     const filtered = options?.collection
       ? nonInternal.filter(r => r.key.includes(options.collection!))
       : nonInternal;

@@ -12,6 +12,19 @@ import { UnsupportedOperationError } from '../adapters/errors.ts';
 import { retryFetch } from './retry-fetch.ts';
 
 /**
+ * Thrown when the remote source indicates its payload is still valid
+ * (cacheTTL not expired, or 304 Not Modified). Callers should fall back
+ * to their previously cached data. Typed so instanceof checks survive
+ * any message wrapping.
+ */
+export class CacheValidError extends Error {
+  constructor(message = 'CACHE_VALID') {
+    super(message);
+    this.name = 'CacheValidError';
+  }
+}
+
+/**
  * Fetch result from external source
  */
 export interface FetchResult {
@@ -50,7 +63,7 @@ export async function fetchExternal(
     const cacheAge = Date.now() - source.lastFetched;
     if (cacheAge < source.cacheTTL) {
       // Cache is still valid - caller should use cached data
-      throw new Error('CACHE_VALID');
+      throw new CacheValidError();
     }
   }
   

@@ -350,6 +350,22 @@ function createMemoryAdapterWithProvider(provider: any) {
 }
 
 Deno.test({
+  name: 'integration/search-providers — index() rejects internal smallstore:* keys',
+  ...opts,
+  fn: async () => {
+    const bm25 = new MemoryBm25SearchProvider();
+    bm25.index('smallstore:meta:docs', { title: 'meta', body: 'INTERNAL_POISON' });
+    bm25.index('smallstore:index:docs', { title: 'index', body: 'INTERNAL_POISON' });
+    bm25.index('docs/real', { title: 'real', body: 'INTERNAL_POISON' });
+
+    const r = await bm25.search('INTERNAL_POISON', { collection: 'docs' });
+    const keys = r.map(x => x.key);
+    assert(keys.includes('docs/real'), 'real doc should match');
+    assert(!keys.some(k => k.startsWith('smallstore:')), `no internal keys should be indexed, got ${keys.join(',')}`);
+  },
+});
+
+Deno.test({
   name: 'integration/memory — custom searchProvider via config gets auto-indexed on set',
   ...opts,
   fn: async () => {

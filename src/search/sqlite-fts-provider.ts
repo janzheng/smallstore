@@ -7,6 +7,7 @@
 
 import type { SearchProvider, SearchProviderOptions, SearchProviderResult } from '../types.ts';
 import { extractSearchableText } from './text-extractor.ts';
+import { isInternalKey } from '../utils/path.ts';
 
 export class SqliteFtsSearchProvider implements SearchProvider {
   readonly name = 'sqlite-fts5';
@@ -33,6 +34,7 @@ export class SqliteFtsSearchProvider implements SearchProvider {
 
   /** Index a single key/value for search */
   index(key: string, value: any): void {
+    if (isInternalKey(key)) return;
     const text = extractSearchableText(value);
     if (!text) return;
 

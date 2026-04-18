@@ -165,12 +165,28 @@ export function buildMetadataKey(collection: string): string {
 
 /**
  * Check if a key is a metadata key
- * 
+ *
  * @param key - Storage key to check
  * @returns true if metadata key
  */
 export function isMetadataKey(key: string): boolean {
   return key.startsWith('smallstore:meta:');
+}
+
+/**
+ * Check if a key is a smallstore-internal key (metadata, key-index, views,
+ * view data, or cache). Search providers should skip these at both index
+ * and search time to avoid leaking internals into user-facing results.
+ */
+export function isInternalKey(key: string): boolean {
+  return (
+    key.startsWith('smallstore:meta:') ||
+    key.startsWith('smallstore:index:') ||
+    key.startsWith('smallstore:view:') ||
+    key.startsWith('smallstore:_views:') ||
+    key.startsWith('smallstore:_viewdata:') ||
+    key.startsWith('_cache/')
+  );
 }
 
 /**

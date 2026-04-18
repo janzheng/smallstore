@@ -29,6 +29,7 @@
  */
 
 import { Hono } from 'hono';
+import type { Context, Next } from 'hono';
 import { cors } from 'hono/cors';
 import { createSmallstore } from './mod.ts';
 import { createHonoRoutes } from './src/http/integrations/hono.ts';
@@ -139,8 +140,34 @@ app.get('/', (c) => {
   });
 });
 
+// Optional bearer-token auth for the admin endpoints below. If
+// SMALLSTORE_TOKEN is set, callers must send `Authorization: Bearer <token>`.
+// Unset → open (backwards compatible for local dev).
+const expectedToken = Deno.env.get('SMALLSTORE_TOKEN');
+function requireAuth(c: Context, next: Next) {
+  if (!expectedToken) return next();
+  const header = c.req.header('authorization') || '';
+  const m = header.match(/^Bearer\s+(.+)$/i);
+  if (!m || m[1] !== expectedToken) {
+    return c.json({ error: 'Unauthorized', message: 'Missing or invalid Authorization bearer token' }, 401);
+  }
+  return next();
+}
+
+// Whitelist of safe JSON-serializable SyncAdapterOptions keys. `baseline` and
+// `baselineAdapter` are rejected because a malformed baseline can mis-classify
+// every key as a conflict and silently destroy data under source-wins; and
+// `baselineAdapter` can't be passed over HTTP anyway (needs a StorageAdapter).
+const SYNC_OPTION_WHITELIST = new Set<keyof SyncAdapterOptions>([
+  'mode', 'conflictResolution', 'dryRun', 'prefix', 'syncId',
+]);
+
+// In-process lock for /_sync — prevents interleaved writes that corrupt
+// baselines when two callers fire sync on the same source+target pair.
+const syncLocks = new Map<string, Promise<unknown>>();
+
 // Adapter + mount introspection (used by the MCP server's sm_adapters tool).
-app.get('/_adapters', (c) => {
+app.get('/_adapters', requireAuth, (c) => {
   return c.json({
     adapters: adapterNames,
     defaultAdapter,
@@ -150,7 +177,7 @@ app.get('/_adapters', (c) => {
 });
 
 // Adapter-to-adapter sync (wraps syncAdapters() with named adapters).
-app.post('/_sync', async (c) => {
+app.post('/_sync', requireAuth, async (c) => {
   let body: { source?: string; target?: string; options?: SyncAdapterOptions };
   try {
     body = await c.req.json();
@@ -161,21 +188,42 @@ app.post('/_sync', async (c) => {
   if (!source || !target) {
     return c.json({ error: 'BadRequest', message: 'Body must include "source" and "target" adapter names' }, 400);
   }
+  if (source === target) {
+    return c.json({ error: 'BadRequest', message: 'source and target adapters must differ (self-sync would corrupt baselines)' }, 400);
+  }
   const src = rawAdapters[source];
   const tgt = rawAdapters[target];
   if (!src) return c.json({ error: 'NotFound', message: `Unknown source adapter "${source}"`, available: adapterNames }, 404);
   if (!tgt) return c.json({ error: 'NotFound', message: `Unknown target adapter "${target}"`, available: adapterNames }, 404);
+
+  // Whitelist options — drop anything not explicitly supported over HTTP.
+  const safeOptions: SyncAdapterOptions = {};
+  for (const [k, v] of Object.entries(options)) {
+    if (SYNC_OPTION_WHITELIST.has(k as keyof SyncAdapterOptions)) {
+      (safeOptions as Record<string, unknown>)[k] = v;
+    }
+  }
+
+  const lockKey = `${source}→${target}`;
+  if (syncLocks.has(lockKey)) {
+    return c.json({ error: 'Conflict', message: `sync already running for ${lockKey}` }, 409);
+  }
+  const job = (async () => {
+    try {
+      return await syncAdapters(src, tgt, safeOptions);
+    } finally {
+      syncLocks.delete(lockKey);
+    }
+  })();
+  syncLocks.set(lockKey, job);
+
   try {
-    // Drop non-serializable options (functions can't cross HTTP).
-    const safeOptions: SyncAdapterOptions = { ...options };
-    delete safeOptions.transform;
-    delete safeOptions.onProgress;
-    if (typeof safeOptions.conflictResolution === 'function') delete safeOptions.conflictResolution;
-    const result = await syncAdapters(src, tgt, safeOptions);
+    const result = await job;
     return c.json({ source, target, result });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return c.json({ error: 'InternalServerError', message: msg }, 500);
+    // Sanitize the error — adapter errors can contain tokens or paths.
+    const name = err instanceof Error ? err.name : 'Error';
+    return c.json({ error: 'InternalServerError', message: `sync failed (${name})` }, 500);
   }
 });
 

@@ -2956,7 +2956,7 @@ export class SmartRouter implements Smallstore {
    * @returns Fetched data
    */
   private async getExternalData(collectionPath: string, source: ExternalSource): Promise<any> {
-    const { fetchExternal } = await import('./utils/external-fetcher.ts');
+    const { fetchExternal, CacheValidError } = await import('./utils/external-fetcher.ts');
     
     // Check if we have cached data and it's still valid
     if (source.cacheKey && source.lastFetched && source.cacheTTL) {
@@ -2998,8 +2998,8 @@ export class SmartRouter implements Smallstore {
       
       return result.data;
     } catch (err) {
-      if (err instanceof Error && err.message === 'CACHE_VALID') {
-        // Conditional request returned 304, use cached data
+      if (err instanceof CacheValidError) {
+        // Conditional request returned 304 or cache is still fresh; serve cached payload.
         if (source.cacheKey) {
           return await this.get(source.cacheKey);
         }
@@ -3090,7 +3090,7 @@ export class SmartRouter implements Smallstore {
     }
     
     // Fetch fresh data
-    const { fetchExternal } = await import('./utils/external-fetcher.ts');
+    const { fetchExternal, CacheValidError } = await import('./utils/external-fetcher.ts');
     const result = await fetchExternal(source, true);
     
     // Update schema with new metadata

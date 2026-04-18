@@ -12,6 +12,7 @@
 
 import type { SearchProvider, SearchProviderOptions, SearchProviderResult } from '../types.ts';
 import { extractSearchableText } from './text-extractor.ts';
+import { isInternalKey } from '../utils/path.ts';
 
 /** Configuration for MemoryVectorSearchProvider */
 export interface MemoryVectorConfig {
@@ -46,6 +47,7 @@ export class MemoryVectorSearchProvider implements SearchProvider {
 
   /** Index a key/value — extracts text and computes embedding */
   async index(key: string, value: any): Promise<void> {
+    if (isInternalKey(key)) return;
     const text = extractSearchableText(value);
     if (!text) return;
 
@@ -84,8 +86,8 @@ export class MemoryVectorSearchProvider implements SearchProvider {
     const scored: Array<{ key: string; score: number; text: string }> = [];
 
     for (const [key, entry] of this.entries) {
-      // Skip internal metadata/index keys
-      if (key.startsWith('smallstore:meta:') || key.startsWith('smallstore:index:')) continue;
+      // Defense in depth: index() already filters internal keys.
+      if (isInternalKey(key)) continue;
       // Collection scoping
       if (options?.collection && !key.includes(options.collection)) continue;
 

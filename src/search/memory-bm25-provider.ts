@@ -10,6 +10,7 @@
 
 import type { SearchProvider, SearchProviderOptions, SearchProviderResult } from '../types.ts';
 import { extractSearchableText } from './text-extractor.ts';
+import { isInternalKey } from '../utils/path.ts';
 
 /** Tokenize text: lowercase, split on non-alphanumeric, filter short tokens */
 function tokenize(text: string): string[] {
@@ -41,6 +42,7 @@ export class MemoryBm25SearchProvider implements SearchProvider {
 
   /** Index a single key/value */
   index(key: string, value: any): void {
+    if (isInternalKey(key)) return;
     const text = extractSearchableText(value);
     if (!text) return;
 
@@ -110,8 +112,9 @@ export class MemoryBm25SearchProvider implements SearchProvider {
     const scores: Array<{ key: string; score: number; text: string }> = [];
 
     for (const [key, doc] of this.docs) {
-      // Skip internal metadata/index keys
-      if (key.startsWith('smallstore:meta:') || key.startsWith('smallstore:index:')) continue;
+      // Defense in depth: index() already filters, but keep a read-side guard
+      // in case a legacy index has internal keys in it.
+      if (isInternalKey(key)) continue;
       // Collection scoping
       if (options?.collection && !key.includes(options.collection)) continue;
 
