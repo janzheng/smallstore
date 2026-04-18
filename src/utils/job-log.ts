@@ -99,11 +99,17 @@ export async function createJobLog(options: {
   };
 }
 
+/** Default tail window for `tailJobLog` — surfaces recent progress without loading the full log. */
+export const DEFAULT_TAIL_EVENTS = 50;
+
+/** Cap used by `summarizeJob` when looking for the last `started`/`completed`/`failed` event. Has to be large enough that the summary still finds the terminal event even if a sync emitted thousands of `progress` lines. */
+export const SUMMARY_SCAN_EVENTS = 2000;
+
 /**
  * Read (up to) the last N events from a job log file.
  * Returns parsed events, skipping any malformed lines.
  */
-export async function tailJobLog(path: string, n = 50): Promise<JobLogEvent[]> {
+export async function tailJobLog(path: string, n = DEFAULT_TAIL_EVENTS): Promise<JobLogEvent[]> {
   let text: string;
   try {
     text = await Deno.readTextFile(path);
@@ -161,7 +167,7 @@ export async function summarizeJob(path: string): Promise<{
   error?: string;
   lastEvent?: string;
 }> {
-  const events = await tailJobLog(path, 2000);
+  const events = await tailJobLog(path, SUMMARY_SCAN_EVENTS);
   if (events.length === 0) return { status: 'unknown' };
   const first = events[0];
   const last = events[events.length - 1];

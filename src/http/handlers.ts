@@ -433,12 +433,14 @@ export async function handleListKeys(
       return createErrorResponse(400, 'BadRequest', 'Collection name is required');
     }
 
-    const limit = limitRaw !== undefined ? parseInt(limitRaw, 10) : undefined;
-    const offset = offsetRaw !== undefined ? parseInt(offsetRaw, 10) : undefined;
-    if (limit !== undefined && (!Number.isFinite(limit) || limit < 0)) {
-      return createErrorResponse(400, 'BadRequest', '`limit` must be a non-negative integer');
+    // Use Number() rather than parseInt() so "999x" gets rejected instead of
+    // being silently parsed as 999. Number.isInteger() also covers Infinity / NaN.
+    const limit = limitRaw !== undefined ? Number(limitRaw) : undefined;
+    const offset = offsetRaw !== undefined ? Number(offsetRaw) : undefined;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+      return createErrorResponse(400, 'BadRequest', '`limit` must be a positive integer');
     }
-    if (offset !== undefined && (!Number.isFinite(offset) || offset < 0)) {
+    if (offset !== undefined && (!Number.isInteger(offset) || offset < 0)) {
       return createErrorResponse(400, 'BadRequest', '`offset` must be a non-negative integer');
     }
 

@@ -2,7 +2,8 @@
 
 Focused sweep of this session's changes (new features + 7 bug fixes). Findings only — no fixes applied. Created 2026-04-17. **Wave 3 added 2026-04-18** covering paging + JSONL job-log feature (post-b24338f commits).
 
-**Totals: 47 + 11 = 58 actionable findings across 8 agents / 3 waves**
+**Totals: 47 + 11 = 58 findings, 58 resolved / 9 open as of 2026-04-18**
+> 57 fixed + 1 won't-fix (A042-path deprecated). 9 deferrable remain — mostly at-scale-only polish (A022 CacheManager disjoint-key race, A025 stats divergence docs, A103 merge default, A201/A203/A204 JSONL growth/collision/parallelism, A220 cursor+offset docs, A242 weak casts, A243 preset-as-any).
 
 > **Deployment context:** Public JSR library (`@yawnxyz/smallstore`) consumed by coverflow-v3 (production Deno service, multi-user). Treat race conditions, error-swallowing, and wiring failures as real.
 > `#local-real` = affects every caller / every session.
@@ -50,60 +51,61 @@ Focused sweep of this session's changes (new features + 7 bug fixes). Findings o
 - [x] **A020** [fixed: TTL-expired get() now drops tracking + totalBytes alongside adapter.delete()] TTL drift #bug-fix
 - [x] **A021** [fixed: entries + totalBytes snapshot taken before evict; restored on adapter.set() rejection] Torn state on set throw #bug-fix
 - [ ] **A022** Concurrent `set()` on disjoint keys: both read pre-state `totalBytes`, both decide no eviction, both land → can exceed `maxBytes`. Double-evict in `evictUntilFits` can make `totalBytes` negative. `src/utils/cache-manager.ts:127-147` #race-condition #at-scale-only
-- [ ] **A023** Oversized single entry (`bytesNeeded > maxBytes`) evicts everything then lands anyway — contract quietly violated. `src/utils/cache-manager.ts:158-172` #contract-violation #local-real
-- [ ] **A024** `estimateSize` uses `.length` on JSON — UTF-16 code units, not UTF-8 bytes. Non-ASCII undercounts. `src/utils/cache-manager.ts:353-355` #contract-violation #at-scale-only
+- [x] **A023** [fixed: loud `console.warn` when entry exceeds maxCacheSize — "caching anyway, but maxCacheSize enforcement is effectively bypassed for this key" so operators can raise the cap or shard, src/utils/cache-manager.ts:176-180] Oversized single entry #contract-violation #local-real
+- [x] **A024** [fixed: SIZE_ENCODER = new TextEncoder(); estimateSize returns encode(json).byteLength — proper UTF-8 sizing] estimateSize UTF-16 vs UTF-8 #contract-violation #at-scale-only
 - [ ] **A025** Stats divergence with remote adapter (per-process hits/misses vs adapter-wide keys/size). `src/utils/cache-manager.ts:260-320` #contract-violation #at-scale-only
 
 ### retryFetch 304 handling (new this session)
 
 - [x] **A030** [fixed: `CacheValidError` class exported from external-fetcher; router now uses `err instanceof CacheValidError` — survives message wrapping] Typed CacheValidError #bug-fix
-- [ ] **A031** 304 without conditional headers bypasses the fetch but `fetchExternal` still throws CACHE_VALID — if `source.cacheKey` is unset, caller gets a bare sentinel error with no data. `src/utils/external-fetcher.ts:94-96`, `src/router.ts:3001-3007` #error-handling #local-real
+- [x] **A031** [fixed: 304 now throws `CacheValidError` (not bare `Error('CACHE_VALID')`) so `err instanceof CacheValidError` checks in router survive message wrapping, src/utils/external-fetcher.ts:107-111] 304 typed sentinel #error-handling #local-real
 
 ### Search providers
 
 - [x] **A040** [fixed: isInternalKey helper covers all 6 prefixes (meta/index/view/_views/_viewdata/_cache)] Filter prefix set #bug-fix
 - [x] **A041** [fixed: index()-time guard means internal keys never reach zvec's vector store, so topk inflation is no longer possible] Zvec topk #bug-fix
-- [ ] **A042** Router still drops `SearchOptions.filter` and `SearchOptions.path` (defined in types but not forwarded). Two-sided gap with `SearchProviderOptions` which also doesn't define them. `src/router.ts:1161`, `src/types.ts:1504-1621` #wiring #local-real
-- [ ] **A043** `metric` pass-through is dead code — both `MemoryVectorSearchProvider` and `ZvecSearchProvider` use the metric baked in at construction; the forwarded per-call value is ignored. `src/router.ts:1170`, `src/search/memory-vector-provider.ts:144-150` #dead-code #local-real
-- [ ] **A044** Collection scoping via `key.includes(collection)` is loose — `"docs"` matches `"old-docs"`, `"docs-archive"`. Amplified now that internal-key filter is the only guard. `src/search/memory-bm25-provider.ts:116`, `memory-vector-provider.ts:90`, `zvec-provider.ts:194` #logic-bug #at-scale-only
+- [x] **A042-filter** [fixed: router applies MongoDB-style filter post-search via matchesFilter at src/router.ts:1242-1250, hydrating only the matched results] SearchOptions.filter forwarded #wiring #local-real
+- [x] **A042-path** [won't-fix: `SearchOptions.path` is marked `@deprecated Unused` in src/types.ts:1539 — "the collection path passed to router.search() already scopes results; there's no sub-path below collection for search. Remove in a future major."] SearchOptions.path forwarding #wiring #local-real
+- [x] **A043** [documented as intentional: comment at src/router.ts:1214-1217 explains metric is baked in at provider construction and a per-call value is ignored] metric pass-through dead code #dead-code #local-real
+- [x] **A044** [fixed: all 3 providers use keyMatchesCollection() (strict prefix match) at src/utils/path.ts instead of key.includes(collection). Verified at memory-bm25-provider.ts:119, memory-vector-provider.ts:92, zvec-provider.ts:194] Collection scoping loose match #logic-bug #at-scale-only
 
 ### CSV adapter (more)
 
 - [x] **A050** [fixed: AbortController tied to each in-flight fetch; clear() aborts + resets] clear() aborts in-flight #bug-fix
 - [x] **A051** [fixed: configurable `timeoutMs` (default 30s) via AbortSignal.timeout, composed with the clear() abort signal] Request timeout #bug-fix
 - [x] **A052** [fixed: list() iterates the `keyed` Map instead of the raw rows — list/keys now in lockstep] list/keys consistency #bug-fix
-- [ ] **A053** Duplicate header columns collapse silently (`@std/csv` uses headers as object keys). Real Google Sheets allow dup column names. `src/adapters/google-sheets-csv.ts:246-249` #data-loss #local-real
-- [ ] **A054** Duplicate key values silently overwrite with no warning. `src/adapters/google-sheets-csv.ts:270` #data-loss #local-real
-- [ ] **A055** Clock skew: `Date.now() - fetchedAt` can go negative on wall-clock correction → cache never refreshes. Use `performance.now()` or guard `age < 0`. `src/adapters/google-sheets-csv.ts:200-201` #logic-bug #at-scale-only
-- [ ] **A056** No URL validation — accepts relative/file/http scheme. Failure surfaces only at first `get()`. `src/adapters/google-sheets-csv.ts:89-92` #ux #local-real
-- [ ] **A057** `fetchImpl` is a public config field with no `@internal` marker — test code copy-pasted into production would silently run with a stub. `src/adapters/google-sheets-csv.ts:48,95` #ux #local-real
-- [ ] **A058** `fetchAndParse` errors include the raw URL, which can contain auth query params. `src/adapters/google-sheets-csv.ts:227` #security #at-scale-only
-- [ ] **A059** Capabilities over-claim: `writeLatency: 'high'` is misleading when writes throw; no `readOnly: true` flag. Router may pick this adapter for writes based on capabilities. `src/adapters/google-sheets-csv.ts:64` #contract-violation #local-real
+- [x] **A053** [fixed: parses raw headers first to detect collisions; throws descriptive error listing dup names at src/adapters/google-sheets-csv.ts:309-323] Duplicate header columns collapse silently #data-loss #local-real
+- [x] **A054** [fixed: once-per-load warning when duplicate keys collapse — last-write-wins with rowCount vs keyCount diff logged, src/adapters/google-sheets-csv.ts:375] Duplicate key values silently overwrite #data-loss #local-real
+- [x] **A055** [fixed: `age >= 0 && age <= refreshMs` — negative age (wall-clock rollback) treated as expired so cache auto-refreshes, src/adapters/google-sheets-csv.ts:228-231] Clock skew guard #logic-bug #at-scale-only
+- [x] **A056** [fixed: `new URL(config.url)` validates at construction; only http/https scheme accepted, src/adapters/google-sheets-csv.ts:110] URL validation #ux #local-real
+- [x] **A057** [fixed: `@internal` JSDoc marker + warning "Intended for testing only; leaving this set in production swaps the real network for the stub" at src/adapters/google-sheets-csv.ts:51-57] fetchImpl @internal marker #ux #local-real
+- [x] **A058** [fixed: error messages use safeUrl = this.url.split('?')[0] — strips query auth params, src/adapters/google-sheets-csv.ts:273] Auth params in error URL #security #at-scale-only
+- [x] **A059** [fixed: `readOnly: true` capability flag added, src/adapters/google-sheets-csv.ts:88] Capabilities over-claim #contract-violation #local-real
 
 ### MCP server (more)
 
-- [ ] **A070** Collection encoded with `encodeURIComponent` but not validated — empty-after-trim, `..`, or path-like inputs pass through. Keys are split on `/` and encoded per segment, so segments like `keys`/`query`/`search`/`metadata`/`schema` collide with sub-routes. `src/mcp-server.ts:82-88,86-87` #injection #local-real
-- [ ] **A071** `sm_write` body → `JSON.stringify` has no guard for BigInt (throws), circular refs (throws), `undefined` fields (dropped), Date (lossy coerce). Errors surface as raw TypeError. `src/mcp-server.ts:67,230-237` #error-handling #local-real
-- [ ] **A072** `SMALLSTORE_TOKEN` not validated — non-ASCII / CRLF throws `TypeError: Invalid header value` at first use. `src/mcp-server.ts:40,59` #ux #local-real
-- [ ] **A073** No response-size ceiling on `sm_list` / `sm_query` / `sm_read` — full body buffered + re-stringified 2-space → can OOM. `src/mcp-server.ts:74,310` #resource-leak #at-scale-only
-- [ ] **A074** `SMALLSTORE_URL` not validated at startup — mistyped scheme passes until first call. `src/mcp-server.ts:39` #ux #local-real
-- [ ] **A075** No SIGTERM / stdin-close cleanup. `src/mcp-server.ts:318-319` #resource-leak #local-real
-- [ ] **A076** Unknown tool returns `isError: true` inside `result` rather than JSON-RPC `error`. `src/mcp-server.ts:287-288,312-315` #contract-violation #local-real
-- [ ] **A077** `sm_list` client-side limit mutates `r.body.total` — hides true count. `src/mcp-server.ts:256-260` #logic-bug #local-real
-- [ ] **A078** `sm_list` drops `limit` from server URL — server pays full cost. `src/mcp-server.ts:249-253` #logic-bug #at-scale-only
-- [ ] **A079** `sm_sync` schema names `source_collection` / `target_collection` but they're actually adapter names. Agent will misuse. `src/mcp-server.ts:173-174` #ux #local-real
-- [ ] **A080** `sm_query` with empty filter returns whole collection silently — dangerous for Notion/Airtable at scale. `src/mcp-server.ts:264-270` #ux #at-scale-only
-- [ ] **A081** `sm_read` with omitted key returns whole collection, no cap, no cost warning. `src/mcp-server.ts:82-88,222-228` #ux #at-scale-only
+- [x] **A070** [fixed: validateCollection() rejects empty-after-trim, '.', '..', slashes, and reserved sub-route segments (keys/query/search/metadata/schema/slice/split/deduplicate) at src/mcp-server.ts:154-167] Collection encoding/validation #injection #local-real
+- [x] **A071** [fixed: JSON.stringify wrapped in try/catch with clear error "sm_write/sm_query body is not JSON-serializable" at src/mcp-server.ts:94-102] sm_write body stringify guard #error-handling #local-real
+- [x] **A072** [fixed: SMALLSTORE_TOKEN rejected at startup if contains CR/LF; fails fast with clear error, src/mcp-server.ts:64-68] Token CRLF injection guard #ux #local-real
+- [x] **A073** [fixed: MAX_RESPONSE_BYTES (default 10MB, configurable via SMALLSTORE_MAX_RESPONSE_BYTES) enforced by readCapped() at src/mcp-server.ts:47-51,116,124+] Response-size ceiling #resource-leak #at-scale-only
+- [x] **A074** [fixed: new URL(RAW_URL) at startup; rejects non-http(s) schemes with fail-fast exit, src/mcp-server.ts:52-61] URL validation #ux #local-real
+- [x] **A075** [fixed: SIGTERM + SIGINT handlers close transport/server gracefully, src/mcp-server.ts:479-480] Graceful shutdown #resource-leak #local-real
+- [x] **A076** [fixed: unknown tool throws McpError(MethodNotFound) which bubbles as proper JSON-RPC error -32601, src/mcp-server.ts:431-433,461] Unknown tool RPC error #contract-violation #local-real
+- [x] **A077** [fixed: sm_list now just returns r.body — no client-side mutation of total, src/mcp-server.ts:372] sm_list total mutation #logic-bug #local-real
+- [x] **A078** [fixed: limit/offset/cursor all passed to server URL in sm_list, src/mcp-server.ts:366-369] sm_list drops limit from URL #logic-bug #at-scale-only
+- [x] **A079** [fixed: renamed to source_adapter/target_adapter with clear descriptions at src/mcp-server.ts:259-282] sm_sync schema names mismatched adapter vs collection #ux #local-real
+- [x] **A080** [fixed: sm_query now rejects empty/missing filter with clear error at src/mcp-server.ts:381-384 — directs caller to sm_list instead] Empty-filter scan footgun #ux #at-scale-only
+- [x] **A081** [fixed: tool + argument descriptions warn "Omitting `key` reads the whole collection, which can be expensive on Notion/Airtable/Sheets — prefer passing a specific key or using sm_list/sm_query" at src/mcp-server.ts:185,190] sm_read cost warning #ux #at-scale-only
 
 ### MCP / HTTP (more)
 
 - [x] **A090** [fixed: /_sync now returns `sync failed (<ErrorName>)` — no message body to leak tokens/paths] Error message sanitization #bug-fix
-- [ ] **A091** Long `/_sync` holds connection — no job-ID / streaming. Client disconnect doesn't cancel the server operation. `serve.ts:174`, `src/sync.ts:769` #resource-leak #ux #local-real
+- [x] **A091** [fixed: POST /_sync now returns 202 + jobId in background mode; JSONL log at <dataDir>/jobs/<jobId>.jsonl; GET /_sync/jobs + /_sync/jobs/:id; ?wait=true for sync; MCP sm_sync_status + sm_sync_jobs] Long /_sync connection / no job-ID #resource-leak #ux #local-real
 
 ### LocalJson / Memory / data-ops (more)
 
-- [ ] **A100** LocalJson `_hydratePromise` never reset — first rejection poisons all future searches. `src/adapters/local-json.ts:83-92` #error-handling #local-real
-- [ ] **A101** LocalJson `searchProvider` getter builds a fresh wrapper EVERY call — identity pins / WeakMaps break. `src/adapters/local-json.ts:94-106` #wiring #at-scale-only
+- [x] **A100** [fixed: hydrate() catch block sets `this._hydratePromise = null` before re-throwing — next call retries instead of poisoning all future searches, src/adapters/local-json.ts:100-103] LocalJson hydrate-promise poisoning #error-handling #local-real
+- [x] **A101** [fixed: searchProvider getter caches the wrapper in `this._searchProviderWrapper` and returns the same instance on subsequent calls, src/adapters/local-json.ts:87,110] LocalJson wrapper identity #wiring #at-scale-only
 - [x] **A102** [fixed: index() receives the cloned storedValue, so async providers (vector/zvec) can't observe caller mutations] MemoryAdapter clone on index #bug-fix
 - [ ] **A103** `merge` default mode is `append` — callers expecting "replace dest" get doubled data on re-runs. `src/router.ts:1503-1568` #logic-bug #local-real #breaking-change
 - [x] **A104** [fixed: null/undefined check instead of truthy check] merge() preserves scalar 0 / '' / false #bug-fix
@@ -124,11 +126,11 @@ Three agents swept the new surface: `src/utils/job-log.ts`, `serve.ts` new `/_sy
 
 - [ ] **A201** `summarizeJob` reads entire JSONL file via `Deno.readTextFile` (up to n=2000 events), so `GET /_sync/jobs?limit=50` reads 50 full files in parallel. Fine for small job counts; no rotation/cleanup so log dir grows forever. `src/utils/job-log.ts:108-123, 154-183` #resource-leak #at-scale-only
 - [ ] **A203** `generateJobId` uses `Date.now()` truncated to seconds + 6-char `Math.random()` suffix — ~2^31 space per second, but burst-parallel requests in the same second have non-trivial collision probability (~P=1e-6 per 1k/sec). Consider `crypto.randomUUID()` or `crypto.getRandomValues()`. `src/utils/job-log.ts:42-46` #logic-bug #at-scale-only
-- [ ] **A222** `parseInt("999x", 10)` returns 999 silently — `handleListKeys` validates `Number.isFinite(limit) && limit >= 0` but lets parseInt's leniency through, so "999x" is accepted as 999. Use `Number(limitRaw)` + `Number.isInteger` instead. `src/http/handlers.ts:436-443` #ux #local-real
-- [ ] **A228** `?limit=0` passes validation and returns `{keys: [], hasMore: true, total: N}` — confusing UX (empty but hasMore). Either reject `limit === 0` or special-case to `hasMore: false`. `src/http/handlers.ts:438` #ux #local-real
+- [x] **A222** [fixed: `Number(raw)` + `Number.isInteger()` rejects "999x" as NaN; parseInt's loose parsing removed at src/http/handlers.ts:436-443] parseInt leniency #ux #local-real
+- [x] **A228** [fixed: limit must be a *positive* integer (`limit <= 0` rejected with 400) so `?limit=0` no longer returns empty-keys-with-hasMore:true confusion, src/http/handlers.ts:438] `?limit=0` UX #ux #local-real
 - [ ] **A204** `sm_sync_jobs` / `GET /_sync/jobs` fires `Promise.all` over `summarizeJob` for up to `limit` jobs — 50 concurrent full-file reads at default. Acceptable at dev scale; cap parallelism if job dir grows. `serve.ts:269-271` #ux #at-scale-only
 - [ ] **A242** Weak `(last as any).result` / `(last as any).message` casts in `summarizeJob` — only safe because caller contract writes exactly these fields in `completed`/`failed` events. Narrow with event-typed union instead. `src/utils/job-log.ts:179-180` #type-safety #local-real
-- [ ] **A244** Default tail window hardcoded at 50 events in `tailJobLog(path, n=50)` and `summarizeJob` calls `tailJobLog(path, 2000)` — no const. Both are magic numbers for what "enough of the log" means. `src/utils/job-log.ts:106, 164` #magic-number #local-real
+- [x] **A244** [fixed: extracted `DEFAULT_TAIL_EVENTS = 50` and `SUMMARY_SCAN_EVENTS = 2000` exported constants with JSDoc explaining the trade-off; tailJobLog default references DEFAULT_TAIL_EVENTS, summarizeJob calls tailJobLog(path, SUMMARY_SCAN_EVENTS), src/utils/job-log.ts:102-109] Magic tail/summary window constants #magic-number #local-real
 - [ ] **A243** `config.preset as any` cast in `serve.ts:75` — bypasses type safety on preset resolution; not a bug today but narrows the compiler's ability to catch a future preset-shape change. `serve.ts:75` #type-safety #local-real
 
 ### Verified fine (dropped from audit)

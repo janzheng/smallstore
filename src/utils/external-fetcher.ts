@@ -103,9 +103,10 @@ export async function fetchExternal(
   // Fetch the data (with retry for transient failures)
   const response = await retryFetch(source.url, { headers }, { maxRetries: 2, initialDelay: 500 });
 
-  // Handle 304 Not Modified
+  // Handle 304 Not Modified — use the typed error so callers can survive
+  // message wrapping via `err instanceof CacheValidError`.
   if (response.status === 304) {
-    throw new Error('CACHE_VALID');
+    throw new CacheValidError();
   }
 
   if (!response.ok) {
