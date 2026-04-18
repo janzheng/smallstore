@@ -89,10 +89,13 @@
     "interview:serve": "deno run --config deno.json --allow-all apps/self-interview/mod.ts",
     "interview:serve:watch": "deno run --config deno.json --allow-all --watch apps/self-interview/mod.ts",
     "interview:deploy:dev": "cd apps/self-interview && deno deploy --app 'self-interview'",
-    "interview:deploy:prod": "cd apps/self-interview && deno deploy --app 'self-interview' --prod"
+    "interview:deploy:prod": "cd apps/self-interview && deno deploy --app 'self-interview' --prod",
+    "mcp": "deno run --allow-net --allow-read --allow-env src/mcp-server.ts"
   },
   "imports": {
     "hono": "npm:hono@^4.10.3",
+    "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@^1.29.0",
+    "@modelcontextprotocol/sdk/": "npm:/@modelcontextprotocol/sdk@^1.29.0/",
     "@notionhq/client": "npm:@notionhq/client@^5.16.0",
     "@notionhq/client/": "npm:@notionhq/client@^5.16.0/",
     "@aws-sdk/client-s3": "npm:@aws-sdk/client-s3@^3.0.0",

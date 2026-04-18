@@ -1,0 +1,319 @@
+#!/usr/bin/env -S deno run --allow-net --allow-read --allow-env
+/**
+ * Smallstore MCP Server (Phase 1)
+ *
+ * Stdio MCP server that forwards tool calls to a running Smallstore HTTP server
+ * (started via `deno task serve`). Exposes read/write/list/query/sync/adapters
+ * as MCP tools so Claude Code and other MCP clients can drive any configured
+ * Smallstore adapter.
+ *
+ * Env vars:
+ *   SMALLSTORE_URL    Base URL of the running server (default: http://localhost:9998)
+ *   SMALLSTORE_TOKEN  Optional Bearer token; sent as `Authorization: Bearer ...`
+ *
+ * Run:
+ *   deno task mcp
+ *
+ * Register in ~/.claude.json under "mcpServers.smallstore":
+ *   {
+ *     "command": "deno",
+ *     "args": ["run", "--allow-net", "--allow-read", "--allow-env",
+ *              "/absolute/path/to/smallstore/src/mcp-server.ts"],
+ *     "env": { "SMALLSTORE_URL": "http://localhost:9998" }
+ *   }
+ *
+ * @module
+ */
+
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
+
+// ============================================================================
+// Config
+// ============================================================================
+
+const SMALLSTORE_URL = (Deno.env.get('SMALLSTORE_URL') ?? 'http://localhost:9998').replace(/\/+$/, '');
+const SMALLSTORE_TOKEN = Deno.env.get('SMALLSTORE_TOKEN');
+
+// ============================================================================
+// HTTP helper
+// ============================================================================
+
+interface HttpResult {
+  ok: boolean;
+  status: number;
+  body: unknown;
+}
+
+async function http(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<HttpResult> {
+  const headers: Record<string, string> = { 'Accept': 'application/json' };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (SMALLSTORE_TOKEN) headers['Authorization'] = `Bearer ${SMALLSTORE_TOKEN}`;
+
+  const url = `${SMALLSTORE_URL}${path}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Smallstore HTTP server unreachable at ${SMALLSTORE_URL} — ${msg}. Is 'deno task serve' running?`);
+  }
+
+  const text = await res.text();
+  let parsed: unknown = text;
+  if (text) {
+    try { parsed = JSON.parse(text); } catch { /* leave as text */ }
+  }
+  return { ok: res.ok, status: res.status, body: parsed };
+}
+
+function encodeCollectionKey(collection: string, key?: string): string {
+  const col = encodeURIComponent(collection);
+  if (key === undefined || key === '') return `/api/${col}`;
+  // Preserve slashes in keys so nested paths keep their shape on the server.
+  const k = key.split('/').map(encodeURIComponent).join('/');
+  return `/api/${col}/${k}`;
+}
+
+// ============================================================================
+// Tool definitions
+// ============================================================================
+
+const TOOLS = [
+  {
+    name: 'sm_read',
+    description: 'Read a single record from a Smallstore collection (or a nested path). Returns the stored value along with collection/adapter metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: 'Collection name (e.g. "users", "notes").' },
+        key: { type: 'string', description: 'Record key / sub-path within the collection (e.g. "alice"). Omit to read the whole collection.' },
+      },
+      required: ['collection'],
+    },
+  },
+  {
+    name: 'sm_write',
+    description: 'Write (overwrite) a record at collection/key with the given JSON object. Uses HTTP PUT, so existing values at the key are replaced.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: 'Collection name.' },
+        key: { type: 'string', description: 'Record key / sub-path.' },
+        data: {
+          description: 'JSON object (or any JSON value) to store at collection/key.',
+        },
+      },
+      required: ['collection', 'key', 'data'],
+    },
+  },
+  {
+    name: 'sm_delete',
+    description: 'Delete a record at collection/key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: 'Collection name.' },
+        key: { type: 'string', description: 'Record key / sub-path.' },
+      },
+      required: ['collection', 'key'],
+    },
+  },
+  {
+    name: 'sm_list',
+    description: 'List keys in a collection. Optionally filter by prefix. Note: limit is enforced client-side after fetching all keys.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: 'Collection name.' },
+        options: {
+          type: 'object',
+          properties: {
+            prefix: { type: 'string', description: 'Only include keys starting with this prefix.' },
+            limit: { type: 'number', description: 'Maximum number of keys to return.' },
+          },
+        },
+      },
+      required: ['collection'],
+    },
+  },
+  {
+    name: 'sm_query',
+    description: 'Structured query over a collection using a MongoDB-style filter object. Forwards to POST /api/:collection/query.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: 'Collection name.' },
+        filter: {
+          type: 'object',
+          description: 'Filter object (e.g. { status: "active", "meta.tag": { "$in": ["a", "b"] } }). Can also be a full QueryOptions object with where/limit/sort.',
+        },
+      },
+      required: ['collection', 'filter'],
+    },
+  },
+  {
+    name: 'sm_sync',
+    description: 'Sync data between two configured adapters (push/pull/bidirectional). Wraps syncAdapters() via the server\'s /_sync endpoint. source/target must be adapter names (not collections).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source_collection: { type: 'string', description: 'Source adapter name (e.g. "notion", "local"). Must match an adapter configured on the server.' },
+        target_collection: { type: 'string', description: 'Target adapter name.' },
+        options: {
+          type: 'object',
+          description: 'SyncAdapterOptions: { mode?: "push"|"pull"|"sync", prefix?, targetPrefix?, overwrite?, skipUnchanged?, dryRun?, batchDelay?, syncId?, conflictResolution?: "source-wins"|"target-wins"|"skip" }. Function-valued options (transform/onProgress) are not supported over HTTP.',
+          properties: {
+            mode: { type: 'string', enum: ['push', 'pull', 'sync'] },
+            prefix: { type: 'string' },
+            targetPrefix: { type: 'string' },
+            overwrite: { type: 'boolean' },
+            skipUnchanged: { type: 'boolean' },
+            dryRun: { type: 'boolean' },
+            batchDelay: { type: 'number' },
+            syncId: { type: 'string' },
+            conflictResolution: { type: 'string', enum: ['source-wins', 'target-wins', 'skip'] },
+          },
+        },
+      },
+      required: ['source_collection', 'target_collection'],
+    },
+  },
+  {
+    name: 'sm_adapters',
+    description: 'List configured adapters, mounts, and default adapter on the running Smallstore server. Useful for agent orientation.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+];
+
+// ============================================================================
+// Tool handlers
+// ============================================================================
+
+type Args = Record<string, unknown>;
+
+function requireString(args: Args, name: string): string {
+  const v = args[name];
+  if (typeof v !== 'string' || v.length === 0) {
+    throw new Error(`Missing required string argument: "${name}"`);
+  }
+  return v;
+}
+
+function formatHttpError(prefix: string, r: HttpResult): string {
+  const body = typeof r.body === 'string' ? r.body : JSON.stringify(r.body);
+  return `${prefix}: HTTP ${r.status} — ${body}`;
+}
+
+async function callTool(name: string, args: Args): Promise<unknown> {
+  switch (name) {
+    case 'sm_read': {
+      const collection = requireString(args, 'collection');
+      const key = typeof args.key === 'string' ? args.key : undefined;
+      const r = await http('GET', encodeCollectionKey(collection, key));
+      if (!r.ok) throw new Error(formatHttpError('sm_read failed', r));
+      return r.body;
+    }
+
+    case 'sm_write': {
+      const collection = requireString(args, 'collection');
+      const key = requireString(args, 'key');
+      if (!('data' in args)) throw new Error('sm_write requires a "data" argument');
+      const r = await http('PUT', encodeCollectionKey(collection, key), { data: args.data });
+      if (!r.ok) throw new Error(formatHttpError('sm_write failed', r));
+      return r.body;
+    }
+
+    case 'sm_delete': {
+      const collection = requireString(args, 'collection');
+      const key = requireString(args, 'key');
+      const r = await http('DELETE', encodeCollectionKey(collection, key));
+      if (!r.ok) throw new Error(formatHttpError('sm_delete failed', r));
+      return r.body;
+    }
+
+    case 'sm_list': {
+      const collection = requireString(args, 'collection');
+      const options = (args.options as { prefix?: string; limit?: number } | undefined) ?? {};
+      const qs = new URLSearchParams();
+      if (options.prefix) qs.set('prefix', options.prefix);
+      const path = `/api/${encodeURIComponent(collection)}/keys${qs.toString() ? `?${qs}` : ''}`;
+      const r = await http('GET', path);
+      if (!r.ok) throw new Error(formatHttpError('sm_list failed', r));
+      // Client-side limit — server returns all keys matching the prefix.
+      if (options.limit && r.body && typeof r.body === 'object' && Array.isArray((r.body as { keys?: unknown[] }).keys)) {
+        const b = r.body as { keys: unknown[]; total?: number };
+        b.keys = b.keys.slice(0, options.limit);
+        b.total = b.keys.length;
+      }
+      return r.body;
+    }
+
+    case 'sm_query': {
+      const collection = requireString(args, 'collection');
+      const filter = args.filter ?? {};
+      const r = await http('POST', `/api/${encodeURIComponent(collection)}/query`, filter);
+      if (!r.ok) throw new Error(formatHttpError('sm_query failed', r));
+      return r.body;
+    }
+
+    case 'sm_sync': {
+      const source = requireString(args, 'source_collection');
+      const target = requireString(args, 'target_collection');
+      const options = (args.options as Record<string, unknown> | undefined) ?? {};
+      const r = await http('POST', '/_sync', { source, target, options });
+      if (!r.ok) throw new Error(formatHttpError('sm_sync failed', r));
+      return r.body;
+    }
+
+    case 'sm_adapters': {
+      const r = await http('GET', '/_adapters');
+      if (!r.ok) throw new Error(formatHttpError('sm_adapters failed', r));
+      return r.body;
+    }
+
+    default:
+      throw new Error(`Unknown tool: ${name}`);
+  }
+}
+
+// ============================================================================
+// Server wiring
+// ============================================================================
+
+const server = new Server(
+  { name: 'smallstore', version: '0.1.0' },
+  { capabilities: { tools: {} } },
+);
+
+server.setRequestHandler(ListToolsRequestSchema, () => {
+  return { tools: TOOLS };
+});
+
+server.setRequestHandler(CallToolRequestSchema, async (req: { params: { name: string; arguments?: Args } }) => {
+  const { name, arguments: rawArgs } = req.params;
+  const args = (rawArgs ?? {}) as Args;
+  try {
+    const result = await callTool(name, args);
+    const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+    return { content: [{ type: 'text', text }] };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: [{ type: 'text', text: msg }], isError: true };
+  }
+});
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
