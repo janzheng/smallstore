@@ -36,8 +36,24 @@ import {
 // Config
 // ============================================================================
 
-const SMALLSTORE_URL = (Deno.env.get('SMALLSTORE_URL') ?? 'http://localhost:9998').replace(/\/+$/, '');
+const RAW_URL = Deno.env.get('SMALLSTORE_URL') ?? 'http://localhost:9998';
+try {
+  const u = new URL(RAW_URL);
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    throw new Error(`SMALLSTORE_URL must be http(s), got "${u.protocol}"`);
+  }
+} catch (err) {
+  // Fail fast at startup — much better UX than cryptic errors on first tool call.
+  console.error(`[smallstore-mcp] Invalid SMALLSTORE_URL "${RAW_URL}": ${err instanceof Error ? err.message : err}`);
+  Deno.exit(1);
+}
+const SMALLSTORE_URL = RAW_URL.replace(/\/+$/, '');
+
 const SMALLSTORE_TOKEN = Deno.env.get('SMALLSTORE_TOKEN');
+if (SMALLSTORE_TOKEN !== undefined && /[\r\n]/.test(SMALLSTORE_TOKEN)) {
+  console.error('[smallstore-mcp] SMALLSTORE_TOKEN contains CR/LF — rejecting to avoid HTTP header injection.');
+  Deno.exit(1);
+}
 
 // ============================================================================
 // HTTP helper
@@ -59,13 +75,23 @@ async function http(
   if (SMALLSTORE_TOKEN) headers['Authorization'] = `Bearer ${SMALLSTORE_TOKEN}`;
 
   const url = `${SMALLSTORE_URL}${path}`;
+
+  // Serialize upfront so BigInt / circular refs / other non-JSON values fail
+  // with a clear "bad argument" message instead of a cryptic TypeError from
+  // deep inside fetch().
+  let serializedBody: string | undefined;
+  if (body !== undefined) {
+    try {
+      serializedBody = JSON.stringify(body);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`sm_write/sm_query body is not JSON-serializable: ${msg}`);
+    }
+  }
+
   let res: Response;
   try {
-    res = await fetch(url, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    res = await fetch(url, { method, headers, body: serializedBody });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Smallstore HTTP server unreachable at ${SMALLSTORE_URL} — ${msg}. Is 'deno task serve' running?`);
@@ -253,10 +279,18 @@ async function callTool(name: string, args: Args): Promise<unknown> {
       const r = await http('GET', path);
       if (!r.ok) throw new Error(formatHttpError('sm_list failed', r));
       // Client-side limit — server returns all keys matching the prefix.
+      // Preserve the true server-side total under `totalAvailable` so the
+      // caller can detect "there's more than you see".
       if (options.limit && r.body && typeof r.body === 'object' && Array.isArray((r.body as { keys?: unknown[] }).keys)) {
-        const b = r.body as { keys: unknown[]; total?: number };
-        b.keys = b.keys.slice(0, options.limit);
-        b.total = b.keys.length;
+        const b = r.body as { keys: unknown[]; total?: number; totalAvailable?: number };
+        const serverTotal = typeof b.total === 'number' ? b.total : b.keys.length;
+        return {
+          ...b,
+          keys: b.keys.slice(0, options.limit),
+          total: Math.min(options.limit, serverTotal),
+          totalAvailable: serverTotal,
+          truncated: serverTotal > options.limit,
+        };
       }
       return r.body;
     }

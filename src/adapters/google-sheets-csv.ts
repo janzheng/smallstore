@@ -99,6 +99,19 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
     if (!config || typeof config.url !== 'string' || config.url.length === 0) {
       throw new Error('GoogleSheetsCsvAdapter requires a `url` option');
     }
+    // Require an absolute http(s) URL. Accepting relative or file:/ URLs
+    // would defer the error until first fetch and produce a confusing stack.
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(config.url);
+    } catch {
+      throw new Error(`GoogleSheetsCsvAdapter: invalid url "${config.url}"`);
+    }
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      throw new Error(
+        `GoogleSheetsCsvAdapter: url must be http(s), got "${parsedUrl.protocol}"`,
+      );
+    }
     this.url = config.url;
     this.keyColumn = config.keyColumn;
     this.refreshMs = config.refreshMs ?? 60_000;
@@ -209,7 +222,9 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
     // Cache hit?
     if (this.refreshMs > 0 && this.cache) {
       const age = Date.now() - this.cache.fetchedAt;
-      if (age <= this.refreshMs) return this.cache;
+      // Negative age = wall clock went backwards (NTP correction); treat as
+      // expired so we don't trap a stale cache until the clock catches up.
+      if (age >= 0 && age <= this.refreshMs) return this.cache;
     }
 
     // Coalesce concurrent fetches
@@ -249,8 +264,11 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
       signal: combinedSignal,
     });
     if (!res.ok) {
+      // Redact query string — Google Sheets export URLs can include auth
+      // fragments that shouldn't leak into error logs.
+      const safeUrl = this.url.split('?')[0];
       throw new Error(
-        `[google-sheets-csv] Fetch failed: ${res.status} ${res.statusText} (${this.url})`,
+        `[google-sheets-csv] Fetch failed: ${res.status} ${res.statusText} (${safeUrl})`,
       );
     }
     const text = await res.text();
@@ -283,6 +301,27 @@ function parseRows(text: string): Record<string, any>[] {
   // not strip it, which corrupts the first header (e.g. "\uFEFFid"),
   // breaking keyColumn matching silently.
   if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+  // Parse raw first to detect duplicate header columns — @std/csv with
+  // skipFirstRow collapses duplicates into a single key (later wins)
+  // without any signal. Surface a clear error so callers can rename.
+  const raw = parseCsv(text) as string[][];
+  if (raw.length > 0) {
+    const header = raw[0];
+    const seen = new Set<string>();
+    const dups: string[] = [];
+    for (const col of header) {
+      if (seen.has(col)) dups.push(col);
+      else seen.add(col);
+    }
+    if (dups.length > 0) {
+      throw new Error(
+        `[google-sheets-csv] CSV header has duplicate column names: ${
+          dups.map(d => JSON.stringify(d)).join(', ')
+        }. Rename the columns in the source sheet to avoid silent data loss.`,
+      );
+    }
+  }
 
   // @std/csv's skipFirstRow uses the header row as object keys — exactly
   // what we want. Returns Record<string, string>[].

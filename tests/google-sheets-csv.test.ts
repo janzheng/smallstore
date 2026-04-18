@@ -398,3 +398,45 @@ Deno.test('GoogleSheetsCsvAdapter - throws clearly when keyColumn missing from h
     'keyColumn "id" not found',
   );
 });
+
+Deno.test('GoogleSheetsCsvAdapter - rejects non-http(s) url at construction', () => {
+  assertEquals(
+    (() => { try { createGoogleSheetsCsvAdapter({ url: 'file:///etc/passwd' }); return null; } catch (e) { return (e as Error).message; } })()?.includes('http(s)'),
+    true,
+  );
+  assertEquals(
+    (() => { try { createGoogleSheetsCsvAdapter({ url: 'not-a-url' }); return null; } catch (e) { return (e as Error).message; } })()?.includes('invalid url'),
+    true,
+  );
+});
+
+Deno.test('GoogleSheetsCsvAdapter - detects duplicate header columns and throws', async () => {
+  const csv = 'id,name,id\n1,Alice,2\n';
+  const adapter = createGoogleSheetsCsvAdapter({
+    url: FAKE_URL,
+    fetchImpl: makeFetchStub(csv),
+  });
+
+  await assertRejects(
+    () => adapter.keys(),
+    Error,
+    'duplicate column names',
+  );
+});
+
+Deno.test('GoogleSheetsCsvAdapter - fetch error redacts query string', async () => {
+  const url = 'https://docs.google.com/export?secret=TOKEN_XYZ&gid=0';
+  const adapter = createGoogleSheetsCsvAdapter({
+    url,
+    fetchImpl: makeFetchStub('', { status: 500 }),
+  });
+
+  try {
+    await adapter.get('0');
+    throw new Error('expected fetch to fail');
+  } catch (err) {
+    const msg = (err as Error).message;
+    assert(!msg.includes('TOKEN_XYZ'), `error should redact query string, got: ${msg}`);
+    assert(msg.includes('500'), `error should still contain status, got: ${msg}`);
+  }
+});
