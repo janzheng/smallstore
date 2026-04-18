@@ -1173,16 +1173,36 @@ export class SmartRouter implements Smallstore {
       hybridAlpha: options.hybridAlpha,
     });
 
-    // Map to SearchResult format
-    return rawResults.map(r => ({
+    const mapped = rawResults.map(r => ({
       path: r.key,
-      data: null, // Caller can use get() to load full data
+      data: null as any, // Hydrated below if filter is set.
       score: r.score,
       metadata: {
         snippet: r.snippet,
         ...(r.distance !== undefined ? { distance: r.distance } : {}),
       },
     }));
+
+    // Post-search filter (MongoDB-style). Hydrates each result's data to
+    // match against — only applied when a filter is supplied, so the
+    // filter-less fast path remains no-data (caller uses get() as before).
+    if (options.filter && Object.keys(options.filter).length > 0 && adapter) {
+      const { matchesFilter } = await import('./utils/query-engine.ts');
+      const filtered: typeof mapped = [];
+      for (const r of mapped) {
+        // Hit the adapter directly — provider keys are in the adapter's
+        // internal format (e.g. smallstore:coll:key) which router.get()
+        // doesn't parse.
+        const data = await adapter.get(r.path);
+        if (data !== null && data !== undefined && matchesFilter(data, options.filter)) {
+          r.data = data;
+          filtered.push(r);
+        }
+      }
+      return filtered;
+    }
+
+    return mapped;
   }
   
   /**

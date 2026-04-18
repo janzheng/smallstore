@@ -29,7 +29,9 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
+  ErrorCode,
   ListToolsRequestSchema,
+  McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 
 // ============================================================================
@@ -386,7 +388,9 @@ async function callTool(name: string, args: Args): Promise<unknown> {
     }
 
     default:
-      throw new Error(`Unknown tool: ${name}`);
+      // MethodNotFound surfaces as a proper JSON-RPC error (code -32601)
+      // instead of an isError result content block.
+      throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
   }
 }
 
@@ -411,6 +415,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req: { params: { name: st
     const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
     return { content: [{ type: 'text', text }] };
   } catch (err) {
+    // McpError bubbles up as a proper JSON-RPC error (e.g. MethodNotFound).
+    // Every other failure becomes an isError result so the agent sees the
+    // message without the RPC layer interpreting it as an envelope error.
+    if (err instanceof McpError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     return { content: [{ type: 'text', text: msg }], isError: true };
   }

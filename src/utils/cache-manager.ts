@@ -303,8 +303,15 @@ export class CacheManager {
   }
   
   /**
-   * Get cache statistics
-   * 
+   * Get cache statistics.
+   *
+   * Scope caveat: `hits` and `misses` are PER-PROCESS counters on this
+   * CacheManager instance, while `entries`, `size`, and the timestamps
+   * come from a live scan of the backing adapter (shared across all
+   * processes). On a shared remote adapter (e.g. Upstash), hit-rate is
+   * this process's view; entry count is the whole cache. Not a single
+   * coherent snapshot — interpret accordingly.
+   *
    * @param collectionPath - Optional collection to filter stats
    * @returns Cache statistics
    */

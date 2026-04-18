@@ -1507,11 +1507,23 @@ export interface SearchOptions {
   query?: string;
   vector?: number[];
   type: 'bm25' | 'vector' | 'hybrid';
+  /** @deprecated Unused. The collection path passed to router.search() already scopes results — there's no sub-path below collection for search. Remove in a future major. */
   path?: string;
+  /**
+   * Optional MongoDB-style filter applied to results AFTER the search
+   * provider ranks them. Matches the shape of `query()` filters:
+   *   { field: value }, { field: { $gt: 10 } }, { $and: [...] }, etc.
+   * The filter needs to find the field on the stored record, so
+   * router.search() hydrates result data via get() before filtering.
+   */
   filter?: Record<string, any>;
   limit?: number;
   topK?: number;
   threshold?: number;
+  /** Weight for BM25 vs vector in hybrid search (0 = pure vector, 1 = pure BM25). */
+  hybridAlpha?: number;
+  /** Distance metric for vector search. Providers that bake metric at construction ignore this. */
+  metric?: 'cosine' | 'euclidean' | 'dot';
 }
 
 /**

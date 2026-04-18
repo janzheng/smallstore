@@ -350,6 +350,38 @@ function createMemoryAdapterWithProvider(provider: any) {
 }
 
 Deno.test({
+  name: 'integration/router-search — filter post-filters ranked results (MongoDB-style)',
+  ...opts,
+  fn: async () => {
+    const store = createSmallstore({
+      adapters: { memory: createMemoryAdapter() },
+      defaultAdapter: 'memory',
+      metadataAdapter: 'memory',
+    });
+
+    await store.set('docs/a', { title: 'Gradient descent', category: 'ml', year: 2024 });
+    await store.set('docs/b', { title: 'Gradient tools', category: 'design', year: 2024 });
+    await store.set('docs/c', { title: 'Gradient ascent', category: 'ml', year: 2020 });
+
+    const r = await store.search('docs', {
+      type: 'bm25',
+      query: 'gradient',
+      filter: { category: 'ml' },
+    });
+    const paths = r.map(x => x.path);
+    assert(paths.some(p => p.includes('docs:a')));
+    assert(paths.some(p => p.includes('docs:c')));
+    assert(!paths.some(p => p.includes('docs:b')), `"design" category should be filtered out, got: ${paths.join(',')}`);
+
+    // Each filtered result hydrates its data so callers don't need a second get().
+    for (const x of r) {
+      assert(x.data !== null, 'filtered result data should be hydrated');
+      assertEquals((x.data as any).category, 'ml');
+    }
+  },
+});
+
+Deno.test({
   name: 'integration/search-providers — collection scoping rejects substring matches',
   ...opts,
   fn: async () => {

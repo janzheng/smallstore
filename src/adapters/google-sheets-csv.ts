@@ -355,6 +355,7 @@ function keyRows(
   }
 
   const keyed = new Map<string, Record<string, any>>();
+  const dupCount = new Map<string, number>();
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     let key: string;
@@ -366,7 +367,19 @@ function keyRows(
     } else {
       key = String(i);
     }
+    if (keyed.has(key)) {
+      dupCount.set(key, (dupCount.get(key) ?? 1) + 1);
+    }
     keyed.set(key, row);
+  }
+  // Warn once per load if duplicates collapsed silently (last-write-wins is
+  // this adapter's documented behavior, but surprising on a fresh sheet).
+  if (dupCount.size > 0) {
+    const preview = [...dupCount.entries()].slice(0, 3).map(([k, n]) => `${JSON.stringify(k)}×${n}`).join(', ');
+    const more = dupCount.size > 3 ? ` (+${dupCount.size - 3} more)` : '';
+    console.warn(
+      `[google-sheets-csv] Duplicate key values found in column ${JSON.stringify(keyColumn ?? '<row-index>')} — last-write-wins: ${preview}${more}`,
+    );
   }
   return keyed;
 }
