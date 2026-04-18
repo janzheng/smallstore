@@ -325,31 +325,90 @@ Deno.test({
 });
 
 // ============================================================================
-// Eviction policy — documented gap
+// Eviction policy
 // ============================================================================
-//
-// The CacheManager exposes `evictionPolicy: 'lru' | 'lfu' | 'ttl-only'` on
-// CachingConfig, but the manager never enforces eviction itself — it relies
-// on the backing adapter's native TTL support. With a MemoryAdapter, entries
-// stay until explicitly cleared, their adapter-level TTL expires, or the
-// CacheManager rejects them at read time on cachedAt+ttl check.
-//
-// This test documents that filling past any nominal "capacity" does not
-// cause eviction — it's a regression guard, not a bug assertion.
+
 Deno.test({
-  name: 'CacheManager - no built-in LRU eviction (capacity exceeded keeps all entries)',
+  name: 'CacheManager - LRU evicts oldest entries when maxCacheSize exceeded',
   ...opts,
   fn: async () => {
     const { manager, adapter } = makeManager({
-      maxCacheSize: '1B', // deliberately tiny — ignored by implementation
+      maxCacheSize: '200B', // room for ~1 entry of our test payload
       evictionPolicy: 'lru',
     });
 
-    for (let i = 0; i < 10; i++) {
+    await manager.set('col/a', { filter: {} }, { id: 'a', data: 'x'.repeat(80) });
+    await manager.set('col/b', { filter: {} }, { id: 'b', data: 'x'.repeat(80) });
+    await manager.set('col/c', { filter: {} }, { id: 'c', data: 'x'.repeat(80) });
+
+    const keys = await adapter.keys('_cache/');
+    assert(keys.length < 3, `expected eviction to drop at least 1 of 3 entries, got ${keys.length}`);
+    // 'a' was set first (oldest access) so should be gone; 'c' is newest so should remain.
+    const hitA = await manager.get('col/a', { filter: {} });
+    const hitC = await manager.get('col/c', { filter: {} });
+    assertEquals(hitA, null, 'LRU should have evicted oldest (col/a)');
+    assert(hitC, 'most-recent entry (col/c) should still be present');
+  },
+});
+
+Deno.test({
+  name: 'CacheManager - ttl-only policy does NOT evict on size',
+  ...opts,
+  fn: async () => {
+    const { manager, adapter } = makeManager({
+      maxCacheSize: '1B',
+      evictionPolicy: 'ttl-only',
+    });
+
+    for (let i = 0; i < 5; i++) {
       await manager.set(`col/${i}`, { filter: { n: i } }, { i });
     }
 
     const keys = await adapter.keys('_cache/');
-    assertEquals(keys.length, 10, 'no eviction should have happened');
+    assertEquals(keys.length, 5, 'ttl-only should not evict on size');
+  },
+});
+
+Deno.test({
+  name: 'CacheManager - maxCacheSize:0 disables size eviction',
+  ...opts,
+  fn: async () => {
+    const { manager, adapter } = makeManager({
+      maxCacheSize: '0',
+      evictionPolicy: 'lru',
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await manager.set(`col/${i}`, { filter: { n: i } }, { i });
+    }
+
+    const keys = await adapter.keys('_cache/');
+    assertEquals(keys.length, 5, 'zero max-size disables eviction');
+  },
+});
+
+Deno.test({
+  name: 'CacheManager - get() touches lastAccess (LRU "recent" protection)',
+  ...opts,
+  fn: async () => {
+    // Each test entry is ~110B JSON; 250B fits two but forces eviction of one on the third set.
+    const { manager } = makeManager({
+      maxCacheSize: '250B',
+      evictionPolicy: 'lru',
+    });
+
+    await manager.set('col/a', { filter: {} }, { id: 'a' });
+    await manager.set('col/b', { filter: {} }, { id: 'b' });
+    // Touch 'a' so it's now the most-recent access.
+    await manager.get('col/a', { filter: {} });
+    // Adding 'c' should evict 'b' (now oldest), not 'a'.
+    await manager.set('col/c', { filter: {} }, { id: 'c' });
+
+    const hitA = await manager.get('col/a', { filter: {} });
+    const hitB = await manager.get('col/b', { filter: {} });
+    const hitC = await manager.get('col/c', { filter: {} });
+    assert(hitA, 'recently-read col/a should survive');
+    assertEquals(hitB, null, 'col/b should be evicted');
+    assert(hitC, 'new col/c should be present');
   },
 });

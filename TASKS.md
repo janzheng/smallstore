@@ -87,12 +87,12 @@
 
 Surfaced by the Phase 7 testing sweep. Each has a test asserting current (broken) behavior — flip when fixed.
 
-- [x] [fixed: added {raw:true} to src/router.ts:1515/1584/1623/1680 — slice/split/deduplicate/merge now work; 31/31 tests green] `router.get()` unwrapping: data-ops called `get(path)` without `{raw:true}`, got wrapped StorageFileResponse — all 4 endpoints were broken in production #bug-fix
-- [ ] `router.search()` drops `hybridAlpha` in SearchProviderOptions (src/router.ts:1161-1169) — hybrid alpha always uses provider default #bug #router-search
-- [ ] `LocalJsonAdapter` does not rebuild BM25 index on reopen (src/adapters/local-json.ts:46-79) — data persists, index doesn't #bug #local-json
-- [ ] `fetchExternal` 304 Not Modified branch is dead code (src/utils/external-fetcher.ts:94-96) — retryFetch throws HttpError first, conditional-request caching silently fails #bug #external-fetcher
-- [ ] `CacheManager` exposes `evictionPolicy`/`maxCacheSize` but never enforces them — no actual LRU eviction #bug #cache-manager
-- [ ] Router auto-indexing leaks metadata keys (`smallstore:meta:*`, `smallstore:index:*`) into search results — collection filter uses overly-permissive `key.includes(collection)` #bug #router-indexing
+- [x] [fixed: added {raw:true} to src/router.ts:1515/1584/1623/1680] `router.get()` unwrapping in data-ops (slice/split/deduplicate/merge) #bug-fix
+- [x] [fixed: router.search() now forwards hybridAlpha + metric to provider] `router.search()` drops `hybridAlpha` #bug-fix #router-search
+- [x] [fixed: LocalJsonAdapter.searchProvider getter wraps provider with lazy hydration from disk on first search()] `LocalJsonAdapter` rebuilds BM25 index on reopen #bug-fix #local-json
+- [x] [fixed: retryFetch now passes 304 through; external-fetcher's CACHE_VALID branch is reachable] `fetchExternal` 304 Not Modified handling #bug-fix #external-fetcher
+- [x] [fixed: CacheManager tracks per-entry size + monotonic access tick, parseSizeString, evictUntilFits with LRU policy; ttl-only skips eviction] `CacheManager` LRU eviction enforced #bug-fix #cache-manager
+- [x] [fixed: bm25/vector/zvec providers skip smallstore:meta:* and smallstore:index:* keys] Search providers no longer leak metadata/index keys #bug-fix #router-indexing
 - [ ] `MemoryAdapter._searchProvider` is baked-in — swapping via `Object.defineProperty` doesn't redirect auto-indexing #ergonomics #memory-adapter
 
 ## Dependency Notes

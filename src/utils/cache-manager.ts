@@ -23,7 +23,14 @@ export class CacheManager {
   private adapter: StorageAdapter;
   private config: Required<CachingConfig>;
   private stats: { hits: number; misses: number };
-  
+  // Eviction tracking: per-entry size + monotonic access tick. In-process only;
+  // if the backing adapter is shared across processes, each tracks its own view.
+  // Tick (not Date.now) so repeated ops inside the same ms still sort deterministically.
+  private entries: Map<string, { size: number; lastAccess: number }>;
+  private totalBytes: number;
+  private maxBytes: number;
+  private accessTick: number;
+
   constructor(adapter: StorageAdapter, config: CachingConfig = {}) {
     this.adapter = adapter;
     this.config = {
@@ -35,6 +42,10 @@ export class CacheManager {
       autoInvalidate: config.autoInvalidate ?? true,
     };
     this.stats = { hits: 0, misses: 0 };
+    this.entries = new Map();
+    this.totalBytes = 0;
+    this.maxBytes = parseSizeString(this.config.maxCacheSize);
+    this.accessTick = 0;
   }
   
   /**
@@ -73,6 +84,8 @@ export class CacheManager {
       
       // Valid cache hit
       this.stats.hits++;
+      const tracked = this.entries.get(cacheKey);
+      if (tracked) tracked.lastAccess = ++this.accessTick;
       return cached as CachedResult<T>;
       
     } catch (error) {
@@ -112,13 +125,49 @@ export class CacheManager {
     };
     
     try {
+      const entrySize = estimateSize(cached);
+
+      // Enforce max-size with configured eviction policy.
+      if (this.maxBytes > 0 && this.config.evictionPolicy !== 'ttl-only') {
+        const existing = this.entries.get(cacheKey);
+        const projected = this.totalBytes - (existing?.size ?? 0) + entrySize;
+        if (projected > this.maxBytes) {
+          await this.evictUntilFits(entrySize - (existing?.size ?? 0), cacheKey);
+        }
+      }
+
       // Store with TTL (adapter will handle expiration if supported)
       const ttlSeconds = Math.ceil(cacheTTL / 1000);
       await this.adapter.set(cacheKey, cached, ttlSeconds);
-      
+
+      // Update tracking after successful write.
+      const existing = this.entries.get(cacheKey);
+      if (existing) this.totalBytes -= existing.size;
+      this.entries.set(cacheKey, { size: entrySize, lastAccess: ++this.accessTick });
+      this.totalBytes += entrySize;
     } catch (error) {
       console.error('[CacheManager] Error setting cache:', error);
       // Don't throw - caching is best-effort
+    }
+  }
+
+  /**
+   * Evict entries until `bytesNeeded` bytes of headroom exist (under maxBytes).
+   * Policy is LRU by default; 'lfu' falls back to LRU here (hit counts not tracked per-entry).
+   */
+  private async evictUntilFits(bytesNeeded: number, skipKey?: string): Promise<void> {
+    if (bytesNeeded <= 0) return;
+    const candidates = [...this.entries.entries()]
+      .filter(([k]) => k !== skipKey)
+      .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
+
+    let freed = 0;
+    for (const [key, meta] of candidates) {
+      if (this.totalBytes + bytesNeeded - freed <= this.maxBytes) break;
+      try { await this.adapter.delete(key); } catch { /* best-effort */ }
+      this.entries.delete(key);
+      this.totalBytes -= meta.size;
+      freed += meta.size;
     }
   }
   
@@ -130,9 +179,14 @@ export class CacheManager {
    */
   async clearQuery(collectionPath: string, options: QueryOptions): Promise<void> {
     const cacheKey = generateQueryCacheKey(collectionPath, options);
-    
+
     try {
       await this.adapter.delete(cacheKey);
+      const tracked = this.entries.get(cacheKey);
+      if (tracked) {
+        this.totalBytes -= tracked.size;
+        this.entries.delete(cacheKey);
+      }
     } catch (error) {
       console.error('[CacheManager] Error clearing query cache:', error);
     }
@@ -146,16 +200,25 @@ export class CacheManager {
    */
   async clearCollection(collectionPath: string): Promise<number> {
     const prefix = generateCollectionCachePrefix(collectionPath);
-    
+
     try {
       // Get all cache keys for this collection
       const keys = await this.adapter.keys(prefix);
-      
+
       // Delete all in parallel
       await Promise.all(keys.map(key => this.adapter.delete(key)));
-      
+
+      // Drop tracking for these keys
+      for (const key of keys) {
+        const tracked = this.entries.get(key);
+        if (tracked) {
+          this.totalBytes -= tracked.size;
+          this.entries.delete(key);
+        }
+      }
+
       return keys.length;
-      
+
     } catch (error) {
       console.error('[CacheManager] Error clearing collection cache:', error);
       return 0;
@@ -171,15 +234,17 @@ export class CacheManager {
     try {
       // Get all cache keys
       const keys = await this.adapter.keys('_cache/');
-      
+
       // Delete all in parallel
       await Promise.all(keys.map(key => this.adapter.delete(key)));
-      
-      // Reset stats
+
+      // Reset stats + tracking
       this.stats = { hits: 0, misses: 0 };
-      
+      this.entries.clear();
+      this.totalBytes = 0;
+
       return keys.length;
-      
+
     } catch (error) {
       console.error('[CacheManager] Error clearing all caches:', error);
       return 0;
@@ -267,6 +332,26 @@ export class CacheManager {
   getConfig(): Required<CachingConfig> {
     return { ...this.config };
   }
+}
+
+/**
+ * Parse a size string ('100MB', '1.5GB', '500KB', '1024', '1B') to bytes.
+ * Returns 0 for falsy / unparseable inputs (which disables size-based eviction).
+ */
+function parseSizeString(input: string | number | undefined): number {
+  if (!input) return 0;
+  if (typeof input === 'number') return input > 0 ? input : 0;
+  const m = input.trim().match(/^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB)?$/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  const unit = (m[2] || 'B').toUpperCase();
+  const mult: Record<string, number> = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4 };
+  return Math.floor(n * (mult[unit] ?? 1));
+}
+
+/** Estimate in-memory cost of a cache entry via JSON size. */
+function estimateSize(value: unknown): number {
+  try { return JSON.stringify(value)?.length ?? 0; } catch { return 0; }
 }
 
 /**

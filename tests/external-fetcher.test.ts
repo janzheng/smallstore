@@ -498,23 +498,15 @@ Deno.test({
   },
 });
 
-// BUG: fetchExternal has explicit `if (response.status === 304) throw CACHE_VALID`
-// logic (lines 94-96), but it is unreachable. `retryFetch` treats !response.ok
-// (which includes 304) as a failure and throws HttpError("HTTP 304: Not Modified")
-// *before* fetchExternal can inspect the status. Conditional-request semantics
-// are effectively broken — a 304 response bubbles up as a generic fetch error.
-//
-// This failing test documents the gap. Expected behavior: throw CACHE_VALID
-// so callers can serve the previously-cached payload. Actual behavior: throws
-// HttpError with status 304.
+// 304 Not Modified is now treated as a valid conditional-request response,
+// letting fetchExternal's CACHE_VALID branch run.
 Deno.test({
-  name: 'fetchExternal - 304 Not Modified throws CACHE_VALID [KNOWN BUG]',
+  name: 'fetchExternal - 304 Not Modified throws CACHE_VALID',
   ...opts,
-  ignore: true, // Unignore once retry-fetch/fetchExternal treat 304 as cache-valid, not failure
   fn: async () => {
     const s = await startServer(() => new Response(null, { status: 304 }));
     try {
-      const err = await assertRejects(
+      await assertRejects(
         () =>
           fetchExternal({
             url: s.url,
@@ -522,33 +514,8 @@ Deno.test({
             etag: '"v1"',
           }),
         Error,
+        'CACHE_VALID',
       );
-      assertEquals((err as Error).message, 'CACHE_VALID');
-    } finally {
-      await s.stop();
-    }
-  },
-});
-
-// Regression guard for the current (buggy) behavior — pin it so future fixes
-// have to update this test too.
-Deno.test({
-  name: 'fetchExternal - 304 currently surfaces as HttpError (documents current bug)',
-  ...opts,
-  fn: async () => {
-    const s = await startServer(() => new Response(null, { status: 304 }));
-    try {
-      const err = await assertRejects(
-        () =>
-          fetchExternal({
-            url: s.url,
-            type: 'json',
-            etag: '"v1"',
-          }),
-        Error,
-      );
-      // Today: 'HTTP 304: Not Modified' (the CACHE_VALID branch in fetchExternal is dead code)
-      assert((err as Error).message.includes('304'));
     } finally {
       await s.stop();
     }

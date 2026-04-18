@@ -88,7 +88,9 @@ export async function retryFetch(
   return retry(
     async () => {
       const response = await fetch(url, init);
-      if (!response.ok) {
+      // 304 Not Modified is a valid conditional-request response, not an error.
+      // Let callers using If-None-Match / If-Modified-Since handle it.
+      if (!response.ok && response.status !== 304) {
         // Extract Retry-After header before consuming body
         const retryAfterHeader = response.headers.get('retry-after');
         const retryAfterMs = retryAfterHeader ? parseRetryAfter(retryAfterHeader) : undefined;
