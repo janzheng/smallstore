@@ -21,7 +21,7 @@
  */
 
 import type { StorageAdapter } from './adapter.ts';
-import type { AdapterCapabilities } from '../types.ts';
+import type { AdapterCapabilities, KeysPageOptions, KeysPage } from '../types.ts';
 import type { RetryOptions } from '../utils/retry.ts';
 import { retryFetch, type RetryFetchOptions } from '../utils/retry-fetch.ts';
 import { debug } from '../utils/debug.ts';
@@ -346,10 +346,92 @@ export class CloudflareKVAdapter implements StorageAdapter {
       return [];
     }
   }
-  
+
+  /**
+   * Paged keys — uses CF KV's native `list({ limit, cursor, prefix })`.
+   * `cursor` round-trips CF's token; `offset` (numeric) is honored
+   * best-effort by walking forward (O(offset) calls) — prefer cursor.
+   */
+  async listKeys(options: KeysPageOptions = {}): Promise<KeysPage> {
+    const { prefix } = options;
+    let listPrefix = '';
+    if (this.namespace && prefix) listPrefix = `${this.namespace}:${prefix}`;
+    else if (this.namespace) listPrefix = `${this.namespace}:`;
+    else if (prefix) listPrefix = prefix;
+
+    const nsPrefix = this.namespace ? `${this.namespace}:` : '';
+    const stripNs = (name: string) =>
+      nsPrefix && name.startsWith(nsPrefix) ? name.slice(nsPrefix.length) : name;
+
+    const out: string[] = [];
+    let cursor = options.cursor;
+    const targetOffset = options.offset ?? 0;
+    let skipped = 0;
+
+    try {
+      while (options.limit === undefined || out.length < options.limit) {
+        let names: string[] = [];
+        let nextCursor: string | undefined;
+        let listComplete = false;
+
+        if (this.mode === 'native' && this.binding) {
+          const listOpts: any = {};
+          if (listPrefix) listOpts.prefix = listPrefix;
+          if (options.limit !== undefined) listOpts.limit = Math.min(1000, options.limit);
+          if (cursor) listOpts.cursor = cursor;
+          // CF's native binding returns { keys, list_complete, cursor } but
+          // the .d.ts shim is minimal — cast to access the full shape.
+          const result = await this.binding.list(listOpts) as {
+            keys: Array<{ name: string }>;
+            list_complete?: boolean;
+            cursor?: string;
+          };
+          names = result.keys.map((k) => k.name);
+          nextCursor = result.list_complete ? undefined : result.cursor;
+          listComplete = result.list_complete === true;
+        } else {
+          const params = new URLSearchParams();
+          if (this.namespace) params.set('scope', this.namespace);
+          if (prefix) params.set('prefix', prefix);
+          if (options.limit !== undefined) params.set('limit', String(Math.min(1000, options.limit)));
+          if (cursor) params.set('cursor', cursor);
+          const response = await this.httpRequest<{ keys: Array<{ name: string }>; cursor?: string; list_complete?: boolean }>(
+            `/kv/list?${params.toString()}`,
+          );
+          if (!response.success || !response.data?.keys) break;
+          names = response.data.keys.map(k => k.name);
+          nextCursor = response.data.cursor;
+          listComplete = response.data.list_complete === true || !nextCursor;
+        }
+
+        for (const raw of names) {
+          const key = stripNs(raw);
+          if (skipped < targetOffset && !options.cursor) {
+            skipped++;
+            continue;
+          }
+          out.push(key);
+          if (options.limit !== undefined && out.length >= options.limit) break;
+        }
+
+        cursor = nextCursor;
+        if (listComplete || !cursor) break;
+      }
+
+      return {
+        keys: out,
+        hasMore: !!cursor,
+        ...(cursor ? { cursor } : {}),
+      };
+    } catch (error) {
+      console.error('[CloudflareKVAdapter] Error in listKeys:', error);
+      return { keys: [], hasMore: false };
+    }
+  }
+
   /**
    * Clear all data (for testing)
-   * 
+   *
    * @param prefix - Optional prefix to clear only specific namespace
    */
   async clear(prefix?: string): Promise<void> {

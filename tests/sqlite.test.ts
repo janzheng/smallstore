@@ -240,3 +240,52 @@ Deno.test('SQLiteAdapter - works with createSmallstore', async () => {
   const result = await store.get('test-collection');
   assertNotEquals(result, null);
 });
+
+// ============================================================================
+// listKeys (native LIMIT/OFFSET + COUNT)
+// ============================================================================
+
+Deno.test('SQLiteAdapter - listKeys returns paged keys with hasMore + total', async () => {
+  const adapter = createSQLiteAdapter({ url: ':memory:' });
+  for (let i = 0; i < 25; i++) {
+    await adapter.set(`item-${String(i).padStart(2, '0')}`, { i });
+  }
+
+  const page1 = await adapter.listKeys({ limit: 10, offset: 0 });
+  assertEquals(page1.keys.length, 10);
+  assertEquals(page1.hasMore, true);
+  assertEquals(page1.total, 25);
+
+  const page3 = await adapter.listKeys({ limit: 10, offset: 20 });
+  assertEquals(page3.keys.length, 5);
+  assertEquals(page3.hasMore, false);
+  assertEquals(page3.total, 25);
+
+  adapter.close();
+});
+
+Deno.test('SQLiteAdapter - listKeys with prefix filters before paging', async () => {
+  const adapter = createSQLiteAdapter({ url: ':memory:' });
+  await adapter.set('alpha:1', {});
+  await adapter.set('alpha:2', {});
+  await adapter.set('beta:1', {});
+
+  const page = await adapter.listKeys({ prefix: 'alpha:', limit: 10 });
+  assertEquals(page.keys.length, 2);
+  assertEquals(page.hasMore, false);
+  assertEquals(page.total, 2);
+
+  adapter.close();
+});
+
+Deno.test('SQLiteAdapter - listKeys with no limit returns all matching keys', async () => {
+  const adapter = createSQLiteAdapter({ url: ':memory:' });
+  for (let i = 0; i < 5; i++) await adapter.set(`k-${i}`, { i });
+
+  const page = await adapter.listKeys({});
+  assertEquals(page.keys.length, 5);
+  assertEquals(page.hasMore, false);
+  assertEquals(page.total, 5);
+
+  adapter.close();
+});

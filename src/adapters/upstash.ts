@@ -16,7 +16,7 @@
  */
 
 import type { StorageAdapter } from './adapter.ts';
-import type { AdapterCapabilities } from '../types.ts';
+import type { AdapterCapabilities, KeysPageOptions, KeysPage } from '../types.ts';
 import type { RetryOptions } from '../utils/retry.ts';
 import { type RetryFetchOptions, retryFetch } from '../utils/retry-fetch.ts';
 import { resolveUpstashEnv } from '../../config.ts';
@@ -323,10 +323,74 @@ export class UpstashAdapter implements StorageAdapter {
       throw error;
     }
   }
-  
+
+  /**
+   * Paged keys — uses Upstash's native SCAN cursor (non-blocking, safe on
+   * large DBs). `cursor` round-trips Redis's cursor token. `offset` is
+   * honored best-effort by skipping; prefer cursor when possible.
+   * SCAN's `count` is a hint, not a hard limit — Redis may return fewer or
+   * slightly more; we keep iterating until `limit` is reached or cursor is 0.
+   */
+  async listKeys(options: KeysPageOptions = {}): Promise<KeysPage> {
+    const prefix = options.prefix;
+    // Build MATCH pattern the same way keys() does, but stripped in output.
+    let pattern: string;
+    if (this.namespace && prefix) {
+      pattern = `${this.namespace}:${prefix}*`;
+    } else if (this.namespace) {
+      pattern = `${this.namespace}:*`;
+    } else if (prefix) {
+      pattern = `${prefix}*`;
+    } else {
+      pattern = '*';
+    }
+
+    const out: string[] = [];
+    let cursor = options.cursor ?? '0';
+    const targetOffset = options.offset ?? 0;
+    let skipped = 0;
+    const nsPrefix = this.namespace ? `${this.namespace}:` : '';
+    // Ask Redis for ~limit per round-trip, clamped to a sensible window.
+    const count = Math.min(1000, Math.max(10, options.limit ?? 100));
+
+    do {
+      const url = new URL(`${this.baseUrl}/scan/${encodeURIComponent(cursor)}`);
+      url.searchParams.set('match', pattern);
+      url.searchParams.set('count', String(count));
+      const response = await retryFetch(
+        url.toString(),
+        { headers: { Authorization: `Bearer ${this.token}` } },
+        this.retryOpts,
+      );
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => '');
+        throw new Error(`Upstash SCAN failed: ${response.status}: ${response.statusText} - ${errorBody}`);
+      }
+      const data = await response.json() as { result: [string, string[]] };
+      const [nextCursor, batch] = data.result;
+      cursor = nextCursor;
+
+      for (const raw of batch) {
+        const key = nsPrefix && raw.startsWith(nsPrefix) ? raw.slice(nsPrefix.length) : raw;
+        if (skipped < targetOffset && !options.cursor) {
+          skipped++;
+          continue;
+        }
+        out.push(key);
+        if (options.limit !== undefined && out.length >= options.limit) break;
+      }
+    } while (cursor !== '0' && (options.limit === undefined || out.length < options.limit));
+
+    return {
+      keys: out,
+      hasMore: cursor !== '0',
+      ...(cursor !== '0' ? { cursor } : {}),
+    };
+  }
+
   /**
    * Clear all data (for testing)
-   * 
+   *
    * @param prefix - Optional prefix to clear only specific namespace
    */
   async clear(prefix?: string): Promise<void> {
