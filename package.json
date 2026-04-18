@@ -85,7 +85,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
     "@aws-sdk/s3-request-presigner": "^3.0.0",
-    "@notionhq/client": "^2.3.0",
+    "@notionhq/client": "^5.16.0",
     "unstorage": "^1.17.0"
   },
   "peerDependencies": {
