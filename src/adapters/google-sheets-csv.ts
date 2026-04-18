@@ -52,6 +52,7 @@ export interface GoogleSheetsCsvConfig {
    * Optional custom fetch implementation — used by tests to stub the network.
    * Intended for testing only; leaving this set in production swaps the real
    * network for the stub.
+   * @internal
    */
   fetchImpl?: typeof fetch;
 }

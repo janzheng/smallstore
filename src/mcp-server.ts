@@ -180,12 +180,12 @@ function encodeCollectionKey(collection: string, key?: string): string {
 const TOOLS = [
   {
     name: 'sm_read',
-    description: 'Read a single record from a Smallstore collection (or a nested path). Returns the stored value along with collection/adapter metadata.',
+    description: 'Read a single record from a Smallstore collection (or a nested path). Returns the stored value along with collection/adapter metadata. Omitting `key` reads the whole collection, which can be expensive on Notion/Airtable/Sheets — prefer passing a specific key or using sm_list/sm_query when possible.',
     inputSchema: {
       type: 'object',
       properties: {
         collection: { type: 'string', description: 'Collection name (e.g. "users", "notes").' },
-        key: { type: 'string', description: 'Record key / sub-path within the collection (e.g. "alice"). Omit to read the whole collection.' },
+        key: { type: 'string', description: 'Record key / sub-path within the collection (e.g. "alice"). Omit to read the whole collection — expensive on remote adapters.' },
       },
       required: ['collection'],
     },

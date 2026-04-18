@@ -171,6 +171,13 @@ export class CacheManager {
         if (projected > this.maxBytes) {
           await this.evictUntilFits(entrySize - (existing?.size ?? 0), cacheKey);
         }
+        // A single entry larger than the entire cap lands anyway (evicting
+        // everything else). Warn so operators can raise maxCacheSize or shard.
+        if (entrySize > this.maxBytes) {
+          console.warn(
+            `[CacheManager] Entry ${entrySize}B exceeds maxCacheSize ${this.maxBytes}B — caching anyway, but maxCacheSize enforcement is effectively bypassed for this key.`,
+          );
+        }
       }
 
       // Store with TTL (adapter will handle expiration if supported)

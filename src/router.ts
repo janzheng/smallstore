@@ -1158,6 +1158,10 @@ export class SmartRouter implements Smallstore {
       );
     }
 
+    // Note: `metric` is intentionally not forwarded — MemoryVectorSearchProvider
+    // and ZvecSearchProvider both bake the metric in at construction (schema-level
+    // for zvec) and ignore a per-call value. To change metric, construct a new
+    // provider instance.
     const rawResults = await provider.search(options.query || '', {
       limit: options.limit || options.topK || 20,
       collection: parsed.collection,
@@ -1167,7 +1171,6 @@ export class SmartRouter implements Smallstore {
       topK: options.topK,
       query: options.query,
       hybridAlpha: options.hybridAlpha,
-      metric: options.metric,
     });
 
     // Map to SearchResult format
@@ -3008,6 +3011,11 @@ export class SmartRouter implements Smallstore {
         if (source.cacheKey) {
           return await this.get(source.cacheKey);
         }
+        // No cacheKey — caller can't fall back. Translate to a clearer error
+        // instead of surfacing the internal sentinel.
+        throw new Error(
+          `External source for "${collectionPath}" is still valid (304/fresh) but has no cacheKey to serve from. Set cacheTTL > 0 and do an initial fetch to populate the cache.`,
+        );
       }
       throw err;
     }
