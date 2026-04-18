@@ -1,0 +1,18 @@
+{
+  "port": 9998,
+  "dataDir": "./data",
+  "adapters": {
+    "memory": { "type": "memory" },
+    "local": { "type": "local", "baseDir": "./data" },
+    "sheets": {
+      "type": "sheetlog",
+      "sheetUrl": "$SM_SHEET_URL",
+      "sheet": "Sheet1"
+    }
+  },
+  "defaultAdapter": "memory",
+  "mounts": {
+    "cache/*": "memory",
+    "sheets/*": "sheets"
+  }
+}
