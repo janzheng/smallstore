@@ -78,8 +78,13 @@ export class SqliteFtsSearchProvider implements SearchProvider {
       const params: any[] = [query];
 
       if (options?.collection) {
-        sql += ` AND key LIKE ?`;
-        params.push(`%${options.collection}%`);
+        // Strict prefix match — accepts `coll/...`, `coll:...`, or
+        // `smallstore:coll:...`. Must NOT match `old-coll` substring.
+        sql += ` AND (
+          key LIKE ? OR key LIKE ? OR key LIKE ? OR key LIKE ? OR key = ?
+        )`;
+        const c = options.collection;
+        params.push(`${c}/%`, `${c}:%`, `smallstore:${c}:%`, `smallstore:${c}/%`, c);
       }
 
       sql += ` ORDER BY rank LIMIT ?`;

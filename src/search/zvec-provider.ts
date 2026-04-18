@@ -16,7 +16,7 @@
 
 import type { SearchProvider, SearchProviderOptions, SearchProviderResult } from '../types.ts';
 import { extractSearchableText } from './text-extractor.ts';
-import { isInternalKey } from '../utils/path.ts';
+import { isInternalKey, keyMatchesCollection } from '../utils/path.ts';
 
 /** Configuration for ZvecSearchProvider */
 export interface ZvecConfig {
@@ -190,8 +190,9 @@ export class ZvecSearchProvider implements SearchProvider {
 
     // Defense in depth: index() already filters internal keys.
     const nonInternal = mapped.filter(r => !isInternalKey(r.key));
+    // Strict prefix match so "docs" doesn't leak into "old-docs".
     const filtered = options?.collection
-      ? nonInternal.filter(r => r.key.includes(options.collection!))
+      ? nonInternal.filter(r => keyMatchesCollection(r.key, options.collection!))
       : nonInternal;
 
     if (options?.threshold !== undefined) {

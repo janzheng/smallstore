@@ -12,7 +12,7 @@
 
 import type { SearchProvider, SearchProviderOptions, SearchProviderResult } from '../types.ts';
 import { extractSearchableText } from './text-extractor.ts';
-import { isInternalKey } from '../utils/path.ts';
+import { isInternalKey, keyMatchesCollection } from '../utils/path.ts';
 
 /** Configuration for MemoryVectorSearchProvider */
 export interface MemoryVectorConfig {
@@ -88,8 +88,8 @@ export class MemoryVectorSearchProvider implements SearchProvider {
     for (const [key, entry] of this.entries) {
       // Defense in depth: index() already filters internal keys.
       if (isInternalKey(key)) continue;
-      // Collection scoping
-      if (options?.collection && !key.includes(options.collection)) continue;
+      // Collection scoping — strict prefix match so "docs" doesn't leak into "old-docs".
+      if (options?.collection && !keyMatchesCollection(key, options.collection)) continue;
 
       const distance = this.computeDistance(queryVector, entry.vector);
       // Convert distance to similarity score (0-1, higher = more similar)

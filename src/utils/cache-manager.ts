@@ -30,6 +30,10 @@ export class CacheManager {
   private totalBytes: number;
   private maxBytes: number;
   private accessTick: number;
+  // Serializes concurrent set() calls so two disjoint-key writes can't both
+  // read pre-state totalBytes and land together without eviction (overshooting
+  // maxBytes), and so evictUntilFits() can't double-evict the same victim.
+  private setLock: Promise<void> = Promise.resolve();
 
   constructor(adapter: StorageAdapter, config: CachingConfig = {}) {
     this.adapter = adapter;
@@ -118,10 +122,33 @@ export class CacheManager {
     if (!this.config.enableQueryCache) {
       return;
     }
-    
+
+    // Serialize set() — the eviction check + adapter write + tracking update
+    // must be atomic. Without this, two concurrent set()s can both read
+    // pre-state totalBytes, both decide no eviction is needed, and land
+    // together past maxBytes; or evictUntilFits can double-evict the same LRU
+    // victim and drop totalBytes into negatives.
+    const prev = this.setLock;
+    let release!: () => void;
+    this.setLock = new Promise<void>(r => { release = () => r(); });
+    await prev;
+
+    try {
+      return await this._setUnlocked(collectionPath, options, data, ttl);
+    } finally {
+      release();
+    }
+  }
+
+  private async _setUnlocked<T = any>(
+    collectionPath: string,
+    options: QueryOptions,
+    data: T,
+    ttl?: number,
+  ): Promise<void> {
     const cacheKey = generateQueryCacheKey(collectionPath, options);
     const cacheTTL = ttl ?? this.config.defaultTTL;
-    
+
     const cached: CachedResult<T> = {
       data,
       cachedAt: Date.now(),
@@ -129,7 +156,7 @@ export class CacheManager {
       key: cacheKey,
       query: options,
     };
-    
+
     const entrySize = estimateSize(cached);
 
     // Snapshot tracking state so we can roll back evictions if adapter.set throws.

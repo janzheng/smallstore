@@ -10,7 +10,7 @@
 
 import type { SearchProvider, SearchProviderOptions, SearchProviderResult } from '../types.ts';
 import { extractSearchableText } from './text-extractor.ts';
-import { isInternalKey } from '../utils/path.ts';
+import { isInternalKey, keyMatchesCollection } from '../utils/path.ts';
 
 /** Tokenize text: lowercase, split on non-alphanumeric, filter short tokens */
 function tokenize(text: string): string[] {
@@ -115,8 +115,8 @@ export class MemoryBm25SearchProvider implements SearchProvider {
       // Defense in depth: index() already filters, but keep a read-side guard
       // in case a legacy index has internal keys in it.
       if (isInternalKey(key)) continue;
-      // Collection scoping
-      if (options?.collection && !key.includes(options.collection)) continue;
+      // Collection scoping — strict prefix match so "docs" doesn't leak into "old-docs".
+      if (options?.collection && !keyMatchesCollection(key, options.collection)) continue;
 
       let score = 0;
       const docLen = doc.tokens.length;

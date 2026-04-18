@@ -1501,10 +1501,13 @@ export class SmartRouter implements Smallstore {
    * @param options - Merge options
    */
   async merge(sources: string[], dest: string, options?: MergeOptions): Promise<void> {
+    // Default to overwrite: re-running `merge(sources, dest)` should produce
+    // the same result, not double the data. Callers that specifically want
+    // to append to an existing dest must pass `overwrite: false` explicitly.
     const opts = {
       deduplicate: false,
       onConflict: 'replace',
-      overwrite: false,
+      overwrite: true,
       ...options
     };
     

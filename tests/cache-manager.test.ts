@@ -370,6 +370,35 @@ Deno.test({
 });
 
 Deno.test({
+  name: 'CacheManager - concurrent set() on disjoint keys respects maxBytes',
+  ...opts,
+  fn: async () => {
+    // With a small cap + many concurrent sets, without the internal lock
+    // this would overshoot maxBytes (each set reads pre-state, decides no
+    // eviction, lands). With the lock, one at a time → stays within the cap.
+    const { manager } = makeManager({
+      maxCacheSize: '500B',
+      evictionPolicy: 'lru',
+    });
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        manager.set(`col/${i}`, { filter: { n: i } }, { id: i, data: 'x'.repeat(40) }),
+      ),
+    );
+
+    assert(
+      (manager as any).totalBytes <= (manager as any).maxBytes,
+      `totalBytes (${(manager as any).totalBytes}) must not exceed maxBytes (${(manager as any).maxBytes})`,
+    );
+    assert(
+      (manager as any).totalBytes >= 0,
+      `totalBytes must never go negative (double-evict), got ${(manager as any).totalBytes}`,
+    );
+  },
+});
+
+Deno.test({
   name: 'CacheManager - maxCacheSize:0 disables size eviction',
   ...opts,
   fn: async () => {

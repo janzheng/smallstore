@@ -190,6 +190,27 @@ export function isInternalKey(key: string): boolean {
 }
 
 /**
+ * Test whether a stored key belongs to the named collection. Matches the
+ * shape `collection/key`, `collection:key`, or `smallstore:collection:key`,
+ * but NOT `other-collection` that happens to contain the substring. Replaces
+ * the overly-permissive `key.includes(collection)` check that search
+ * providers used to use — that leaked `"docs"` search results into
+ * `"old-docs"` (and vice versa).
+ */
+export function keyMatchesCollection(key: string, collection: string): boolean {
+  if (!collection) return true;
+  // Strip internal prefix so we can compare the user-visible collection segment.
+  const stripped = key.startsWith('smallstore:')
+    ? key.slice('smallstore:'.length)
+    : key;
+  return (
+    stripped === collection ||
+    stripped.startsWith(collection + '/') ||
+    stripped.startsWith(collection + ':')
+  );
+}
+
+/**
  * Extract collection name from metadata key
  * 
  * @param metadataKey - Metadata key

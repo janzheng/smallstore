@@ -350,6 +350,24 @@ function createMemoryAdapterWithProvider(provider: any) {
 }
 
 Deno.test({
+  name: 'integration/search-providers — collection scoping rejects substring matches',
+  ...opts,
+  fn: async () => {
+    // "docs" must not leak results from "old-docs" or "docs-archive".
+    const bm25 = new MemoryBm25SearchProvider();
+    bm25.index('docs/real', { body: 'the quick brown fox jumps' });
+    bm25.index('old-docs/leak', { body: 'the quick brown fox jumps' });
+    bm25.index('docs-archive/also-leak', { body: 'the quick brown fox jumps' });
+
+    const r = await bm25.search('quick brown fox', { collection: 'docs' });
+    const keys = r.map(x => x.key);
+    assert(keys.includes('docs/real'), `real collection match expected; got: ${keys.join(',')}`);
+    assert(!keys.includes('old-docs/leak'), `old-docs should not leak into docs scope; got: ${keys.join(',')}`);
+    assert(!keys.includes('docs-archive/also-leak'), `docs-archive should not leak into docs scope; got: ${keys.join(',')}`);
+  },
+});
+
+Deno.test({
   name: 'integration/search-providers — index() rejects internal smallstore:* keys',
   ...opts,
   fn: async () => {
