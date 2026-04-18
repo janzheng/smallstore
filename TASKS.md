@@ -83,6 +83,75 @@
 - [x] [done: live:notion green after fix] Re-run Notion live adapter tests after JSR publish #validation
 - [x] [done: resolveDataSourceId() in notionModern.ts resolves database_id → data_source_id, cached per client] queryDatabase → queryDataSource migration for multi-source DBs #bug-fix
 
+## Done This Session (2026-04-17 → 2026-04-18)
+
+Published two JSR releases — **0.1.8** (paging + JSONL job logs + audit fixes) and **0.1.9** (audit closeout). Coverflow-v3 bumped 0.1.7 → 0.1.9 locally (commit `ccffe89a`, unpushed, tracked as a chore in coverflow TASKS.md).
+
+### Adapter paging via optional `listKeys()` #paging
+
+- [x] [done: commits 73868fc + 0e93b13] Standardize paging via opt-in `listKeys({prefix?, limit?, offset?, cursor?}) → {keys, hasMore, cursor?, total?}` #router
+  - [x] `KeysPageOptions` + `KeysPage` added to `src/types.ts`
+  - [x] Optional `listKeys?()` added to `StorageAdapter` interface
+  - [x] Router fallback to `keys()` + slice when adapter lacks native impl — zero regression for non-paged adapters
+  - [x] HTTP handler `handleListKeys` accepts `?limit=N&offset=N&cursor=X` with validation
+  - [x] MemoryAdapter — slice native impl
+  - [x] SQLiteAdapter — LIMIT/OFFSET + COUNT(*), returns cursor as stringified offset
+  - [x] NotionAdapter — start_cursor pagination
+  - [x] AirtableAdapter — opaque offset cursor
+  - [x] UpstashAdapter — SCAN cursor
+  - [x] CloudflareKVAdapter — list({limit, cursor}) with `list_complete` handling
+  - [*] Sheetlog intentionally skipped — log-style adapter with no stable keys
+- [x] [done: `tests/adapter-paging.test.ts` (mocked Upstash + CF KV), 3 new SQLite listKeys tests] Paging test coverage
+
+### JSONL job logs for long `/_sync` runs #sync #jobs
+
+User-requested alternative to an in-memory job registry. Deno server appends progress events line-by-line to `<dataDir>/jobs/<jobId>.jsonl` so clients can `tail -f` for live progress and `grep` for post-mortem. Crash-safe (no daemon state to reconcile), inspectable with standard tools, no long-polling HTTP.
+
+- [x] [done: commit 747518e] `src/utils/job-log.ts` — append-only JSONL logger with `createJobLog`, `tailJobLog`, `listJobs`, `summarizeJob`, `generateJobId` #job-log
+- [x] [done: serve.ts /_sync default-background (202 + jobId + logPath)] Redesigned `/_sync` endpoint with `?wait=true` for sync behavior #serve
+- [x] [done: GET /_sync/jobs (list recent) + GET /_sync/jobs/:id (tail events), path-traversal guard via `/^[A-Za-z0-9._-]+$/`] Job inspection endpoints
+- [x] [done: auth via optional SMALLSTORE_TOKEN bearer, per-pair lock in `syncLocks: Map`, option whitelist] Security + concurrency guards on /_sync
+- [x] [done: sm_sync gains `background?: boolean` flag, new `sm_sync_status` + `sm_sync_jobs` MCP tools] MCP tools for job lifecycle #mcp
+- [x] [done: `tests/job-log.test.ts` (8 unit tests) + `tests/sync-jobs-http.test.ts` (4 integration tests spawning real serve.ts)] JSONL + background-sync test coverage
+- [x] [done: skills/smallstore/SKILL.md updated with source_adapter/target_adapter rename + paging cursor docs + background sync pattern] Skill doc refresh
+
+### Pre-0.1.8 audit (Waves 1-2) #audit
+
+- [x] [done: TASKS-AUDIT.md, 47 findings + Wave 3 (11 more) = 58 total] Parallel-agent correctness sweep
+- [x] [done: commits dfc9751, f825014, 291617d, 1bd4464, 454cac0, 50040eb, 1f640d5, 5db0dab, 1573f36 — 8 batches] Audit fixes landed
+  - [x] P1 regressions: A001-A008 (LocalJson wrapper, SqliteFts metadata leak, MemoryAdapter clear race, deleteFromArray unwrap, deno-fs reopen, CSV BOM, CSV keyColumn, internal-key index guard)
+  - [x] MCP/HTTP security (A010-A013): optional SMALLSTORE_TOKEN bearer auth, SYNC_OPTION_WHITELIST, self-sync guard, concurrent sync lock
+  - [x] MCP input hardening (A070-A081): validateCollection (empty/..,sub-route collisions), JSON.stringify guard, token CRLF check, MAX_RESPONSE_BYTES cap (10MB default), SMALLSTORE_URL validation, SIGTERM/SIGINT, MethodNotFound RPC error, sm_list limit in URL, source_adapter rename, empty-filter rejection, sm_read cost warning
+  - [x] CSV adapter polish (A053-A059): duplicate header detection, duplicate key warning, clock-skew guard, URL validation, @internal marker, auth-stripping error messages, readOnly capability
+  - [x] CacheManager (A020-A024, A030): TTL-expired drop, torn-state rollback, oversized-entry warn, TextEncoder UTF-8 sizing, typed CacheValidError
+  - [x] LocalJson (A100-A102): hydrate-promise reset on failure, cached wrapper for identity, cloned value to provider.index()
+  - [x] Search providers (A040-A044): isInternalKey helper, zvec topk inflation fix, filter forwarded (matchesFilter post-search), keyMatchesCollection strict prefix match
+
+### Audit Wave 3 — paging + JSONL sweep #audit
+
+- [x] [done: 20 candidate findings → 11 verified after dropping false positives (Notion hasMore, CF KV list_complete, JSONL atomicity via PIPE_BUF misread, `.catch(()=>{})` is-the-handler, intentional append() swallowing)] Wave 3 audit
+- [x] [fixed: commit 95b5f73] **A200** /_sync lock TOCTOU race — moved createJobLog INSIDE the IIFE so no awaits between has() and set() #race-condition
+- [x] [fixed: commit 95b5f73 — cursor accepted as stringified offset, non-numeric rejected, emits `cursor: String(nextOffset)` when hasMore, 2 new tests] **A224** SQLite listKeys silently dropped cursor
+- [x] [fixed: commit 47f3f01] **A031** external-fetcher 304 path now throws typed CacheValidError (was bare `Error('CACHE_VALID')`)
+- [x] [fixed: commit 47f3f01] **A222** `handleListKeys` uses `Number() + Number.isInteger()` — rejects "999x" instead of silently parsing as 999
+- [x] [fixed: commit 47f3f01] **A228** `?limit=0` now rejected as BadRequest (was returning empty-keys + hasMore:true)
+- [x] [fixed: commit 47f3f01] **A244** Extracted `DEFAULT_TAIL_EVENTS` + `SUMMARY_SCAN_EVENTS` constants with JSDoc in job-log.ts
+
+### Pre-publish type fix
+
+- [x] [fixed: commit 9f70646] package.json `@notionhq/client` bumped `^2.3.0` → `^5.16.0` to match deno.json — prior mismatch had Deno materializing BOTH versions in node_modules and the subpath type import resolved to v2's incompatible types, surfacing as 7 TS errors on `deno publish` with full type checking
+
+### JSR publishes
+
+- [x] [done: commit 747518e + tag] `@yawnxyz/smallstore@0.1.8` — paging + JSONL jobs + audit batches 1-8
+- [x] [done: commit 47f3f01 + tag] `@yawnxyz/smallstore@0.1.9` — audit closeout (A031, A222, A228, A244) + A200 + A224
+
+### Session stats
+
+- **836 tests passing, 0 failed** (up from 819 at session start)
+- **58/58 + 11 Wave 3 findings** — 57 fixed, 1 won't-fix (A042-path is @deprecated), 9 deferrable (all #at-scale-only polish)
+- **2 JSR releases** (0.1.8, 0.1.9) + 1 coverflow bump (commit `ccffe89a`, unpushed)
+
 ## Discovered Bugs (2026-04-17)
 
 Surfaced by the Phase 7 testing sweep. Each has a test asserting current (broken) behavior — flip when fixed.
