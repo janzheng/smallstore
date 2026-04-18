@@ -1515,7 +1515,9 @@ export class SmartRouter implements Smallstore {
     
     for (const source of sources) {
       const data = await this.get(source, { raw: true });
-      if (data) {
+      // Null-check (not truthy-check) so scalar 0, '', or false — valid
+      // collection contents — aren't silently dropped.
+      if (data !== null && data !== undefined) {
         const items = Array.isArray(data) ? data : [data];
         allData.push(...items);
       }

@@ -69,9 +69,9 @@ Focused sweep of this session's changes (new features + 7 bug fixes). Findings o
 
 ### CSV adapter (more)
 
-- [ ] **A050** `clear()` nulls cache but doesn't abort in-flight fetch — a pending fetch repopulates cache after clear, silently undoing it. `src/adapters/google-sheets-csv.ts:188-191` #race-condition #local-real
-- [ ] **A051** No request timeout / AbortSignal. Hung fetch holds the in-flight promise forever; all coalesced callers stall. `src/adapters/google-sheets-csv.ts:221-224` #resource-leak #at-scale-only
-- [ ] **A052** `list()` (no prefix) returns the raw parsed array including rows that were dropped from `keys()` due to empty keyColumn — `list().length !== keys().length`. `src/adapters/google-sheets-csv.ts:131,148` #logic-bug #local-real
+- [x] **A050** [fixed: AbortController tied to each in-flight fetch; clear() aborts + resets] clear() aborts in-flight #bug-fix
+- [x] **A051** [fixed: configurable `timeoutMs` (default 30s) via AbortSignal.timeout, composed with the clear() abort signal] Request timeout #bug-fix
+- [x] **A052** [fixed: list() iterates the `keyed` Map instead of the raw rows — list/keys now in lockstep] list/keys consistency #bug-fix
 - [ ] **A053** Duplicate header columns collapse silently (`@std/csv` uses headers as object keys). Real Google Sheets allow dup column names. `src/adapters/google-sheets-csv.ts:246-249` #data-loss #local-real
 - [ ] **A054** Duplicate key values silently overwrite with no warning. `src/adapters/google-sheets-csv.ts:270` #data-loss #local-real
 - [ ] **A055** Clock skew: `Date.now() - fetchedAt` can go negative on wall-clock correction → cache never refreshes. Use `performance.now()` or guard `age < 0`. `src/adapters/google-sheets-csv.ts:200-201` #logic-bug #at-scale-only
@@ -104,9 +104,9 @@ Focused sweep of this session's changes (new features + 7 bug fixes). Findings o
 
 - [ ] **A100** LocalJson `_hydratePromise` never reset — first rejection poisons all future searches. `src/adapters/local-json.ts:83-92` #error-handling #local-real
 - [ ] **A101** LocalJson `searchProvider` getter builds a fresh wrapper EVERY call — identity pins / WeakMaps break. `src/adapters/local-json.ts:94-106` #wiring #at-scale-only
-- [ ] **A102** MemoryAdapter `set()` passes the original (un-cloned) value to `provider.index(key, value)` — async providers may see caller mutations. `src/adapters/memory.ts:123-132` #logic-bug #local-real
-- [ ] **A103** `merge` default mode is `append` — callers expecting "replace dest" get doubled data on re-runs. `src/router.ts:1503-1568` #logic-bug #local-real
-- [ ] **A104** `merge` at `router.ts:1518` uses `if (data)` — scalar `0`, empty string, `false` silently skipped. `src/router.ts:1517-1522` #logic-bug #local-real
+- [x] **A102** [fixed: index() receives the cloned storedValue, so async providers (vector/zvec) can't observe caller mutations] MemoryAdapter clone on index #bug-fix
+- [ ] **A103** `merge` default mode is `append` — callers expecting "replace dest" get doubled data on re-runs. `src/router.ts:1503-1568` #logic-bug #local-real #breaking-change
+- [x] **A104** [fixed: null/undefined check instead of truthy check] merge() preserves scalar 0 / '' / false #bug-fix
 
 ---
 

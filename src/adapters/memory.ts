@@ -129,7 +129,9 @@ export class MemoryAdapter implements StorageAdapter {
 
     // Auto-index for search (best-effort). Reads through the getter so runtime
     // overrides via Object.defineProperty(adapter, 'searchProvider', ...) work.
-    try { this.searchProvider.index(key, value); } catch { /* best-effort */ }
+    // Pass the cloned storedValue so async providers (vector, zvec) can't
+    // observe later mutations the caller makes to their original object.
+    try { this.searchProvider.index(key, storedValue); } catch { /* best-effort */ }
   }
   
   /**

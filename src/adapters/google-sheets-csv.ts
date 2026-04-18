@@ -43,7 +43,15 @@ export interface GoogleSheetsCsvConfig {
   refreshMs?: number;
 
   /**
+   * Request timeout in ms. A hung fetch would otherwise stall every coalesced
+   * caller indefinitely. Default: 30_000 (30s). Set to 0 to disable.
+   */
+  timeoutMs?: number;
+
+  /**
    * Optional custom fetch implementation — used by tests to stub the network.
+   * Intended for testing only; leaving this set in production swaps the real
+   * network for the stub.
    */
   fetchImpl?: typeof fetch;
 }
@@ -80,10 +88,12 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
   private url: string;
   private keyColumn: string | undefined;
   private refreshMs: number;
+  private timeoutMs: number;
   private fetchImpl: typeof fetch;
 
   private cache: CachedRows | null = null;
   private inFlight: Promise<CachedRows> | null = null;
+  private inFlightController: AbortController | null = null;
 
   constructor(config: GoogleSheetsCsvConfig) {
     if (!config || typeof config.url !== 'string' || config.url.length === 0) {
@@ -92,6 +102,7 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
     this.url = config.url;
     this.keyColumn = config.keyColumn;
     this.refreshMs = config.refreshMs ?? 60_000;
+    this.timeoutMs = config.timeoutMs ?? 30_000;
     this.fetchImpl = config.fetchImpl ?? ((...args) => fetch(...args));
   }
 
@@ -119,32 +130,27 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
 
   /**
    * List all rows (optionally with prefix/limit/offset).
-   * Returns plain row objects in source order.
+   * Returns plain row objects in source order. Only returns rows that
+   * `keys()` would also surface — i.e. rows with a valid key under the
+   * configured keyColumn. This keeps list() and keys() in agreement so
+   * callers can round-trip (list → get by key) without gaps.
    */
   async list(options?: {
     prefix?: string;
     limit?: number;
     offset?: number;
   }): Promise<Record<string, any>[]> {
-    const { rows, keyed } = await this.loadRows();
+    const { keyed } = await this.loadRows();
 
-    let items = rows.map((r) => ({ ...r }));
-
+    let entries = Array.from(keyed.entries());
     if (options?.prefix) {
       const prefix = options.prefix;
-      const keyByRef = new Map<Record<string, any>, string>();
-      for (const [k, row] of keyed.entries()) keyByRef.set(row, k);
-      items = rows
-        .filter((row) => {
-          const k = keyByRef.get(row);
-          return k !== undefined && k.startsWith(prefix);
-        })
-        .map((r) => ({ ...r }));
+      entries = entries.filter(([k]) => k.startsWith(prefix));
     }
 
     const start = options?.offset ?? 0;
-    const end = options?.limit !== undefined ? start + options.limit : items.length;
-    return items.slice(start, end);
+    const end = options?.limit !== undefined ? start + options.limit : entries.length;
+    return entries.slice(start, end).map(([, row]) => ({ ...row }));
   }
 
   // --------------------------------------------------------------------------
@@ -187,7 +193,12 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
    */
   async clear(_prefix?: string): Promise<void> {
     this.cache = null;
+    // Abort the in-flight fetch so it can't repopulate cache after clear().
+    if (this.inFlightController) {
+      try { this.inFlightController.abort(); } catch { /* ignore */ }
+    }
     this.inFlight = null;
+    this.inFlightController = null;
   }
 
   // --------------------------------------------------------------------------
@@ -204,11 +215,23 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
     // Coalesce concurrent fetches
     if (this.inFlight) return this.inFlight;
 
-    this.inFlight = this.fetchAndParse().finally(() => {
-      this.inFlight = null;
+    // Generation counter so clear() can invalidate a result that lands after
+    // the abort — the aborted fetch will reject, but we also guard here.
+    const controller = new AbortController();
+    this.inFlightController = controller;
+    const fetchPromise = this.fetchAndParse(controller.signal).finally(() => {
+      if (this.inFlightController === controller) {
+        this.inFlight = null;
+        this.inFlightController = null;
+      }
     });
+    this.inFlight = fetchPromise;
 
-    const result = await this.inFlight;
+    const result = await fetchPromise;
+    // If clear() swapped the controller while we were waiting, don't cache.
+    if (this.inFlightController === null && controller.signal.aborted) {
+      return result;
+    }
     if (this.refreshMs > 0) {
       this.cache = result;
     } else {
@@ -217,10 +240,13 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
     return result;
   }
 
-  private async fetchAndParse(): Promise<CachedRows> {
+  private async fetchAndParse(signal: AbortSignal): Promise<CachedRows> {
+    const timeoutSignal = this.timeoutMs > 0 ? AbortSignal.timeout(this.timeoutMs) : null;
+    const combinedSignal = timeoutSignal ? anySignal(signal, timeoutSignal) : signal;
     const res = await this.fetchImpl(this.url, {
       method: 'GET',
       redirect: 'follow',
+      signal: combinedSignal,
     });
     if (!res.ok) {
       throw new Error(
@@ -237,6 +263,18 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
 // ============================================================================
 // Parse helpers
 // ============================================================================
+
+/** Compose two AbortSignals — the returned signal aborts when either does. */
+function anySignal(a: AbortSignal, b: AbortSignal): AbortSignal {
+  if (a.aborted) return a;
+  if (b.aborted) return b;
+  const ctrl = new AbortController();
+  const onAbortA = () => ctrl.abort(a.reason);
+  const onAbortB = () => ctrl.abort(b.reason);
+  a.addEventListener('abort', onAbortA, { once: true });
+  b.addEventListener('abort', onAbortB, { once: true });
+  return ctrl.signal;
+}
 
 function parseRows(text: string): Record<string, any>[] {
   if (!text || text.trim().length === 0) return [];
