@@ -71,6 +71,8 @@ export interface AdapterCapabilities {
     query?: boolean;
     search?: boolean;
     vectorSearch?: boolean;
+    /** True if this adapter rejects all writes — routers should not select it for a set(). */
+    readOnly?: boolean;
   };
 }
 

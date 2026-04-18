@@ -37,6 +37,16 @@ import {
 // ============================================================================
 
 const RAW_URL = Deno.env.get('SMALLSTORE_URL') ?? 'http://localhost:9998';
+
+// Cap the response body buffered from the HTTP server. A huge sm_list or
+// sm_read on Notion/Airtable can otherwise OOM the MCP subprocess since the
+// body is buffered + re-stringified with 2-space indent. 10 MB default; set
+// SMALLSTORE_MAX_RESPONSE_BYTES to override.
+const MAX_RESPONSE_BYTES = (() => {
+  const raw = Deno.env.get('SMALLSTORE_MAX_RESPONSE_BYTES');
+  const n = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 10 * 1024 * 1024;
+})();
 try {
   const u = new URL(RAW_URL);
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
@@ -97,12 +107,42 @@ async function http(
     throw new Error(`Smallstore HTTP server unreachable at ${SMALLSTORE_URL} — ${msg}. Is 'deno task serve' running?`);
   }
 
-  const text = await res.text();
+  // Stream-read with a byte cap so we can't OOM the MCP subprocess on a
+  // huge Notion/Airtable payload. Bail out with a clear error rather than
+  // silently truncate — truncating JSON would produce parse errors
+  // downstream anyway.
+  const text = await readCapped(res, MAX_RESPONSE_BYTES);
   let parsed: unknown = text;
   if (text) {
     try { parsed = JSON.parse(text); } catch { /* leave as text */ }
   }
   return { ok: res.ok, status: res.status, body: parsed };
+}
+
+async function readCapped(res: Response, maxBytes: number): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        reader.cancel();
+        throw new Error(
+          `Smallstore response exceeded ${maxBytes} bytes. Use a prefix/limit to narrow the request, or raise SMALLSTORE_MAX_RESPONSE_BYTES.`,
+        );
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+  } finally {
+    try { reader.releaseLock(); } catch { /* already cancelled */ }
+  }
+  return chunks.join('');
 }
 
 /**
@@ -212,12 +252,12 @@ const TOOLS = [
   },
   {
     name: 'sm_sync',
-    description: 'Sync data between two configured adapters (push/pull/bidirectional). Wraps syncAdapters() via the server\'s /_sync endpoint. source/target must be adapter names (not collections).',
+    description: 'Sync data between two configured adapters (push/pull/bidirectional). Wraps syncAdapters() via the server\'s /_sync endpoint. source_adapter/target_adapter are ADAPTER names (e.g. "notion", "local"), not collection names.',
     inputSchema: {
       type: 'object',
       properties: {
-        source_collection: { type: 'string', description: 'Source adapter name (e.g. "notion", "local"). Must match an adapter configured on the server.' },
-        target_collection: { type: 'string', description: 'Target adapter name.' },
+        source_adapter: { type: 'string', description: 'Source adapter name (e.g. "notion", "local"). Must match an adapter configured on the server. Call sm_adapters to list available adapter names.' },
+        target_adapter: { type: 'string', description: 'Target adapter name. Must match an adapter configured on the server.' },
         options: {
           type: 'object',
           description: 'SyncAdapterOptions: { mode?: "push"|"pull"|"sync", prefix?, targetPrefix?, overwrite?, skipUnchanged?, dryRun?, batchDelay?, syncId?, conflictResolution?: "source-wins"|"target-wins"|"skip" }. Function-valued options (transform/onProgress) are not supported over HTTP.',
@@ -234,7 +274,7 @@ const TOOLS = [
           },
         },
       },
-      required: ['source_collection', 'target_collection'],
+      required: ['source_adapter', 'target_adapter'],
     },
   },
   {
@@ -331,8 +371,8 @@ async function callTool(name: string, args: Args): Promise<unknown> {
     }
 
     case 'sm_sync': {
-      const source = requireString(args, 'source_collection');
-      const target = requireString(args, 'target_collection');
+      const source = requireString(args, 'source_adapter');
+      const target = requireString(args, 'target_adapter');
       const options = (args.options as Record<string, unknown> | undefined) ?? {};
       const r = await http('POST', '/_sync', { source, target, options });
       if (!r.ok) throw new Error(formatHttpError('sm_sync failed', r));

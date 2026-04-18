@@ -75,13 +75,16 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
     cost: { tier: 'free' },
     performance: {
       readLatency: 'high',    // network fetch + parse
-      writeLatency: 'high',   // writes throw, but conceptually unavailable
+      // Writes throw immediately — 'high' here was misleading; the adapter
+      // advertises readOnly so routers should never route a write here at all.
+      writeLatency: 'high',
       throughput: 'low',
     },
     features: {
       ttl: false,
       query: false,
       search: false,
+      readOnly: true,
     },
   };
 

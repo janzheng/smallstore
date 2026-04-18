@@ -104,14 +104,14 @@ Call mcp__smallstore__sm_query with collection: "events", filter: { "ts": { "$gt
 
 ### `sm_sync`
 
-Copy/migrate between two mounted adapters. Wraps `syncAdapters()`. Always preview with `dryRun: true` first.
+Copy/migrate between two adapters. Wraps `syncAdapters()`. **`source_adapter` and `target_adapter` are ADAPTER names** (e.g. `"notion"`, `"airtable"`, `"local"`), not collection names — call `sm_adapters` first to see what's configured. Always preview with `dryRun: true` first.
 
 ```
 # Preview the migration first
-Call mcp__smallstore__sm_sync with source_collection: "airtable/contacts", target_collection: "notion/contacts", options: { "dryRun": true }
+Call mcp__smallstore__sm_sync with source_adapter: "airtable", target_adapter: "notion", options: { "dryRun": true, "prefix": "contacts/" }
 
 # Then run it for real
-Call mcp__smallstore__sm_sync with source_collection: "airtable/contacts", target_collection: "notion/contacts"
+Call mcp__smallstore__sm_sync with source_adapter: "airtable", target_adapter: "notion", options: { "prefix": "contacts/" }
 ```
 
 One-liner migration pattern: mount both adapters in `.smallstore.json`, call `sm_sync` with `dryRun: true`, review the diff, then re-run without `dryRun`.

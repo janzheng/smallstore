@@ -387,8 +387,8 @@ Deno.test('MCP: sm_sync POSTs {source,target,options} to /_sync', async () => {
   const mcp = startMcp({ SMALLSTORE_URL: mock.url });
   try {
     const resp = await callTool(mcp, 'sm_sync', {
-      source_collection: 'memory',
-      target_collection: 'local',
+      source_adapter: 'memory',
+      target_adapter: 'local',
       options: { mode: 'push', dryRun: true },
     });
     const { isError } = extractText(resp);

@@ -366,9 +366,13 @@ function parseSizeString(input: string | number | undefined): number {
   return Math.floor(n * (mult[unit] ?? 1));
 }
 
-/** Estimate in-memory cost of a cache entry via JSON size. */
+/** Estimate in-memory cost of a cache entry as UTF-8 byte length. */
+const SIZE_ENCODER = new TextEncoder();
 function estimateSize(value: unknown): number {
-  try { return JSON.stringify(value)?.length ?? 0; } catch { return 0; }
+  try {
+    const json = JSON.stringify(value);
+    return json ? SIZE_ENCODER.encode(json).byteLength : 0;
+  } catch { return 0; }
 }
 
 /**
