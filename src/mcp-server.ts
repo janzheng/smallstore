@@ -105,7 +105,27 @@ async function http(
   return { ok: res.ok, status: res.status, body: parsed };
 }
 
+/**
+ * Collection names with reserved sub-route words would collide with the
+ * server's /api/:collection/{keys,query,search,metadata,schema} endpoints.
+ */
+const RESERVED_COLLECTION_SEGMENTS = new Set([
+  'keys', 'query', 'search', 'metadata', 'schema', 'slice', 'split', 'deduplicate',
+]);
+
+function validateCollection(collection: string): void {
+  const trimmed = collection.trim();
+  if (trimmed.length === 0) throw new Error('collection must be a non-empty string');
+  if (trimmed === '.' || trimmed === '..' || trimmed.includes('/') || trimmed.includes('\\')) {
+    throw new Error(`collection contains reserved path characters: ${JSON.stringify(collection)}`);
+  }
+  if (RESERVED_COLLECTION_SEGMENTS.has(trimmed)) {
+    throw new Error(`collection name "${trimmed}" collides with a Smallstore sub-route — rename the collection`);
+  }
+}
+
 function encodeCollectionKey(collection: string, key?: string): string {
+  validateCollection(collection);
   const col = encodeURIComponent(collection);
   if (key === undefined || key === '') return `/api/${col}`;
   // Preserve slashes in keys so nested paths keep their shape on the server.
@@ -297,7 +317,14 @@ async function callTool(name: string, args: Args): Promise<unknown> {
 
     case 'sm_query': {
       const collection = requireString(args, 'collection');
-      const filter = args.filter ?? {};
+      validateCollection(collection);
+      // Reject empty filters — on remote-backed adapters (Notion, Airtable)
+      // an empty filter is a full-collection scan, which is often a costly
+      // footgun. Callers that actually want everything should use sm_list.
+      const filter = args.filter as Record<string, unknown> | undefined;
+      if (!filter || typeof filter !== 'object' || Object.keys(filter).length === 0) {
+        throw new Error('sm_query requires a non-empty filter object. Use sm_list to list all records.');
+      }
       const r = await http('POST', `/api/${encodeURIComponent(collection)}/query`, filter);
       if (!r.ok) throw new Error(formatHttpError('sm_query failed', r));
       return r.body;
@@ -350,4 +377,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req: { params: { name: st
 });
 
 const transport = new StdioServerTransport();
+
+// Graceful shutdown — close the transport + server on SIGTERM / SIGINT so
+// in-flight fetches get a chance to cancel instead of the process being
+// killed mid-request. Claude Code normally kills the subprocess; this is
+// a best-effort drain.
+async function shutdown(signal: string) {
+  try { await server.close(); } catch { /* ignore */ }
+  try { await transport.close(); } catch { /* ignore */ }
+  // Exit with the signal's conventional code (128 + signum).
+  Deno.exit(signal === 'SIGINT' ? 130 : 143);
+}
+try { Deno.addSignalListener('SIGTERM', () => shutdown('SIGTERM')); } catch { /* unsupported on some platforms */ }
+try { Deno.addSignalListener('SIGINT', () => shutdown('SIGINT')); } catch { /* unsupported on some platforms */ }
+
 await server.connect(transport);
