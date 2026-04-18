@@ -51,6 +51,8 @@ export class LocalJsonAdapter implements StorageAdapter {
   private debounceMs = 50; // Debounce writes
   private _searchProvider = new MemoryBm25SearchProvider();
   private _hydratePromise: Promise<void> | null = null;
+  private _hydrated = false;
+  private _searchProviderWrapper: SearchProvider | null = null;
 
   // Adapter capabilities
   readonly capabilities: AdapterCapabilities = {
@@ -79,30 +81,45 @@ export class LocalJsonAdapter implements StorageAdapter {
     // Lazy-hydrate the BM25 index from on-disk files the first time any
     // search-provider method runs. Fresh adapter instances over an existing
     // baseDir otherwise have an empty index until every key is re-set.
-    const hydrate = () => {
+    // Wrapper is cached so identity comparisons (WeakMap, ===) are stable,
+    // and `search()` stays sync once hydration has completed — matching the
+    // underlying provider's signature for callers that don't await.
+    if (this._searchProviderWrapper) return this._searchProviderWrapper;
+
+    const provider = this._searchProvider;
+    const hydrate = (): Promise<void> => {
       if (!this._hydratePromise) {
         this._hydratePromise = (async () => {
-          const keys = await this.keys();
-          for (const k of keys) {
-            const v = await this.get(k);
-            if (v !== null) this._searchProvider.index(k, v);
+          try {
+            const keys = await this.keys();
+            for (const k of keys) {
+              const v = await this.get(k);
+              if (v !== null) provider.index(k, v);
+            }
+            this._hydrated = true;
+          } catch (err) {
+            // Let future calls retry from scratch instead of poisoning every search.
+            this._hydratePromise = null;
+            throw err;
           }
         })();
       }
       return this._hydratePromise;
     };
-    const provider = this._searchProvider;
-    return {
+
+    this._searchProviderWrapper = {
       get name() { return provider.name; },
       get supportedTypes() { return provider.supportedTypes; },
       index: (key, value) => provider.index(key, value),
       remove: (key) => provider.remove(key),
-      async search(query, options) {
-        await hydrate();
-        return provider.search(query, options);
+      search: (query, options) => {
+        // Sync fast-path once hydration is complete — preserves sync callers.
+        if (this._hydrated) return provider.search(query, options);
+        return hydrate().then(() => provider.search(query, options));
       },
       rebuild: (prefix) => provider.rebuild?.(prefix),
     } as SearchProvider;
+    return this._searchProviderWrapper;
   }
 
   private _unloadHandler: (() => void) | null = null;

@@ -77,6 +77,9 @@ export class DenoFsAdapter implements StorageAdapter {
   private readOnly: boolean;
   private excludes: string[];
   private _searchProvider = new MemoryBm25SearchProvider();
+  private _hydratePromise: Promise<void> | null = null;
+  private _hydrated = false;
+  private _searchProviderWrapper: SearchProvider | null = null;
 
   readonly capabilities: AdapterCapabilities = {
     name: 'deno-fs',
@@ -94,7 +97,43 @@ export class DenoFsAdapter implements StorageAdapter {
   };
 
   get searchProvider(): SearchProvider {
-    return this._searchProvider;
+    // Same lazy-hydrate pattern as LocalJsonAdapter: a fresh DenoFsAdapter
+    // over an existing directory has an empty BM25 index until every key is
+    // re-set. Hydrate on first search; stay sync afterwards.
+    if (this._searchProviderWrapper) return this._searchProviderWrapper;
+
+    const provider = this._searchProvider;
+    const hydrate = (): Promise<void> => {
+      if (!this._hydratePromise) {
+        this._hydratePromise = (async () => {
+          try {
+            const keys = await this.keys();
+            for (const k of keys) {
+              const v = await this.get(k);
+              if (v !== null) provider.index(k, v);
+            }
+            this._hydrated = true;
+          } catch (err) {
+            this._hydratePromise = null;
+            throw err;
+          }
+        })();
+      }
+      return this._hydratePromise;
+    };
+
+    this._searchProviderWrapper = {
+      get name() { return provider.name; },
+      get supportedTypes() { return provider.supportedTypes; },
+      index: (key, value) => provider.index(key, value),
+      remove: (key) => provider.remove(key),
+      search: (query, options) => {
+        if (this._hydrated) return provider.search(query, options);
+        return hydrate().then(() => provider.search(query, options));
+      },
+      rebuild: (prefix) => provider.rebuild?.(prefix),
+    } as SearchProvider;
+    return this._searchProviderWrapper;
   }
 
   constructor(config: DenoFsConfig = {}) {

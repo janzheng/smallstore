@@ -367,3 +367,34 @@ Deno.test('GoogleSheetsCsvAdapter - capabilities', () => {
   assertEquals(adapter.capabilities.cost?.tier, 'free');
   assertEquals(adapter.capabilities.features?.ttl, false);
 });
+
+Deno.test('GoogleSheetsCsvAdapter - strips UTF-8 BOM from CSV payload', async () => {
+  // Google Sheets exports commonly include a BOM; without stripping, first
+  // header becomes "\uFEFFid" and every row is silently dropped.
+  const csv = '\uFEFFid,name\n1,Alice\n2,Bob\n';
+  const adapter = createGoogleSheetsCsvAdapter({
+    url: FAKE_URL,
+    keyColumn: 'id',
+    fetchImpl: makeFetchStub(csv),
+  });
+
+  const alice = await adapter.get('1');
+  assertEquals((alice as any)?.name, 'Alice');
+  const keys = await adapter.keys();
+  assertEquals(keys.sort(), ['1', '2']);
+});
+
+Deno.test('GoogleSheetsCsvAdapter - throws clearly when keyColumn missing from header', async () => {
+  const csv = 'name,age\nAlice,30\n';
+  const adapter = createGoogleSheetsCsvAdapter({
+    url: FAKE_URL,
+    keyColumn: 'id', // not present — should fail loud, not return []
+    fetchImpl: makeFetchStub(csv),
+  });
+
+  await assertRejects(
+    () => adapter.keys(),
+    Error,
+    'keyColumn "id" not found',
+  );
+});

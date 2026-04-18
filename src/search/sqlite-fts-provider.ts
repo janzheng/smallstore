@@ -70,6 +70,8 @@ export class SqliteFtsSearchProvider implements SearchProvider {
         SELECT key, rank AS score, snippet("${this.table}_fts", 1, '<b>', '</b>', '...', 32) AS snippet
         FROM "${this.table}_fts"
         WHERE "${this.table}_fts" MATCH ?
+          AND key NOT LIKE 'smallstore:meta:%'
+          AND key NOT LIKE 'smallstore:index:%'
       `;
       const params: any[] = [query];
 

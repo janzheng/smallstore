@@ -241,6 +241,11 @@ export class GoogleSheetsCsvAdapter implements StorageAdapter {
 function parseRows(text: string): Record<string, any>[] {
   if (!text || text.trim().length === 0) return [];
 
+  // Google Sheets CSV exports commonly include a UTF-8 BOM. @std/csv does
+  // not strip it, which corrupts the first header (e.g. "\uFEFFid"),
+  // breaking keyColumn matching silently.
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
   // @std/csv's skipFirstRow uses the header row as object keys — exactly
   // what we want. Returns Record<string, string>[].
   const parsed = parseCsv(text, {
@@ -255,6 +260,19 @@ function keyRows(
   rows: Record<string, any>[],
   keyColumn: string | undefined,
 ): Map<string, Record<string, any>> {
+  // Fail loudly if keyColumn was specified but missing from the header —
+  // otherwise every row is silently skipped and the user gets [] with no
+  // signal that their config is wrong (common typo / wrong sheet).
+  if (keyColumn !== undefined && rows.length > 0) {
+    const headerKeys = Object.keys(rows[0]);
+    if (!headerKeys.includes(keyColumn)) {
+      throw new Error(
+        `[GoogleSheetsCsvAdapter] keyColumn "${keyColumn}" not found in CSV header. ` +
+        `Available columns: ${headerKeys.map(k => JSON.stringify(k)).join(', ')}`,
+      );
+    }
+  }
+
   const keyed = new Map<string, Record<string, any>>();
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];

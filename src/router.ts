@@ -704,7 +704,7 @@ export class SmartRouter implements Smallstore {
     const release = await this.keyLock.acquire(lockKey);
     try {
       // 1. Get current data
-      const data = await this.get(collectionPath);
+      const data = await this.get(collectionPath, { raw: true });
 
       if (!Array.isArray(data)) {
         throw new Error(`Path "${collectionPath}" is not an array`);

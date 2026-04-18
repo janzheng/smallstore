@@ -186,11 +186,23 @@ export class MemoryAdapter implements StorageAdapter {
    * @param prefix - Optional prefix to clear only specific namespace
    */
   async clear(prefix?: string): Promise<void> {
-    const provider = this.searchProvider as SearchProvider & { clear?: () => void };
+    // Provider.clear() is optional on the SearchProvider interface and may be
+    // async (zvec). Prefer clear() when available; fall back to per-key
+    // remove() so custom providers that only implement the required surface
+    // are still wiped consistently.
+    const provider = this.searchProvider as SearchProvider & {
+      clear?: () => void | Promise<void>;
+    };
     if (!prefix) {
-      // Clear everything
+      const keysBefore = Array.from(this.store.keys());
       this.store.clear();
-      provider.clear?.();
+      if (typeof provider.clear === 'function') {
+        try { await provider.clear(); } catch { /* best-effort */ }
+      } else {
+        for (const key of keysBefore) {
+          try { await provider.remove(key); } catch { /* best-effort */ }
+        }
+      }
       return;
     }
 
@@ -198,7 +210,7 @@ export class MemoryAdapter implements StorageAdapter {
     const keysToDelete = await this.keys(prefix);
     for (const key of keysToDelete) {
       this.store.delete(key);
-      try { provider.remove(key); } catch { /* best-effort */ }
+      try { await provider.remove(key); } catch { /* best-effort */ }
     }
   }
   
