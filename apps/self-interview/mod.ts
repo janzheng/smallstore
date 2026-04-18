@@ -33,7 +33,7 @@ for (let i = 0; i < 6; i++) {
 import { MemoryStore, type Smallstore } from "./store.ts";
 import { createSheetlogKV } from "./sheetlog-kv.ts";
 import { createInterviewRoutes, type RouterConfig } from "./routes.ts";
-import { createCompleteFn } from "./ai.ts";
+import { createCompleteFn, resolveProvider } from "./ai.ts";
 import type { CompleteFn } from "./lcm.ts";
 
 // ============================================================================
@@ -134,11 +134,11 @@ if (import.meta.main) {
   const verbose = Deno.env.get("INTERVIEW_VERBOSE") === "true";
   const dataDir = Deno.env.get("INTERVIEW_DATA_DIR") || "./data/self-interview";
 
-  const hasCustom = !!Deno.env.get("INTERVIEW_API_KEY");
-  const hasGroq = !!Deno.env.get("GROQ_API_KEY");
-  const hasOpenAI = !!Deno.env.get("OPENAI_API_KEY");
-  const provider = hasCustom ? "custom" : hasGroq ? "groq" : hasOpenAI ? "openai" : "none (set INTERVIEW_API_KEY, GROQ_API_KEY, or OPENAI_API_KEY)";
-  const model = Deno.env.get("INTERVIEW_MODEL") || (hasGroq && !hasCustom ? "llama-3.3-70b-versatile" : "gpt-4o-mini");
+  const resolved = resolveProvider();
+  const provider = resolved.name === "none"
+    ? "none (set DEFAULT_PROVIDER, GROQ_API_KEY, OPENAI_API_KEY, or NVIDIA_INFERENCE_KEY)"
+    : resolved.name;
+  const model = resolved.model;
 
   const sheetUrl = Deno.env.get("SM_SHEET_URL") || Deno.env.get("SHEET_URL");
   const storage = sheetUrl ? `sheetlog (${Deno.env.get("INTERVIEW_SHEET_NAME") || "self-interview"})` : `sqlite (${dataDir})`;
@@ -162,6 +162,6 @@ export { InterviewEngine } from "./engine.ts";
 export { InterviewNotes } from "./notes.ts";
 export { LCMStore } from "./lcm.ts";
 export { MISSIONS, getMission, createCustomMission } from "./missions.ts";
-export { createCompleteFn, createOpenAICompleteFn } from "./ai.ts";
+export { createCompleteFn, createOpenAICompleteFn, resolveProvider } from "./ai.ts";
 export type { Mission } from "./missions.ts";
 export type { CompleteFn } from "./lcm.ts";

@@ -15,6 +15,8 @@ import "jsr:@std/dotenv/load";
 import { parseArgs } from "@std/cli/parse-args";
 import { createSmallstore, createSQLiteAdapter, createMemoryAdapter } from "../../mod.ts";
 import { InterviewEngine } from "./engine.ts";
+import { createSheetlogKV } from "./sheetlog-kv.ts";
+import type { Smallstore } from "./store.ts";
 import { MISSIONS, getMission, createCustomMission } from "./missions.ts";
 import type { Mission } from "./missions.ts";
 import { createCompleteFn as createSharedCompleteFn } from "./ai.ts";
@@ -25,7 +27,7 @@ import { createCompleteFn as createSharedCompleteFn } from "./ai.ts";
 
 const args = parseArgs(Deno.args, {
   string: ["mission", "session", "directive", "provider", "model", "api-url", "data-dir"],
-  boolean: ["help", "new", "resume", "export", "missions", "verbose", "list"],
+  boolean: ["help", "new", "resume", "export", "missions", "verbose", "list", "sessions"],
   default: { "data-dir": "./data/self-interview" },
   alias: { h: "help", m: "mission", s: "session", n: "new", r: "resume", e: "export", v: "verbose", d: "directive" },
 });
@@ -44,6 +46,7 @@ Options:
   -r, --resume           Resume most recent session
   -e, --export           Export notes as markdown and exit
   --missions, --list     List available missions
+  --sessions             List saved sessions
   --provider NAME        AI provider (groq, openai, anthropic)
   --model NAME           Model override
   --data-dir PATH        Data directory (default: ./data/self-interview)
@@ -72,6 +75,38 @@ if (args.missions || args.list) {
     console.log(`  ${m.slug.padEnd(18)} ${m.description}`);
   }
   console.log('\nUsage: deno task interview --mission <slug>\n');
+  Deno.exit(0);
+}
+
+/** Create store matching the web server logic: sheetlog if SM_SHEET_URL is set, otherwise SQLite */
+function createStore(dataDir: string): Smallstore {
+  const sheetUrl = Deno.env.get("SM_SHEET_URL") || Deno.env.get("SHEET_URL");
+  const sheetName = Deno.env.get("INTERVIEW_SHEET_NAME") || "self-interview";
+  if (sheetUrl) {
+    return createSheetlogKV({ sheetUrl, sheet: sheetName });
+  }
+  return createSmallstore({
+    adapters: {
+      sqlite: createSQLiteAdapter({ path: `${dataDir}/store.db` }),
+      memory: createMemoryAdapter(),
+    },
+    defaultAdapter: "sqlite",
+  });
+}
+
+if (args.sessions) {
+  const store = createStore(args["data-dir"]);
+  const engine = new InterviewEngine({ store, complete: async () => ({ content: null }), verbose: false });
+  const sessions = await engine.listSessions();
+  if (sessions.length === 0) {
+    console.log("\nNo sessions found.\n");
+  } else {
+    console.log("\nSaved sessions:\n");
+    for (const s of sessions) {
+      console.log(`  ${s.name.padEnd(24)} ${s.missionName} (${s.noteCount} notes, ${s.updatedAt?.slice(0, 10) || "?"})`);
+    }
+    console.log(`\nResume: deno task interview -s <name>\n`);
+  }
   Deno.exit(0);
 }
 
@@ -240,15 +275,8 @@ async function main() {
 
   const sessionName = args.session || mission.slug;
 
-  // Setup smallstore
-  const dataDir = args["data-dir"];
-  const store = createSmallstore({
-    adapters: {
-      sqlite: createSQLiteAdapter({ path: `${dataDir}/store.db` }),
-      memory: createMemoryAdapter(),
-    },
-    defaultAdapter: "sqlite",
-  });
+  // Setup smallstore (sheetlog if SM_SHEET_URL set, otherwise SQLite)
+  const store = createStore(args["data-dir"]);
 
   // Setup AI
   const complete = await createCompleteFn();

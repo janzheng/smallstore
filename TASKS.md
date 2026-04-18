@@ -101,16 +101,9 @@ Architecture: `src/mcp-server.ts` calls the running Smallstore HTTP server (star
 
 #### Phase 1: MCP Server
 
-- [ ] `src/mcp-server.ts` — stdio MCP server using `@modelcontextprotocol/sdk` #mcp-core
-  - [ ] `sm_read(collection, key)` — GET a single record from any mounted adapter
-  - [ ] `sm_write(collection, key, data)` — PUT a record (pass as JSON object)
-  - [ ] `sm_delete(collection, key)` — DELETE a record
-  - [ ] `sm_list(collection, options?)` — list keys in a collection (optional limit/prefix)
-  - [ ] `sm_query(collection, filter)` — filter records by field values (maps to Smallstore query engine)
-  - [ ] `sm_sync(source_collection, target_collection, options?)` — copy/migrate between two mounted adapters (wraps `syncAdapters()`)
-  - [ ] `sm_adapters()` — list configured adapters and mounts (for agent orientation)
-  - [ ] Env vars: `SMALLSTORE_URL` (default `http://localhost:9998`), `SMALLSTORE_TOKEN`
-- [ ] `deno task mcp` entry in `deno.json` #task
+- [x] [done: src/mcp-server.ts, 7 tools wired, tools/list smoke passes] stdio MCP server using `@modelcontextprotocol/sdk` #mcp-core
+- [x] [done: deno task mcp] deno task entry #task
+- [x] [done: serve.ts adds GET /_adapters + POST /_sync] HTTP endpoints for sm_adapters / sm_sync
 - [ ] Register in `~/.claude.json` under `mcpServers.smallstore` #registration
   ```json
   {
@@ -141,15 +134,7 @@ Read-only adapter for public/shared Google Sheets without OAuth or Apps Script. 
 
 Use case: TigerFlare routes `/sheets/*` → this adapter via the bridge, so agents can `tf_read` shared spreadsheet data without credentials. Distinct from the sheetlog adapter (which requires Apps Script and supports writes).
 
-- [ ] `src/adapters/google-sheets-csv.ts` — `GoogleSheetsCsvAdapter` class #adapter
-  - [ ] Constructor: `{ url: string; keyColumn?: string; refreshMs?: number }` — `url` is the CSV export link, `keyColumn` names the field to use as the record key (defaults to row index), `refreshMs` for optional TTL cache
-  - [ ] `get(key)` — fetch + parse CSV, return matching row as object
-  - [ ] `list()` / `keys()` — return all row keys
-  - [ ] `set()` / `delete()` — throw `ReadOnlyError`
-  - [ ] Cache last fetch result in memory for `refreshMs` ms to avoid hammering the URL on every call
-- [ ] Add to `mod.ts` exports #exports
-- [ ] `tests/google-sheets-csv.test.ts` — unit tests with a mock CSV fetch (no live credentials needed) #tests
-- [ ] Document in README under adapters table #docs
+- [x] [done: 21 tests passing, uses @std/csv, read-only with UnsupportedOperationError] GoogleSheetsCsvAdapter + tests + README + mod.ts export #adapter
 
 - [ ] Publish to npm (`deno task build:npm && cd dist && npm publish`) #npm-publish
 - [ ] Test and validate npm build works in Node.js projects #npm-validate

@@ -365,6 +365,30 @@ Tests: `vector-search.test.ts` (25 tests), `tests/search.test.ts`
 
 ---
 
+## Phase 8: LLM / Agent Intelligence [future]
+
+Features that extend smallstore for AI/agent workflows. All build on the existing retrieval pipeline (`RetrievalProvider` interface) and disclosure/episodic modules. These are optional — smallstore works fine without them.
+
+### Retrieval Pipeline Extensions
+
+- [ ] Re-rank provider (Cohere/Jina) — cross-encoder re-scoring after initial search #rerank-provider #needs:search-interface
+- [ ] Context window provider — token-budget-aware slicing, fit retrieval results to a target token count #context-window-provider #needs:search-interface
+- [ ] RAG pipeline preset — composable search → rerank → context-window → disclose pipeline #rag-preset #needs:rerank-provider #needs:context-window-provider
+- [ ] Pipeline HTTP endpoint — `POST /:collection/pipeline` for ad-hoc retrieval chains #pipeline-http #needs:http-handlers
+
+### Episodic / Memory Enhancements
+
+- [ ] Semantic recall — vector-based episode retrieval (currently keyword/tag only) #episodic-semantic #needs:episodic-store #needs:vector-memory
+- [ ] Working memory — short-term scratch space with auto-eviction, for agent conversation state #working-memory #needs:episodic-store
+- [?] Memory consolidation — merge related episodes over time (sleep-like compaction) #memory-consolidation #needs:episodic-store
+
+### Disclosure / Context Control
+
+- [?] Multi-user disclosure — per-user access levels on progressive disclosure #disclosure-multi-user #needs:disclosure-store
+- [?] Auto-summarization provider — LLM-generated summaries at disclosure levels (currently manual) #auto-summarize #needs:disclosure-summarizer
+
+---
+
 ## Test Coverage Summary
 
 Full details in [TASKS-TESTS.md](./TASKS-TESTS.md). **537 offline tests passing across 28 files.**

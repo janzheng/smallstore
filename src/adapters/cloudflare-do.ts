@@ -218,7 +218,7 @@ export class CloudflareDOAdapter implements StorageAdapter {
    * @param key - Storage key
    * @param value - Value to store
    */
-  async set(key: string, value: any): Promise<void> {
+  async set(key: string, value: any, _ttl?: number): Promise<void> {
     if (this.mode === 'native' && this.stub) {
       // Native mode
       const doUrl = new URL('https://fake-host');

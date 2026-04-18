@@ -1,32 +1,91 @@
 // Shared AI completion function factory
 //
 // OpenAI-compatible API client used by mod.ts, cli.ts, and test files.
+// Supports multiple providers via env vars: DEFAULT_PROVIDER, DEFAULT_MODEL,
+// or provider-specific keys (GROQ_API_KEY, OPENAI_API_KEY, NVIDIA_INFERENCE_KEY, etc.)
 
 import type { CompleteFn } from "./lcm.ts";
 import type { ChatMessage } from "./types.ts";
 
+// Provider config: name → { envKey, baseUrl, defaultModel }
+const PROVIDERS: Record<string, { envKey: string; baseUrl: string; defaultModel: string }> = {
+  groq:     { envKey: "GROQ_API_KEY",        baseUrl: "https://api.groq.com/openai/v1",    defaultModel: "moonshotai/kimi-k2-instruct" },
+  openai:   { envKey: "OPENAI_API_KEY",       baseUrl: "https://api.openai.com/v1",          defaultModel: "gpt-4o-mini" },
+  nvidia:   { envKey: "NVIDIA_INFERENCE_KEY",  baseUrl: "https://inference-api.nvidia.com/v1", defaultModel: "aws/anthropic/bedrock-claude-opus-4-6" },
+  anthropic:{ envKey: "ANTHROPIC_API_KEY",     baseUrl: "https://api.anthropic.com/v1",        defaultModel: "claude-sonnet-4-20250514" },
+};
+
+/** Resolve which provider to use from env vars + optional config overrides. */
+export function resolveProvider(config?: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  provider?: string;
+}): { name: string; apiKey: string; baseUrl: string; model: string } {
+  const defaultProviderName = config?.provider || Deno.env.get("DEFAULT_PROVIDER") || "";
+  const interviewKey = Deno.env.get("INTERVIEW_API_KEY");
+
+  // 1. Explicit provider name (from config or DEFAULT_PROVIDER)
+  if (defaultProviderName && PROVIDERS[defaultProviderName]) {
+    const p = PROVIDERS[defaultProviderName];
+    return {
+      name: defaultProviderName,
+      apiKey: config?.apiKey || Deno.env.get(p.envKey) || interviewKey || "",
+      baseUrl: (config?.baseUrl || Deno.env.get("INTERVIEW_API_URL") || p.baseUrl).replace(/\/+$/, ""),
+      model: config?.model || Deno.env.get("DEFAULT_MODEL") || Deno.env.get("INTERVIEW_MODEL") || p.defaultModel,
+    };
+  }
+
+  // 2. INTERVIEW_API_KEY + INTERVIEW_API_URL (fully custom endpoint)
+  if (config?.apiKey || interviewKey) {
+    const key = config?.apiKey || interviewKey || "";
+    // Detect groq key by prefix
+    const isGroq = key.startsWith("gsk_");
+    return {
+      name: isGroq ? "groq" : "custom",
+      apiKey: key,
+      baseUrl: (config?.baseUrl || Deno.env.get("INTERVIEW_API_URL") || (isGroq ? PROVIDERS.groq.baseUrl : PROVIDERS.openai.baseUrl)).replace(/\/+$/, ""),
+      model: config?.model || Deno.env.get("DEFAULT_MODEL") || Deno.env.get("INTERVIEW_MODEL") || (isGroq ? PROVIDERS.groq.defaultModel : PROVIDERS.openai.defaultModel),
+    };
+  }
+
+  // 3. Auto-detect from available API keys (priority order)
+  for (const name of ["groq", "nvidia", "openai"]) {
+    const p = PROVIDERS[name];
+    const key = Deno.env.get(p.envKey);
+    if (key) {
+      return {
+        name,
+        apiKey: key,
+        baseUrl: (config?.baseUrl || Deno.env.get("INTERVIEW_API_URL") || p.baseUrl).replace(/\/+$/, ""),
+        model: config?.model || Deno.env.get("DEFAULT_MODEL") || Deno.env.get("INTERVIEW_MODEL") || p.defaultModel,
+      };
+    }
+  }
+
+  // 4. Nothing configured
+  return {
+    name: "none",
+    apiKey: "",
+    baseUrl: (config?.baseUrl || Deno.env.get("INTERVIEW_API_URL") || PROVIDERS.openai.baseUrl).replace(/\/+$/, ""),
+    model: config?.model || Deno.env.get("DEFAULT_MODEL") || Deno.env.get("INTERVIEW_MODEL") || "gpt-4o-mini",
+  };
+}
+
 /**
  * Create a CompleteFn that calls an OpenAI-compatible API directly.
- * Works with Groq, OpenAI, and any compatible endpoint.
+ * Works with Groq, OpenAI, NVIDIA Inference, and any compatible endpoint.
  */
 export function createOpenAICompleteFn(config?: {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  provider?: string;
 }): CompleteFn {
-  const groqKey = Deno.env.get("GROQ_API_KEY");
-  const openaiKey = Deno.env.get("OPENAI_API_KEY");
-  const interviewKey = Deno.env.get("INTERVIEW_API_KEY");
-  const useGroq = !!(config?.apiKey?.startsWith("gsk_") || (!config?.apiKey && !interviewKey && groqKey));
-
-  const apiKey = config?.apiKey || interviewKey || groqKey || openaiKey || "";
-  const baseUrl = (config?.baseUrl ||
-    Deno.env.get("INTERVIEW_API_URL") ||
-    (useGroq ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1")
-  ).replace(/\/+$/, "");
-  const defaultModel = config?.model ||
-    Deno.env.get("INTERVIEW_MODEL") ||
-    (useGroq ? "llama-3.3-70b-versatile" : "gpt-4o-mini");
+  const resolved = resolveProvider(config);
+  const apiKey = resolved.apiKey;
+  const baseUrl = resolved.baseUrl;
+  const defaultModel = resolved.model;
 
   return async (messages, options) => {
     const body: Record<string, unknown> = {
