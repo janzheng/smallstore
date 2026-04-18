@@ -343,29 +343,34 @@ Deno.test({
 // 5. Memory + Vector search
 // ---------------------------------------------------------------------------
 
-// Helper: build a custom adapter that wires a user-supplied SearchProvider.
-// Wraps the MemoryAdapter but replaces the searchProvider and auto-indexes
-// into it on set()/delete(). Needed because MemoryAdapter hard-wires its own
-// BM25 provider via a private field, so we can't just swap the getter.
+// Helper: MemoryAdapter now accepts a searchProvider in its config,
+// so custom providers plug in cleanly with no wrapping needed.
 function createMemoryAdapterWithProvider(provider: any) {
-  const base = createMemoryAdapter();
-  const origSet = base.set.bind(base);
-  const origDelete = base.delete.bind(base);
-  base.set = async (key: string, value: any, ttl?: number) => {
-    await origSet(key, value, ttl);
-    try { await provider.index(key, value); } catch { /* best-effort */ }
-  };
-  base.delete = async (key: string) => {
-    await origDelete(key);
-    try { await provider.remove(key); } catch { /* best-effort */ }
-  };
-  Object.defineProperty(base, 'searchProvider', {
-    value: provider,
-    configurable: true,
-    writable: true,
-  });
-  return base;
+  return createMemoryAdapter({ searchProvider: provider });
 }
+
+Deno.test({
+  name: 'integration/memory — custom searchProvider via config gets auto-indexed on set',
+  ...opts,
+  fn: async () => {
+    const vector = new MemoryVectorSearchProvider({
+      embed: pseudoEmbed,
+      dimensions: 16,
+      metric: 'cosine',
+    });
+    const memory = createMemoryAdapter({ searchProvider: vector });
+
+    // set() should auto-index into the custom provider, not a default BM25.
+    await memory.set('k/one', { title: 'alpha', body: 'quick brown fox' });
+    await memory.set('k/two', { title: 'beta', body: 'lazy dogs' });
+
+    assertEquals((vector as any).size, 2, 'custom provider should receive both set() calls');
+
+    // delete() should remove from the custom provider too.
+    await memory.delete('k/one');
+    assertEquals((vector as any).size, 1, 'delete() should remove from custom provider');
+  },
+});
 
 Deno.test({
   name: 'integration/memory-vector — cosine ranking via deterministic embed',

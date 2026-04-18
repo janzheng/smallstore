@@ -37,10 +37,19 @@ interface TTLEntry {
  * Stores data in-memory using Map.
  * Supports TTL via timestamp checking.
  */
+export interface MemoryAdapterConfig {
+  /** Plug in a custom SearchProvider. Defaults to MemoryBm25SearchProvider. */
+  searchProvider?: SearchProvider;
+}
+
 export class MemoryAdapter implements StorageAdapter {
   // Storage: Map of key → TTLEntry
   private store: Map<string, TTLEntry> = new Map();
-  private _searchProvider = new MemoryBm25SearchProvider();
+  private _searchProvider: SearchProvider;
+
+  constructor(config: MemoryAdapterConfig = {}) {
+    this._searchProvider = config.searchProvider ?? new MemoryBm25SearchProvider();
+  }
 
   // Adapter capabilities
   readonly capabilities: AdapterCapabilities = {
@@ -118,8 +127,9 @@ export class MemoryAdapter implements StorageAdapter {
       expiresAt,
     });
 
-    // Auto-index for search (best-effort)
-    try { this._searchProvider.index(key, value); } catch { /* best-effort */ }
+    // Auto-index for search (best-effort). Reads through the getter so runtime
+    // overrides via Object.defineProperty(adapter, 'searchProvider', ...) work.
+    try { this.searchProvider.index(key, value); } catch { /* best-effort */ }
   }
   
   /**
@@ -130,7 +140,7 @@ export class MemoryAdapter implements StorageAdapter {
   async delete(key: string): Promise<void> {
     this.store.delete(key);
     // Remove from search index (best-effort)
-    try { this._searchProvider.remove(key); } catch { /* best-effort */ }
+    try { this.searchProvider.remove(key); } catch { /* best-effort */ }
   }
   
   /**
@@ -176,10 +186,11 @@ export class MemoryAdapter implements StorageAdapter {
    * @param prefix - Optional prefix to clear only specific namespace
    */
   async clear(prefix?: string): Promise<void> {
+    const provider = this.searchProvider as SearchProvider & { clear?: () => void };
     if (!prefix) {
       // Clear everything
       this.store.clear();
-      this._searchProvider.clear();
+      provider.clear?.();
       return;
     }
 
@@ -187,7 +198,7 @@ export class MemoryAdapter implements StorageAdapter {
     const keysToDelete = await this.keys(prefix);
     for (const key of keysToDelete) {
       this.store.delete(key);
-      try { this._searchProvider.remove(key); } catch { /* best-effort */ }
+      try { provider.remove(key); } catch { /* best-effort */ }
     }
   }
   
@@ -568,10 +579,13 @@ export class MemoryAdapter implements StorageAdapter {
 
 /**
  * Create a new Memory adapter instance
- * 
+ *
+ * @param config - Optional config; pass { searchProvider } to plug in a
+ *                 custom SearchProvider (e.g. vector or hybrid) instead of
+ *                 the default BM25.
  * @returns MemoryAdapter
  */
-export function createMemoryAdapter(): MemoryAdapter {
-  return new MemoryAdapter();
+export function createMemoryAdapter(config: MemoryAdapterConfig = {}): MemoryAdapter {
+  return new MemoryAdapter(config);
 }
 

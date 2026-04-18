@@ -93,7 +93,7 @@ Surfaced by the Phase 7 testing sweep. Each has a test asserting current (broken
 - [x] [fixed: retryFetch now passes 304 through; external-fetcher's CACHE_VALID branch is reachable] `fetchExternal` 304 Not Modified handling #bug-fix #external-fetcher
 - [x] [fixed: CacheManager tracks per-entry size + monotonic access tick, parseSizeString, evictUntilFits with LRU policy; ttl-only skips eviction] `CacheManager` LRU eviction enforced #bug-fix #cache-manager
 - [x] [fixed: bm25/vector/zvec providers skip smallstore:meta:* and smallstore:index:* keys] Search providers no longer leak metadata/index keys #bug-fix #router-indexing
-- [ ] `MemoryAdapter._searchProvider` is baked-in — swapping via `Object.defineProperty` doesn't redirect auto-indexing #ergonomics #memory-adapter
+- [x] [fixed: MemoryAdapter accepts {searchProvider} in config; set/delete/clear read through the getter so runtime overrides also work] Custom SearchProvider plug-in for MemoryAdapter #bug-fix #memory-adapter
 
 ## Dependency Notes
 
