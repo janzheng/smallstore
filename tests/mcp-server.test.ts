@@ -314,11 +314,12 @@ Deno.test('MCP: sm_delete forwards to DELETE /api/:collection/:key', async () =>
   }
 });
 
-Deno.test('MCP: sm_list forwards to GET /:collection/keys and applies client-side limit', async () => {
+Deno.test('MCP: sm_list forwards pagination params to GET /:collection/keys', async () => {
   const mock = await startMockServer();
+  // Server now honors limit server-side and returns hasMore/cursor shape.
   mock.setResponder(() => ({
     status: 200,
-    body: { keys: ['a', 'b', 'c', 'd'], total: 4 },
+    body: { keys: ['a', 'b'], total: 4, hasMore: true, cursor: 'next-2' },
   }));
   const mcp = startMcp({ SMALLSTORE_URL: mock.url });
   try {
@@ -330,11 +331,11 @@ Deno.test('MCP: sm_list forwards to GET /:collection/keys and applies client-sid
     assertEquals(isError, false);
     assertEquals(mock.requests.length, 1);
     assertEquals(mock.requests[0].method, 'GET');
-    assertEquals(mock.requests[0].path, '/api/users/keys?prefix=a');
-    const parsed = JSON.parse(text) as { keys: string[]; total: number };
-    assertEquals(parsed.keys.length, 2, 'limit should truncate client-side');
+    assertEquals(mock.requests[0].path, '/api/users/keys?prefix=a&limit=2');
+    const parsed = JSON.parse(text) as { keys: string[]; hasMore: boolean; cursor?: string };
     assertEquals(parsed.keys, ['a', 'b']);
-    assertEquals(parsed.total, 2);
+    assertEquals(parsed.hasMore, true);
+    assertEquals(parsed.cursor, 'next-2');
   } finally {
     await mcp.close();
     await mock.stop();

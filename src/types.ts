@@ -34,6 +34,35 @@ export type DataType =
  * Each adapter MUST declare what it can handle.
  * Router uses this to make intelligent routing decisions.
  */
+/**
+ * Options for paged key listing. Adapters that support it natively honor
+ * all fields; adapters that don't can rely on the router's fallback which
+ * wraps `keys()` and slices by offset/limit.
+ */
+export interface KeysPageOptions {
+  /** Key prefix filter. */
+  prefix?: string;
+  /** Max keys to return in this page. Undefined = no limit. */
+  limit?: number;
+  /** Absolute offset into the full key list (ignored if `cursor` is given). */
+  offset?: number;
+  /** Opaque, adapter-specific cursor from the previous page's response. */
+  cursor?: string;
+}
+
+/**
+ * A page of keys plus metadata for continuation.
+ */
+export interface KeysPage {
+  keys: string[];
+  /** True if more keys exist past this page. */
+  hasMore: boolean;
+  /** Pass back to the next `listKeys()` call to continue (if the adapter uses cursors). */
+  cursor?: string;
+  /** Total matching keys, only populated when the adapter can return it cheaply. */
+  total?: number;
+}
+
 export interface AdapterCapabilities {
   /** Adapter name (e.g., "memory", "upstash") */
   name: string;

@@ -8,7 +8,7 @@
  * - Handle TTL (if supported)
  */
 
-import type { DataType, AdapterCapabilities, SearchProvider } from '../types.ts';
+import type { DataType, AdapterCapabilities, SearchProvider, KeysPageOptions, KeysPage } from '../types.ts';
 export type { AdapterCapabilities } from '../types.ts';
 
 // ============================================================================
@@ -58,11 +58,20 @@ export interface StorageAdapter {
   
   /**
    * List keys with optional prefix
-   * 
+   *
    * @param prefix - Optional prefix filter
-   * @returns Array of keys
+   * @returns Array of keys (unpaged; may be large on remote adapters)
    */
   keys(prefix?: string): Promise<string[]>;
+
+  /**
+   * Optional: paged keys. Adapters with efficient native pagination
+   * (Upstash SCAN, Airtable offset, Notion start_cursor, SQLite LIMIT/OFFSET,
+   * CF KV list) should implement this so callers don't have to round-trip
+   * the whole key list. When omitted, the router provides a fallback that
+   * wraps `keys()` and slices by offset/limit.
+   */
+  listKeys?(options?: KeysPageOptions): Promise<KeysPage>;
   
   /**
    * Clear all data (for testing)

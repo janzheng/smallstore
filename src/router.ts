@@ -1045,6 +1045,59 @@ export class SmartRouter implements Smallstore {
   }
   
   /**
+   * List keys in a collection with pagination.
+   *
+   * Uses the adapter's native `listKeys()` when available (SQLite LIMIT/OFFSET,
+   * Upstash SCAN, Airtable offset, etc.). Falls back to loading all keys via
+   * `keys()` and slicing client-side when the adapter doesn't implement paged
+   * listing. Returns user-facing sub-paths (without the `smallstore:coll:`
+   * prefix) to match `keys()`.
+   */
+  async listKeys(
+    collectionPath: string,
+    options: { prefix?: string; limit?: number; offset?: number; cursor?: string } = {},
+  ): Promise<{ keys: string[]; hasMore: boolean; cursor?: string; total?: number }> {
+    const parsed = parsePath(collectionPath);
+    const keyPrefix = buildKey(parsed);
+    const adapterPrefix = options.prefix
+      ? `${keyPrefix}:${options.prefix.replace(/\//g, ':')}`
+      : keyPrefix;
+
+    const adapter = this.resolveAdapterForPath(collectionPath) ?? this.adapters[this.defaultAdapter];
+    if (!adapter) return { keys: [], hasMore: false };
+
+    const stripPrefix = (k: string) =>
+      k.replace(`smallstore:${parsed.collection}:`, '').replace(/:/g, '/');
+
+    if (typeof adapter.listKeys === 'function') {
+      const page = await adapter.listKeys({
+        prefix: adapterPrefix,
+        limit: options.limit,
+        offset: options.offset,
+        cursor: options.cursor,
+      });
+      return {
+        keys: page.keys.map(stripPrefix),
+        hasMore: page.hasMore,
+        ...(page.cursor !== undefined ? { cursor: page.cursor } : {}),
+        ...(page.total !== undefined ? { total: page.total } : {}),
+      };
+    }
+
+    // Fallback: full keys() + slice. No efficiency win but no regression.
+    const all = await adapter.keys(adapterPrefix);
+    const total = all.length;
+    const start = Math.max(0, options.offset ?? 0);
+    const end = options.limit !== undefined ? start + options.limit : total;
+    const page = all.slice(start, end).map(stripPrefix);
+    return {
+      keys: page,
+      hasMore: end < total,
+      total,
+    };
+  }
+
+  /**
    * Clear all data in collection (for testing/cleanup)
    */
   async clear(collectionPath: string, prefix?: string): Promise<void> {

@@ -424,18 +424,44 @@ export async function handleListKeys(
 ): Promise<SmallstoreResponse> {
   try {
     const collection = request.params.collection;
-    const prefix = request.query.prefix;
+    const prefix = request.query.prefix as string | undefined;
+    const limitRaw = request.query.limit as string | undefined;
+    const offsetRaw = request.query.offset as string | undefined;
+    const cursor = request.query.cursor as string | undefined;
 
     if (!collection) {
       return createErrorResponse(400, 'BadRequest', 'Collection name is required');
     }
 
-    const keys = await smallstore.keys(collection, prefix);
+    const limit = limitRaw !== undefined ? parseInt(limitRaw, 10) : undefined;
+    const offset = offsetRaw !== undefined ? parseInt(offsetRaw, 10) : undefined;
+    if (limit !== undefined && (!Number.isFinite(limit) || limit < 0)) {
+      return createErrorResponse(400, 'BadRequest', '`limit` must be a non-negative integer');
+    }
+    if (offset !== undefined && (!Number.isFinite(offset) || offset < 0)) {
+      return createErrorResponse(400, 'BadRequest', '`offset` must be a non-negative integer');
+    }
 
+    // Use paged listKeys when any paging param is present; fall back to keys()
+    // for the legacy unpaged shape so unchanged callers see the same response.
+    const paged = limit !== undefined || offset !== undefined || cursor !== undefined;
+    if (paged && typeof smallstore.listKeys === 'function') {
+      const page = await smallstore.listKeys(collection, { prefix, limit, offset, cursor });
+      return createSuccessResponse({
+        keys: page.keys,
+        collection,
+        hasMore: page.hasMore,
+        ...(page.cursor !== undefined ? { cursor: page.cursor } : {}),
+        ...(page.total !== undefined ? { total: page.total } : { total: page.keys.length }),
+      });
+    }
+
+    const keys = await smallstore.keys(collection, prefix);
     return createSuccessResponse({
       keys,
       collection,
       total: keys.length,
+      hasMore: false,
     });
   } catch (error) {
     console.error('[SmallstoreHandler] Error listing keys:', error);

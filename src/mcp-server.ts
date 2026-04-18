@@ -221,7 +221,7 @@ const TOOLS = [
   },
   {
     name: 'sm_list',
-    description: 'List keys in a collection. Optionally filter by prefix. Note: limit is enforced client-side after fetching all keys.',
+    description: 'List keys in a collection with optional pagination. Returns `{ keys, hasMore, cursor?, total? }`. Pass back `cursor` or advance `offset` to fetch the next page.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -230,7 +230,9 @@ const TOOLS = [
           type: 'object',
           properties: {
             prefix: { type: 'string', description: 'Only include keys starting with this prefix.' },
-            limit: { type: 'number', description: 'Maximum number of keys to return.' },
+            limit: { type: 'number', description: 'Maximum number of keys per page (server-enforced when the adapter supports it).' },
+            offset: { type: 'number', description: 'Absolute offset into the full key list. Ignored if `cursor` is set.' },
+            cursor: { type: 'string', description: 'Opaque cursor from a previous page. Adapter-specific (Upstash SCAN, Notion page cursor, Airtable offset, etc.).' },
           },
         },
       },
@@ -334,26 +336,16 @@ async function callTool(name: string, args: Args): Promise<unknown> {
 
     case 'sm_list': {
       const collection = requireString(args, 'collection');
-      const options = (args.options as { prefix?: string; limit?: number } | undefined) ?? {};
+      validateCollection(collection);
+      const options = (args.options as { prefix?: string; limit?: number; offset?: number; cursor?: string } | undefined) ?? {};
       const qs = new URLSearchParams();
       if (options.prefix) qs.set('prefix', options.prefix);
+      if (options.limit !== undefined) qs.set('limit', String(options.limit));
+      if (options.offset !== undefined) qs.set('offset', String(options.offset));
+      if (options.cursor !== undefined) qs.set('cursor', options.cursor);
       const path = `/api/${encodeURIComponent(collection)}/keys${qs.toString() ? `?${qs}` : ''}`;
       const r = await http('GET', path);
       if (!r.ok) throw new Error(formatHttpError('sm_list failed', r));
-      // Client-side limit — server returns all keys matching the prefix.
-      // Preserve the true server-side total under `totalAvailable` so the
-      // caller can detect "there's more than you see".
-      if (options.limit && r.body && typeof r.body === 'object' && Array.isArray((r.body as { keys?: unknown[] }).keys)) {
-        const b = r.body as { keys: unknown[]; total?: number; totalAvailable?: number };
-        const serverTotal = typeof b.total === 'number' ? b.total : b.keys.length;
-        return {
-          ...b,
-          keys: b.keys.slice(0, options.limit),
-          total: Math.min(options.limit, serverTotal),
-          totalAvailable: serverTotal,
-          truncated: serverTotal > options.limit,
-        };
-      }
       return r.body;
     }
 

@@ -16,7 +16,7 @@
 // Do not wrap Notion SDK calls with retry() — it would double the retry time.
 
 import type { StorageAdapter, AdapterCapabilities } from './adapter.ts';
-import type { SearchProvider } from '../types.ts';
+import type { SearchProvider, KeysPageOptions, KeysPage } from '../types.ts';
 import { MemoryBm25SearchProvider } from '../search/memory-bm25-provider.ts';
 import { NotionModernClient } from '../clients/notion/notionModern.ts';
 import type {
@@ -378,14 +378,14 @@ export class NotionDatabaseAdapter implements StorageAdapter {
       const allKeys: string[] = [];
       let hasMore = true;
       let startCursor: string | undefined = undefined;
-      
+
       while (hasMore) {
         const response = await this.client.queryDatabase({
           database_id: this.databaseId,
           start_cursor: startCursor,
           page_size: 100,
         });
-        
+
         // Extract keys from pages
         for (const page of response.results) {
           const key = this.extractKeyFromPage(page as PageObjectResponse);
@@ -393,15 +393,65 @@ export class NotionDatabaseAdapter implements StorageAdapter {
             allKeys.push(key);
           }
         }
-        
+
         hasMore = response.has_more;
         startCursor = response.next_cursor || undefined;
       }
-      
+
       return allKeys;
     } catch (error) {
       console.error('[NotionAdapter] Error listing keys:', error);
       return [];
+    }
+  }
+
+  /**
+   * Paged keys — wraps Notion's native `start_cursor` / `next_cursor`
+   * pagination so callers can stream keys one page at a time instead of
+   * round-tripping the whole database. `cursor` round-trips Notion's
+   * `next_cursor` opaquely. If `offset` is used instead of `cursor`, we
+   * walk forward from the start — safe but O(offset).
+   */
+  async listKeys(options: KeysPageOptions = {}): Promise<KeysPage> {
+    const prefix = options.prefix;
+    const pageSize = Math.min(100, options.limit ?? 100); // Notion max 100
+    const out: string[] = [];
+    let cursor = options.cursor;
+    let hasMore = true;
+    let skipped = 0;
+    const targetOffset = options.offset ?? 0;
+
+    try {
+      while (hasMore && (options.limit === undefined || out.length < options.limit)) {
+        const response = await this.client.queryDatabase({
+          database_id: this.databaseId,
+          start_cursor: cursor,
+          page_size: pageSize,
+        });
+
+        for (const page of response.results) {
+          const key = this.extractKeyFromPage(page as PageObjectResponse);
+          if (!key) continue;
+          if (prefix && !key.startsWith(prefix)) continue;
+          if (skipped < targetOffset && !options.cursor) {
+            skipped++;
+            continue;
+          }
+          out.push(key);
+          if (options.limit !== undefined && out.length >= options.limit) break;
+        }
+
+        hasMore = response.has_more;
+        cursor = response.next_cursor || undefined;
+      }
+      return {
+        keys: out,
+        hasMore: hasMore || (options.limit !== undefined && out.length >= options.limit && !!cursor),
+        ...(cursor ? { cursor } : {}),
+      };
+    } catch (error) {
+      console.error('[NotionAdapter] Error in listKeys:', error);
+      return { keys: [], hasMore: false };
     }
   }
   

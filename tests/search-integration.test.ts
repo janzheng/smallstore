@@ -350,6 +350,34 @@ function createMemoryAdapterWithProvider(provider: any) {
 }
 
 Deno.test({
+  name: 'integration/router-listKeys — paging fallback slices keys() when adapter lacks native paging',
+  ...opts,
+  fn: async () => {
+    const store = createSmallstore({
+      adapters: { memory: createMemoryAdapter() },
+      defaultAdapter: 'memory',
+      metadataAdapter: 'memory',
+    });
+    for (let i = 0; i < 12; i++) {
+      await store.set(`items/${i}`, { i });
+    }
+
+    const page1 = await (store as any).listKeys('items', { limit: 5, offset: 0 });
+    assertEquals(page1.keys.length, 5);
+    assertEquals(page1.hasMore, true);
+    assertEquals(page1.total, 12);
+
+    const page2 = await (store as any).listKeys('items', { limit: 5, offset: 5 });
+    assertEquals(page2.keys.length, 5);
+    assertEquals(page2.hasMore, true);
+
+    const page3 = await (store as any).listKeys('items', { limit: 5, offset: 10 });
+    assertEquals(page3.keys.length, 2);
+    assertEquals(page3.hasMore, false);
+  },
+});
+
+Deno.test({
   name: 'integration/router-search — filter post-filters ranked results (MongoDB-style)',
   ...opts,
   fn: async () => {

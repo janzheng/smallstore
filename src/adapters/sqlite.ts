@@ -15,7 +15,7 @@
 
 import { Database } from 'jsr:@db/sqlite@0.12';
 import type { StorageAdapter, AdapterQueryOptions, AdapterQueryResult } from './adapter.ts';
-import type { AdapterCapabilities, SearchProvider } from '../types.ts';
+import type { AdapterCapabilities, SearchProvider, KeysPageOptions, KeysPage } from '../types.ts';
 import { SqliteFtsSearchProvider } from '../search/sqlite-fts-provider.ts';
 import { debug } from '../utils/debug.ts';
 
@@ -220,6 +220,44 @@ export class SQLiteAdapter implements StorageAdapter {
     } catch (error) {
       console.error(`[SQLiteAdapter] Error listing keys:`, error);
       return [];
+    }
+  }
+
+  /**
+   * Paged keys — uses SQLite's native LIMIT/OFFSET plus a COUNT(*) so the
+   * router can return `total` + `hasMore` without a full key scan.
+   */
+  async listKeys(options: KeysPageOptions = {}): Promise<KeysPage> {
+    try {
+      this.ensureTable();
+      const { prefix, limit, offset } = options;
+
+      // Total matching count (cheap on indexed key column)
+      const totalRow = prefix
+        ? this.db.prepare(`SELECT COUNT(*) AS n FROM "${this.table}" WHERE key LIKE ?`).get(`${prefix}%`) as { n: number }
+        : this.db.prepare(`SELECT COUNT(*) AS n FROM "${this.table}"`).get() as { n: number };
+      const total = totalRow?.n ?? 0;
+
+      const off = Math.max(0, offset ?? 0);
+      // SQLite requires LIMIT when using OFFSET — use -1 for "no limit" semantics.
+      const lim = limit !== undefined ? limit : -1;
+      const rows = prefix
+        ? this.db.prepare(
+            `SELECT key FROM "${this.table}" WHERE key LIKE ? ORDER BY key LIMIT ? OFFSET ?`
+          ).all(`${prefix}%`, lim, off) as Array<{ key: string }>
+        : this.db.prepare(
+            `SELECT key FROM "${this.table}" ORDER BY key LIMIT ? OFFSET ?`
+          ).all(lim, off) as Array<{ key: string }>;
+
+      const keys = rows.map(r => r.key);
+      return {
+        keys,
+        hasMore: off + keys.length < total,
+        total,
+      };
+    } catch (error) {
+      console.error(`[SQLiteAdapter] Error in listKeys:`, error);
+      return { keys: [], hasMore: false, total: 0 };
     }
   }
 

@@ -15,7 +15,7 @@
  */
 
 import type { StorageAdapter } from './adapter.ts';
-import type { AdapterCapabilities, SearchProvider } from '../types.ts';
+import type { AdapterCapabilities, SearchProvider, KeysPageOptions, KeysPage } from '../types.ts';
 import { MemoryBm25SearchProvider } from '../search/memory-bm25-provider.ts';
 
 // ============================================================================
@@ -164,12 +164,12 @@ export class MemoryAdapter implements StorageAdapter {
    */
   async keys(prefix?: string): Promise<string[]> {
     const allKeys = Array.from(this.store.keys());
-    
+
     // Filter by prefix if provided
-    let filteredKeys = prefix
+    const filteredKeys = prefix
       ? allKeys.filter((key) => key.startsWith(prefix))
       : allKeys;
-    
+
     // Filter out expired keys
     const validKeys: string[] = [];
     for (const key of filteredKeys) {
@@ -178,8 +178,24 @@ export class MemoryAdapter implements StorageAdapter {
         validKeys.push(key);
       }
     }
-    
+
     return validKeys;
+  }
+
+  /**
+   * Paged keys — iterates the in-memory Map with offset/limit slicing.
+   * Cheap (already O(n)); implemented so the router can return
+   * `hasMore`/`total` natively without an extra pass.
+   */
+  async listKeys(options: KeysPageOptions = {}): Promise<KeysPage> {
+    const all = await this.keys(options.prefix);
+    const start = Math.max(0, options.offset ?? 0);
+    const end = options.limit !== undefined ? start + options.limit : all.length;
+    return {
+      keys: all.slice(start, end),
+      hasMore: end < all.length,
+      total: all.length,
+    };
   }
   
   /**

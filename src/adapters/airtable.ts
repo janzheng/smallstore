@@ -13,7 +13,7 @@
  */
 
 import type { StorageAdapter, AdapterCapabilities } from './adapter.ts';
-import type { SearchProvider } from '../types.ts';
+import type { SearchProvider, KeysPageOptions, KeysPage } from '../types.ts';
 import { MemoryBm25SearchProvider } from '../search/memory-bm25-provider.ts';
 import { createAirtable, type Airtable } from '../clients/airtable/index.ts';
 import { resolveAirtableEnv } from '../../config.ts';
@@ -426,7 +426,63 @@ export class AirtableAdapter implements StorageAdapter {
       return [];
     }
   }
-  
+
+  /**
+   * Paged keys — wraps Airtable's native `offset` continuation token
+   * (which is confusingly NOT a numeric offset — it's an opaque pointer
+   * returned in each page's response). `options.cursor` round-trips it
+   * opaquely. `options.offset` (numeric) walks forward from the start;
+   * safe but O(offset) in Airtable API calls, so prefer cursor.
+   */
+  async listKeys(options: KeysPageOptions = {}): Promise<KeysPage> {
+    const prefix = options.prefix;
+    const pageSize = Math.min(100, options.limit ?? 100); // Airtable max 100
+    const out: string[] = [];
+    let atCursor = options.cursor;
+    const targetOffset = options.offset ?? 0;
+    let skipped = 0;
+
+    try {
+      while (options.limit === undefined || out.length < options.limit) {
+        const listOpts: ListRecordsOptions = {
+          pageSize,
+          offset: atCursor,
+          fields: [this.keyField],
+        };
+        const response = await this.airtable.records.list(
+          this.baseId,
+          this.tableIdOrName,
+          listOpts,
+        );
+
+        for (const record of response.records) {
+          const key = record.fields[this.keyField];
+          if (typeof key !== 'string') continue;
+          if (prefix && !key.startsWith(prefix)) continue;
+          if (skipped < targetOffset && !options.cursor) {
+            skipped++;
+            continue;
+          }
+          out.push(key);
+          if (options.limit !== undefined && out.length >= options.limit) break;
+        }
+
+        atCursor = response.offset;
+        if (!atCursor) break; // no more pages
+        if (options.limit !== undefined && out.length >= options.limit) break;
+      }
+
+      return {
+        keys: out,
+        hasMore: !!atCursor,
+        ...(atCursor ? { cursor: atCursor } : {}),
+      };
+    } catch (error) {
+      console.error('[AirtableAdapter] Error in listKeys:', error);
+      return { keys: [], hasMore: false };
+    }
+  }
+
   async clear(prefix?: string): Promise<void> {
     try {
       const keys = await this.keys(prefix);

@@ -78,6 +78,10 @@ export interface SmallstoreInstance {
   delete(collectionPath: string): Promise<void>;
   has(collectionPath: string): Promise<boolean>;
   keys(collectionPath: string, prefix?: string): Promise<string[]>;
+  listKeys?(
+    collectionPath: string,
+    options?: { prefix?: string; limit?: number; offset?: number; cursor?: string },
+  ): Promise<{ keys: string[]; hasMore: boolean; cursor?: string; total?: number }>;
   listCollections(pattern?: string): Promise<string[]>;
   getSchema(collection: string): Promise<any>;
   getCollectionMetadata(collection: string): Promise<Record<string, any>>;

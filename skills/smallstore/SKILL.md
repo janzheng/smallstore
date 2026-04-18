@@ -86,12 +86,19 @@ Call mcp__smallstore__sm_delete with collection: "crm/contacts", key: "jan"
 
 ### `sm_list`
 
-List keys in a collection. Optional `limit` and `prefix`.
+List keys in a collection with pagination. Returns `{ keys, hasMore, cursor?, total? }`.
 
 ```
 Call mcp__smallstore__sm_list with collection: "crm/contacts"
 Call mcp__smallstore__sm_list with collection: "docs/inbox", options: { "limit": 50, "prefix": "2026-" }
+
+# Paging through a large collection — pass cursor back for the next page
+Call mcp__smallstore__sm_list with collection: "notion/papers", options: { "limit": 100 }
+# → { keys: [...], hasMore: true, cursor: "abc123" }
+Call mcp__smallstore__sm_list with collection: "notion/papers", options: { "limit": 100, "cursor": "abc123" }
 ```
+
+Paging support is native per adapter when available (Notion page-cursor, Airtable offset, SQLite LIMIT/OFFSET). Other adapters fall back to loading all keys then slicing — still correct, but not a network-cost win.
 
 ### `sm_query`
 
