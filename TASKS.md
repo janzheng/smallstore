@@ -116,17 +116,16 @@ Architecture: `src/mcp-server.ts` calls the running Smallstore HTTP server (star
 
 #### Phase 2: Hub Skill
 
-- [ ] `skills/smallstore/SKILL.md` — skill doc for the hub #skill
-  - [ ] When to use: reading from Notion/Airtable/Sheets/Obsidian directly; migrating between adapters; writing agent output to external services without TigerFlare
-  - [ ] Quick-start: configure `.smallstore.json` mounts, `deno task serve`, use `sm_read`/`sm_write`/`sm_list`
-  - [ ] `sm_sync` pattern: one-liner adapter migration with `dryRun` preview
-  - [ ] Relationship to TigerFlare: peer, not subordinate — TF is memory/filesystem, Smallstore is external service I/O
+- [x] [done: skills/smallstore/SKILL.md, 155 lines, frontmatter + preflight + 7 tool sections + troubleshooting] Skill doc #skill
 - [ ] Sync skill to `~/.claude/skills/` via `hub:sync` #sync
 
 #### Phase 3: Sheetlog convenience
 
-- [ ] `sm_read("sheets", "Sheet1")` just works once sheetlog is mounted in `.smallstore.json` — document the zero-extra-code path #docs
-- [ ] Example `.smallstore.json` for sheetlog + local fallback #example
+- [x] [done: examples/.smallstore.json.example + .sheetlog-docs.md; verified serve.ts loads .smallstore.json via config.ts loadConfig()] Zero-extra-code sheetlog path #docs
+
+#### Phase 1: Testing
+
+- [x] [done: tests/mcp-server.test.ts, 13 tests passing, incl. end-to-end roundtrip against real serve.ts] MCP server test suite #tests
 
 ### Google Sheets CSV adapter (read-only) #google-sheets-csv
 

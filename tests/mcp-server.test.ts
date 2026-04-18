@@ -503,13 +503,21 @@ async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
 }
 
 Deno.test('MCP end-to-end: write → read → delete against live serve.ts', async () => {
-  // Pick a port that's unlikely to collide — random in 20000-40000.
-  const port = 20000 + Math.floor(Math.random() * 20000);
+  // Ask the OS for a free port by binding to 0 and immediately closing.
+  // Small race window, but far less flaky than a random pick.
+  const probe = Deno.listen({ port: 0 });
+  const port = (probe.addr as Deno.NetAddr).port;
+  probe.close();
   const url = `http://localhost:${port}`;
 
-  // Run serve.ts from a tmp cwd so it won't pick up the repo's .smallstore.json
-  // (which pins port 9998 and the "local" preset — would fight with SM_PORT).
+  // Run serve.ts from a tmp cwd with an explicit memory-preset .smallstore.json
+  // so it doesn't fall back to env-discovered adapters (Airtable/Notion etc.
+  // from the parent process's .env, which crash without mappings/introspection).
   const tmpCwd = await Deno.makeTempDir({ prefix: 'smallstore-mcp-e2e-' });
+  await Deno.writeTextFile(
+    `${tmpCwd}/.smallstore.json`,
+    JSON.stringify({ preset: 'memory', port: port }),
+  );
 
   const serveProc = new Deno.Command(Deno.execPath(), {
     args: ['run', '--allow-all', SERVE_ENTRY],
@@ -523,7 +531,14 @@ Deno.test('MCP end-to-end: write → read → delete against live serve.ts', asy
   const mcp = startMcp({ SMALLSTORE_URL: url });
 
   try {
-    await waitForHealth(url, 10000);
+    try {
+      await waitForHealth(url, 30000);
+    } catch (err) {
+      // Dump subprocess output to surface why serve.ts didn't come up.
+      const so = await new Response(serveProc.stdout).text().catch(() => '');
+      const se = await new Response(serveProc.stderr).text().catch(() => '');
+      throw new Error(`${err}\n--- serve.ts stdout ---\n${so}\n--- serve.ts stderr ---\n${se}`);
+    }
 
     const collection = `mcp-e2e-${Date.now()}`;
     const key = 'alpha';
