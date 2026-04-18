@@ -1512,7 +1512,7 @@ export class SmartRouter implements Smallstore {
     const allData: any[] = [];
     
     for (const source of sources) {
-      const data = await this.get(source);
+      const data = await this.get(source, { raw: true });
       if (data) {
         const items = Array.isArray(data) ? data : [data];
         allData.push(...items);
@@ -1579,9 +1579,9 @@ export class SmartRouter implements Smallstore {
     };
     
     debug(`[Smallstore] Slicing "${collectionPath}" [${opts.start}:${opts.end}]...`);
-    
+
     // Get data
-    const data = await this.get(collectionPath);
+    const data = await this.get(collectionPath, { raw: true });
     
     if (!data) {
       throw new Error(`Collection "${collectionPath}" not found`);
@@ -1618,9 +1618,9 @@ export class SmartRouter implements Smallstore {
    */
   async split(collectionPath: string, options: SplitOptions): Promise<void> {
     debug(`[Smallstore] Splitting "${collectionPath}" by "${options.by}"...`);
-    
+
     // Get data
-    const data = await this.get(collectionPath);
+    const data = await this.get(collectionPath, { raw: true });
     
     if (!data) {
       throw new Error(`Collection "${collectionPath}" not found`);
@@ -1675,9 +1675,9 @@ export class SmartRouter implements Smallstore {
    */
   async deduplicate(collectionPath: string, options: DeduplicateOptions): Promise<void> {
     debug(`[Smallstore] Deduplicating "${collectionPath}"...`);
-    
+
     // Get data
-    const data = await this.get(collectionPath);
+    const data = await this.get(collectionPath, { raw: true });
     
     if (!data) {
       throw new Error(`Collection "${collectionPath}" not found`);

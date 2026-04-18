@@ -356,10 +356,10 @@ Tests: `vector-search.test.ts` (25 tests), `tests/search.test.ts`
 
 - [x] [done: 24 mocked tests] Cloudflare adapter integration tests (KV, D1, DO, R2 — currently no dedicated tests) #cf-tests #needs:adapter-interface
 - [x] [done: 7 tests in cloudflare-adapters.test.ts] Unstorage adapter tests #unstorage-tests #needs:unstorage-fix
-- [ ] Search provider tests with real adapters (not just unit tests) #search-integration-tests #needs:search-interface
-- [ ] Router internals tests — cache manager, query engine, external fetcher #router-tests #needs:router-crud
+- [x] [done: 13 tests in search-integration.test.ts; flagged 4 issues — hybridAlpha drop, LocalJson reopen, metadata leak, MemoryAdapter swap] Search provider tests with real adapters #search-integration-tests #needs:search-interface
+- [x] [done: 88 tests across cache-manager/query-engine/external-fetcher.test.ts; flagged 2 bugs — 304 dead code, CacheManager LRU unenforced] Router internals tests #router-tests #needs:router-crud
 - [x] [done: 47 tests per TASKS-TESTS.md] Retriever pipeline tests (6 retrievers, no dedicated tests) #retriever-tests #needs:router-crud
-- [ ] Data ops HTTP endpoint tests (slice/split/deduplicate/merge) #data-ops-tests #needs:data-ops-http
+- [x] [done: 31 tests in data-ops-http.test.ts; exposed + fixed router.ts get() missing {raw:true} on slice/split/deduplicate/merge] Data ops HTTP endpoint tests #data-ops-tests #needs:data-ops-http
 - [x] [done: 21 tests] Materializer tests (currently only exercised via VFS export) #materializer-tests #needs:router-crud
 - [x] [done: 45 tests] Input validation tests #validation-tests #needs:validation
 

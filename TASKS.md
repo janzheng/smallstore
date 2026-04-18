@@ -83,6 +83,18 @@
 - [x] [done: live:notion green after fix] Re-run Notion live adapter tests after JSR publish #validation
 - [x] [done: resolveDataSourceId() in notionModern.ts resolves database_id → data_source_id, cached per client] queryDatabase → queryDataSource migration for multi-source DBs #bug-fix
 
+## Discovered Bugs (2026-04-17)
+
+Surfaced by the Phase 7 testing sweep. Each has a test asserting current (broken) behavior — flip when fixed.
+
+- [x] [fixed: added {raw:true} to src/router.ts:1515/1584/1623/1680 — slice/split/deduplicate/merge now work; 31/31 tests green] `router.get()` unwrapping: data-ops called `get(path)` without `{raw:true}`, got wrapped StorageFileResponse — all 4 endpoints were broken in production #bug-fix
+- [ ] `router.search()` drops `hybridAlpha` in SearchProviderOptions (src/router.ts:1161-1169) — hybrid alpha always uses provider default #bug #router-search
+- [ ] `LocalJsonAdapter` does not rebuild BM25 index on reopen (src/adapters/local-json.ts:46-79) — data persists, index doesn't #bug #local-json
+- [ ] `fetchExternal` 304 Not Modified branch is dead code (src/utils/external-fetcher.ts:94-96) — retryFetch throws HttpError first, conditional-request caching silently fails #bug #external-fetcher
+- [ ] `CacheManager` exposes `evictionPolicy`/`maxCacheSize` but never enforces them — no actual LRU eviction #bug #cache-manager
+- [ ] Router auto-indexing leaks metadata keys (`smallstore:meta:*`, `smallstore:index:*`) into search results — collection filter uses overly-permissive `key.includes(collection)` #bug #router-indexing
+- [ ] `MemoryAdapter._searchProvider` is baked-in — swapping via `Object.defineProperty` doesn't redirect auto-indexing #ergonomics #memory-adapter
+
 ## Dependency Notes
 
 - [*] zod stays on v3 for now — zodex ^0.3.0 (used in coverflow shared/ai/) requires zod 3.x
@@ -104,7 +116,7 @@ Architecture: `src/mcp-server.ts` calls the running Smallstore HTTP server (star
 - [x] [done: src/mcp-server.ts, 7 tools wired, tools/list smoke passes] stdio MCP server using `@modelcontextprotocol/sdk` #mcp-core
 - [x] [done: deno task mcp] deno task entry #task
 - [x] [done: serve.ts adds GET /_adapters + POST /_sync] HTTP endpoints for sm_adapters / sm_sync
-- [ ] Register in `~/.claude.json` under `mcpServers.smallstore` #registration
+- [x] [done: jq patch to ~/.claude.json, all 4 mcpServers now: brigade, deno-hub, smallstore, tigerflare] Register in `~/.claude.json` under `mcpServers.smallstore` #registration
   ```json
   {
     "command": "deno",
@@ -117,7 +129,7 @@ Architecture: `src/mcp-server.ts` calls the running Smallstore HTTP server (star
 #### Phase 2: Hub Skill
 
 - [x] [done: skills/smallstore/SKILL.md, 155 lines, frontmatter + preflight + 7 tool sections + troubleshooting] Skill doc #skill
-- [ ] Sync skill to `~/.claude/skills/` via `hub:sync` #sync
+- [x] [done: copied to mcp-hub/skills/smallstore, hub:sync added it to Claude Code + Cursor + Codex + Agents] Sync skill to `~/.claude/skills/` via `hub:sync` #sync
 
 #### Phase 3: Sheetlog convenience
 
