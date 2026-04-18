@@ -84,6 +84,7 @@ export class NotionModernClient {
   private client: Client;
   private notionVersion: string;
   private autoTransform: boolean;
+  private dataSourceCache: Map<string, string> = new Map();
 
   constructor(options: NotionModernClientOptions = {}) {
     // Resolve API key using helper (supports params > keyResolver > env)
@@ -198,6 +199,32 @@ export class NotionModernClient {
   }
 
   /**
+   * Resolve a database_id to its primary data_source_id (API v2025-09-03+).
+   * In v5, databases are containers holding one or more data sources; queries target
+   * the data source, not the database. For backwards compat we accept a database_id
+   * here and look up its first data source, caching the result.
+   * If the input is already a data_source_id, `databases.retrieve` will 404 — callers
+   * should fall through to the raw-id path in that case.
+   */
+  private async resolveDataSourceId(database_id: string): Promise<string | null> {
+    const cleanId = formatNotionIdWithDashes(database_id);
+    const cached = this.dataSourceCache.get(cleanId);
+    if (cached) return cached;
+
+    try {
+      const db = await this.client.databases.retrieve({ database_id: cleanId }) as NotionApiResponse;
+      const dsId = db.data_sources?.[0]?.id;
+      if (dsId) {
+        this.dataSourceCache.set(cleanId, dsId);
+        return dsId;
+      }
+    } catch {
+      // retrieve failed — likely the caller passed a data_source_id, not a database_id
+    }
+    return null;
+  }
+
+  /**
    * Query a database (uses dataSources.query in API v5+)
    * Note: In Notion API v5+, query moved from databases to dataSources
    * Supports URLs, prefixed IDs, and UUIDs with/without dashes
@@ -217,8 +244,12 @@ export class NotionModernClient {
     const useDataSources = this.notionVersion >= '2025-01-01' && (this.client as any).dataSources?.query;
 
     if (useDataSources) {
+      // v5 split databases (containers) from data sources (tables). Resolve the
+      // database_id to its first data_source_id; fall back to the raw id if the
+      // caller already passed a data_source_id.
+      const dataSourceId = (await this.resolveDataSourceId(cleanId)) ?? cleanId;
       return await (this.client as any).dataSources.query({
-        data_source_id: cleanId,
+        data_source_id: dataSourceId,
         filter: params.filter,
         sorts: params.sorts,
         start_cursor: params.start_cursor,

@@ -1,6 +1,6 @@
 {
   "name": "@yawnxyz/smallstore",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "exports": {
     ".": "./mod.ts",
     "./adapters/memory": "./src/adapters/memory.ts",
@@ -84,9 +84,9 @@
     "test:obsidian:sync": "deno test --no-check --allow-all tests/obsidian-sync.test.ts",
     "live:obsidian-notion": "deno run --allow-all tests/live/obsidian-notion/test.ts",
     "test:sync": "deno test --no-check --allow-all tests/sync-adapters.test.ts",
-    "interview": "deno run --allow-all apps/self-interview/cli.ts",
-    "interview:serve": "deno run --allow-all apps/self-interview/mod.ts",
-    "interview:serve:watch": "deno run --allow-all --watch apps/self-interview/mod.ts",
+    "interview": "deno run --config deno.json --allow-all apps/self-interview/cli.ts",
+    "interview:serve": "deno run --config deno.json --allow-all apps/self-interview/mod.ts",
+    "interview:serve:watch": "deno run --config deno.json --allow-all --watch apps/self-interview/mod.ts",
     "interview:deploy:dev": "cd apps/self-interview && deno deploy --app 'self-interview'",
     "interview:deploy:prod": "cd apps/self-interview && deno deploy --app 'self-interview' --prod"
   },

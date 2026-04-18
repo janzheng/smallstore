@@ -79,15 +79,9 @@
   - [x] Migrate archived → in_trash in all request bodies
   - [x] Update API version from 2022-06-28 to 2025-09-03
   - [x] Update build-npm.ts dependency and mapping versions
-- [ ] Publish updated smallstore to JSR (bump version in deno.json, `deno publish`) #jsr-publish
-  - [*] Current JSR version @yawnxyz/smallstore@0.1.4 still uses v2 SDK
-  - [*] Coverflow imports smallstore from JSR — coverflow's own Notion code is on v5 but JSR smallstore is v2
-- [ ] Re-run Notion live adapter tests after JSR publish #validation
-  - [*] Last pass was on v2 SDK — need to confirm CRUD still works with v5
-- [!] queryDatabase callers may need migration to queryDataSource #discovered
-  - [*] v5 split "databases" (containers) from "data sources" (tables)
-  - [*] Existing queryDatabase calls may fail if Notion workspace uses multi-source databases
-  - [*] notionModern.ts has conditional fallback logic, but adapter.ts uses client.queryDatabase directly
+- [x] [done: @yawnxyz/smallstore@0.1.5 published 2026-04-17] Publish updated smallstore to JSR #jsr-publish
+- [x] [done: live:notion green after fix] Re-run Notion live adapter tests after JSR publish #validation
+- [x] [done: resolveDataSourceId() in notionModern.ts resolves database_id → data_source_id, cached per client] queryDatabase → queryDataSource migration for multi-source DBs #bug-fix
 
 ## Dependency Notes
 
@@ -98,6 +92,64 @@
   - [*] When zod 4 migration happens, smallstore's Zod schemas will need updating too
 
 ## Future
+
+### MCP Server + Skill #mcp-server
+
+Give Claude Code direct access to any Smallstore adapter — read, write, list, query, and sync — without going through TigerFlare. Smallstore becomes a first-class MCP tool peer to TigerFlare: TF for agent filesystem/memory, Smallstore for external service I/O.
+
+Architecture: `src/mcp-server.ts` calls the running Smallstore HTTP server (started via `deno task serve`). Config via `.smallstore.json` mounts determines which adapter each collection hits. A hub skill (`smallstore`) gives agents a documented entry point.
+
+#### Phase 1: MCP Server
+
+- [ ] `src/mcp-server.ts` — stdio MCP server using `@modelcontextprotocol/sdk` #mcp-core
+  - [ ] `sm_read(collection, key)` — GET a single record from any mounted adapter
+  - [ ] `sm_write(collection, key, data)` — PUT a record (pass as JSON object)
+  - [ ] `sm_delete(collection, key)` — DELETE a record
+  - [ ] `sm_list(collection, options?)` — list keys in a collection (optional limit/prefix)
+  - [ ] `sm_query(collection, filter)` — filter records by field values (maps to Smallstore query engine)
+  - [ ] `sm_sync(source_collection, target_collection, options?)` — copy/migrate between two mounted adapters (wraps `syncAdapters()`)
+  - [ ] `sm_adapters()` — list configured adapters and mounts (for agent orientation)
+  - [ ] Env vars: `SMALLSTORE_URL` (default `http://localhost:9998`), `SMALLSTORE_TOKEN`
+- [ ] `deno task mcp` entry in `deno.json` #task
+- [ ] Register in `~/.claude.json` under `mcpServers.smallstore` #registration
+  ```json
+  {
+    "command": "deno",
+    "args": ["run", "--allow-net", "--allow-read", "--allow-env",
+             "/path/to/smallstore/src/mcp-server.ts"],
+    "env": { "SMALLSTORE_URL": "http://localhost:9998" }
+  }
+  ```
+
+#### Phase 2: Hub Skill
+
+- [ ] `skills/smallstore/SKILL.md` — skill doc for the hub #skill
+  - [ ] When to use: reading from Notion/Airtable/Sheets/Obsidian directly; migrating between adapters; writing agent output to external services without TigerFlare
+  - [ ] Quick-start: configure `.smallstore.json` mounts, `deno task serve`, use `sm_read`/`sm_write`/`sm_list`
+  - [ ] `sm_sync` pattern: one-liner adapter migration with `dryRun` preview
+  - [ ] Relationship to TigerFlare: peer, not subordinate — TF is memory/filesystem, Smallstore is external service I/O
+- [ ] Sync skill to `~/.claude/skills/` via `hub:sync` #sync
+
+#### Phase 3: Sheetlog convenience
+
+- [ ] `sm_read("sheets", "Sheet1")` just works once sheetlog is mounted in `.smallstore.json` — document the zero-extra-code path #docs
+- [ ] Example `.smallstore.json` for sheetlog + local fallback #example
+
+### Google Sheets CSV adapter (read-only) #google-sheets-csv
+
+Read-only adapter for public/shared Google Sheets without OAuth or Apps Script. Fetches the published CSV export URL (`https://docs.google.com/spreadsheets/d/.../export?format=csv`), parses it into key/value records, and exposes the standard IAdapter interface. Writes throw immediately.
+
+Use case: TigerFlare routes `/sheets/*` → this adapter via the bridge, so agents can `tf_read` shared spreadsheet data without credentials. Distinct from the sheetlog adapter (which requires Apps Script and supports writes).
+
+- [ ] `src/adapters/google-sheets-csv.ts` — `GoogleSheetsCsvAdapter` class #adapter
+  - [ ] Constructor: `{ url: string; keyColumn?: string; refreshMs?: number }` — `url` is the CSV export link, `keyColumn` names the field to use as the record key (defaults to row index), `refreshMs` for optional TTL cache
+  - [ ] `get(key)` — fetch + parse CSV, return matching row as object
+  - [ ] `list()` / `keys()` — return all row keys
+  - [ ] `set()` / `delete()` — throw `ReadOnlyError`
+  - [ ] Cache last fetch result in memory for `refreshMs` ms to avoid hammering the URL on every call
+- [ ] Add to `mod.ts` exports #exports
+- [ ] `tests/google-sheets-csv.test.ts` — unit tests with a mock CSV fetch (no live credentials needed) #tests
+- [ ] Document in README under adapters table #docs
 
 - [ ] Publish to npm (`deno task build:npm && cd dist && npm publish`) #npm-publish
 - [ ] Test and validate npm build works in Node.js projects #npm-validate
