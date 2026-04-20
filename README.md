@@ -255,11 +255,35 @@ All paths are prefix-relative to wherever you mount the router (e.g. `/api` abov
 | POST | `/:collection/signed-upload` | Get a presigned upload URL |
 | POST | `/:collection/signed-download` | Get a presigned download URL |
 
+**Server-level routes (added by `serve.ts`, not part of `createHonoRoutes`):**
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/` | Server info (adapters, mounts, endpoint map) |
+| GET | `/health` | Health check (unauthenticated) |
+| GET | `/_adapters` | List adapters + capabilities (auth gated) |
+| POST | `/_sync` | Trigger an adapter sync (auth gated) |
+| GET | `/_sync/jobs` | List recent sync jobs (auth gated) |
+| GET | `/_sync/jobs/:id` | Read a sync job's status (auth gated) |
+
+**Auth:** `SMALLSTORE_TOKEN` env var gates `/_adapters` and `/_sync*` (bearer token). Set it in the serve environment to require auth on those endpoints.
+
+### Request body envelope
+
+Writes (POST / PUT / PATCH at `/:collection/*`) expect a JSON envelope:
+
+```json
+{ "data": <the-actual-value> }
+```
+
+Naked bodies return `{ "error": "BadRequest", "message": "Request body must contain \"data\" field" }`. This applies across all write routes.
+
 ### Running the server
 
 ```bash
-deno task serve   # Hono on :9999, config from .smallstore.json
+deno task serve   # starts on the port in .smallstore.json (default 9999; this repo ships 9998)
 ```
+
+Server mounts `createHonoRoutes` under `/api` by default (see `serve.ts`). So the collection-CRUD routes above are actually reachable at `/api/:collection`, the presigned routes at `/api/:collection/signed-upload`, etc. The server-level routes (`/health`, `/_adapters`, `/_sync*`) sit at the root.
 
 Config file supports `mounts:` pattern → adapter routing.
 
