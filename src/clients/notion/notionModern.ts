@@ -480,15 +480,34 @@ export class NotionModernClient {
   }
 
   /**
-   * Append children to a block
+   * Append children to a block.
+   *
+   * Accepts either:
+   * - `after: string` — legacy block-id form (deprecated in SDK v5 but still works)
+   * - `position: { type: "after_block", after_block: { id } } | { type: "start" } | { type: "end" }`
+   *   — v5 form, more expressive (start/end options)
+   *
+   * If both are supplied, `position` wins. Positioning only applies to the
+   * first batch when chunking; subsequent batches append to the end naturally.
    */
   async appendBlockChildren(params: {
     block_id: string;
     children: any[];
     after?: string;
+    position?:
+      | { type: "after_block"; after_block: { id: string } }
+      | { type: "start" }
+      | { type: "end" };
   }): Promise<QueryDataSourceResponse> {
     const blockId = formatNotionIdWithDashes(params.block_id);
     const afterId = params.after ? formatNotionIdWithDashes(params.after) : undefined;
+    const cleanedPosition = params.position?.type === "after_block"
+      ? { type: "after_block" as const, after_block: { id: formatNotionIdWithDashes(params.position.after_block.id) } }
+      : params.position;
+
+    const firstPositionArg: Record<string, unknown> = {};
+    if (cleanedPosition) firstPositionArg.position = cleanedPosition;
+    else if (afterId) firstPositionArg.after = afterId;
 
     // Notion API limit: max 100 blocks per append call
     const NOTION_BLOCK_LIMIT = 100;
@@ -496,21 +515,20 @@ export class NotionModernClient {
       const response = await this.client.blocks.children.append({
         block_id: blockId,
         children: params.children,
-        after: afterId,
-      });
+        ...firstPositionArg,
+      } as any);
       return response as any;
     }
 
-    // Split into chunks of 100
+    // Split into chunks of 100 — position/after only applies to the first batch
     let lastResponse: any;
     for (let i = 0; i < params.children.length; i += NOTION_BLOCK_LIMIT) {
       const batch = params.children.slice(i, i + NOTION_BLOCK_LIMIT);
       lastResponse = await this.client.blocks.children.append({
         block_id: blockId,
         children: batch,
-        // Only use 'after' for the first batch
-        ...(i === 0 && afterId ? { after: afterId } : {}),
-      });
+        ...(i === 0 ? firstPositionArg : {}),
+      } as any);
     }
     return lastResponse as any;
   }

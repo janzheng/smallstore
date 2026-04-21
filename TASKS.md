@@ -71,7 +71,7 @@
 - [x] [fixed: PIPELINE_DO → COVERFLOW_DO in types.ts, do-handler.ts, index.ts] DO binding name mismatch in coverflow-workers #bug-fix
 - [x] [done: all 7 DO checks pass — SET, GET, HAS, KEYS, DELETE, CLEAR, CAPABILITIES] Cloudflare DO adapter live and tested #validation
 
-## Notion SDK v5 Migration (2026-04-06)
+## Notion SDK v5 Migration (2026-04-06 → 2026-04-21)
 
 - [x] [done: f3d3581] Bump @notionhq/client from ^2.3.0 to ^5.16.0
   - [x] Replace hardcoded npm:@notionhq/client@^2.0.0 with bare specifiers
@@ -82,6 +82,7 @@
 - [x] [done: @yawnxyz/smallstore@0.1.5 published 2026-04-17] Publish updated smallstore to JSR #jsr-publish
 - [x] [done: live:notion green after fix] Re-run Notion live adapter tests after JSR publish #validation
 - [x] [done: resolveDataSourceId() in notionModern.ts resolves database_id → data_source_id, cached per client] queryDatabase → queryDataSource migration for multi-source DBs #bug-fix
+- [x] [done: 2026-04-21 — added `position` param to appendBlockChildren alongside `after`; supports `{type: "after_block"} | {type: "start"} | {type: "end"}` shape; positioning only applies to first batch when chunking. Mirrors coverflow change on the same day. 810/810 tests green] `after` → `position` forward-compat for SDK v5 deprecation #forward-compat
 
 ## Done This Session (2026-04-17 → 2026-04-18)
 
@@ -166,11 +167,12 @@ Surfaced by the Phase 7 testing sweep. Each has a test asserting current (broken
 
 ## Dependency Notes
 
-- [*] zod stays on v3 for now — zodex ^0.3.0 (used in coverflow shared/ai/) requires zod 3.x
-  - [*] zodex 4.x requires zod ^4.0 as peer dep — they must upgrade together
-  - [*] zod 4 has breaking API changes across 598+ files in coverflow
-  - [*] @notionhq/client v5 and @modelcontextprotocol/sdk v1.29 both accept zod ^3.25 || ^4.0 — no forced upgrade
-  - [*] When zod 4 migration happens, smallstore's Zod schemas will need updating too
+- [*] **Zod 4 migration shipped in coverflow on 2026-04-20** (`coverflow-v3` commits `2b9f8c04` + `c37d9722` + `36546951`). Smallstore is unaffected — grep confirms zero zod imports in `src/`. The "smallstore Zod schemas need updating too" note from the original v3-vs-v4 standoff turned out to be moot.
+- [*] **Notion v5 cleanup learnings from coverflow** (cross-reference `/Users/janzheng/Desktop/Projects/_deno/coverflow/coverflow-v3` Archive section in TASKS.md):
+  - The SDK v5 `after` param on `blocks.children.append` is `@deprecated` in types but still accepts at runtime. Coverflow added `position` support alongside `after` — same change applied here on 2026-04-21
+  - Coverflow had a dead `shared/notion/api/` wrapper directory (13 files, zero imports) that hard-coded a v4-only `databases.query` call. Worth a periodic grep here for similar abandoned wrappers — they'd silently break a future bump
+  - Coverflow's `notionModern.queryDatabase()` uses dataSources.query exclusively. Smallstore's version is more sophisticated — has SDK v4 fallback + raw HTTP fallback for older API versions. Keep the smallstore approach
+- [*] @notionhq/client v5 and @modelcontextprotocol/sdk v1.29 both accept zod ^3.25 || ^4.0 — no forced upgrade if smallstore ever does add zod schemas
 
 ## Future
 
