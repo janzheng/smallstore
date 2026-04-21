@@ -89,6 +89,23 @@ export interface StorageAdapter {
    */
   query?(options: AdapterQueryOptions): Promise<AdapterQueryResult>;
 
+  /**
+   * Non-destructive append (optional).
+   *
+   * Adapters whose native shape is an append-log (Sheetlog, audit tables,
+   * event streams) can implement this to provide a non-destructive
+   * alternative to `set()`. The KV-shaped `set(key, value)` semantics
+   * force "replace whole collection" behavior for such adapters; `append`
+   * escapes that. Router calls this when `smallstore.append()` is used.
+   *
+   * Implementations should NOT read-modify-write the existing collection;
+   * they should append items directly to the underlying store.
+   *
+   * @param items - Single item or array of items to append
+   * @returns Adapter-defined response (usually includes a count or ids)
+   */
+  append?(items: any[] | Record<string, any>): Promise<any>;
+
   /** Optional search provider for full-text/vector/hybrid search */
   readonly searchProvider?: SearchProvider;
 }

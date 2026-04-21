@@ -156,10 +156,30 @@ export class SheetlogAdapter implements StorageAdapter {
     // Use dynamic post to create columns as needed
     await this.client.dynamicPost(items);
   }
-  
+
+  /**
+   * Append rows without overwriting the rest of the sheet.
+   *
+   * This is the non-destructive alternative to `set()`. While `set()` is
+   * forced into "replace whole collection" semantics by the KV shape of
+   * the adapter interface, `append()` maps directly to sheetlog's
+   * `DYNAMIC_POST` primitive — the same primitive the bookmarklet uses.
+   *
+   * @param items - Array of row objects to append (or a single object)
+   * @returns The raw sheetlog response, including any auto-generated `_id`s
+   *          (from sheetlog v0.1.17+ — older deploys return just `{status: 201}`)
+   */
+  async append(items: any[] | Record<string, any>): Promise<any> {
+    const payload = Array.isArray(items) ? items : [items];
+    if (payload.length === 0) {
+      return { status: 200, data: { message: "No items to append", count: 0 } };
+    }
+    return await this.client.dynamicPost(payload);
+  }
+
   /**
    * Delete value by key
-   * 
+   *
    * Clears entire sheet.
    * 
    * @param key - Storage key (ignored)

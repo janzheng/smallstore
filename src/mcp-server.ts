@@ -208,6 +208,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'sm_append',
+    description: 'Non-destructive append to a collection. Use this instead of sm_write when the adapter is append-log-shaped (Sheetlog, Google Sheets, audit logs). Unlike sm_write — which for these adapters is a destructive wipe-and-replace because of the sheet-as-array KV shape — sm_append maps to the adapter\'s native append primitive. Returns 501 NotImplemented for adapters without native append. For Sheetlog, pass items with matching column keys; auto-generated `_id` is included in the response (server-side assignment in sheetlog v0.1.17+).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: { type: 'string', description: 'Collection name (or collection/sub-path). For Sheetlog mounts, this is the adapter mount path (e.g. "sheets/Sheet1").' },
+        items: {
+          description: 'Single row object or array of row objects. Keys should match the sheet column headers; missing headers are filled with empty. Sheetlog will auto-generate `_id` if the `_id` column exists and the payload omits it.',
+        },
+      },
+      required: ['collection', 'items'],
+    },
+  },
+  {
     name: 'sm_delete',
     description: 'Delete a record at collection/key.',
     inputSchema: {
@@ -354,6 +368,15 @@ async function callTool(name: string, args: Args): Promise<unknown> {
       const key = requireString(args, 'key');
       const r = await http('DELETE', encodeCollectionKey(collection, key));
       if (!r.ok) throw new Error(formatHttpError('sm_delete failed', r));
+      return r.body;
+    }
+
+    case 'sm_append': {
+      const collection = requireString(args, 'collection');
+      validateCollection(collection);
+      if (!('items' in args)) throw new Error('sm_append requires an "items" argument (single object or array)');
+      const r = await http('POST', `/api/${encodeURIComponent(collection)}/append`, { items: args.items });
+      if (!r.ok) throw new Error(formatHttpError('sm_append failed', r));
       return r.body;
     }
 

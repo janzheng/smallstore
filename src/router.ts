@@ -651,6 +651,76 @@ export class SmartRouter implements Smallstore {
   }
 
   /**
+   * Non-destructive append to collection.
+   *
+   * Forwards to the adapter's native `append()` when available (Sheetlog,
+   * audit logs, append-shaped stores). For adapters without native append,
+   * throws UnsupportedOperationError — callers should use `set()` with
+   * `mode: 'append'` for read-modify-write semantics, which is inappropriate
+   * for large collections.
+   *
+   * Unlike `set()`, this does NOT read existing data or wipe-and-replace.
+   * It forwards items directly to the adapter. Used by the HTTP
+   * `POST /api/:collection/append` route and the `sm_append` MCP tool.
+   *
+   * @param collectionPath - Collection or collection/sub-path
+   * @param items - Single item or array of items to append
+   * @returns Adapter-defined response
+   */
+  async append(collectionPath: string, items: any | any[]): Promise<any> {
+    if (!collectionPath || typeof collectionPath !== 'string' || collectionPath.trim() === '') {
+      throw new Error('Key must be a non-empty string');
+    }
+
+    const parsed = parsePath(collectionPath);
+    const fullPath = [parsed.collection, ...parsed.path].join('/');
+
+    // Append-specific mount resolution. Mount patterns like "yawnxyz/*" are
+    // intended to claim the entire "yawnxyz" collection — including the bare
+    // form (no sub-path), since append targets the collection as a whole.
+    // routeData's existing pattern match requires a trailing segment, which
+    // fails for bare collection paths; we relax that here. Only applied to
+    // append so set/get semantics stay untouched.
+    const routingRules = this.config.routing || {};
+    const mountRules: Record<string, { adapter: string }> = {};
+    if (this.config.mounts) {
+      for (const [pattern, adapter] of Object.entries(this.config.mounts)) {
+        mountRules[pattern] = { adapter };
+      }
+    }
+    const combinedRules = { ...mountRules, ...routingRules };
+
+    const matchedName =
+      this.matchRoutingPattern(fullPath, combinedRules) ||
+      this.matchRoutingPattern(parsed.collection, combinedRules) ||
+      // Bare collection "yawnxyz" matches mount pattern "yawnxyz/*"
+      // by appending a trailing slash before the match test.
+      this.matchRoutingPattern(parsed.collection + '/', combinedRules);
+
+    const adapterName = matchedName || this.defaultAdapter;
+    const adapter = this.adapters[adapterName];
+    if (!adapter) {
+      throw new Error(`Adapter "${adapterName}" not found`);
+    }
+
+    if (typeof adapter.append !== 'function') {
+      throw new UnsupportedOperationError(
+        `Adapter "${adapterName}" does not support native append. ` +
+        `Use set() with mode: 'append' for read-modify-write semantics (not recommended for large collections).`,
+      );
+    }
+
+    const result = await adapter.append(items);
+
+    // Mirror set()'s cache invalidation behavior so reads reflect the append
+    if (this.config.caching?.autoInvalidate && this.cacheManager.isEnabled()) {
+      await this.cacheManager.clearCollection(parsed.collection);
+    }
+
+    return result;
+  }
+
+  /**
    * Delete data from collection path
    */
   async delete(collectionPath: string): Promise<void> {

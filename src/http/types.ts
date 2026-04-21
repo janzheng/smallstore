@@ -88,6 +88,7 @@ export interface SmallstoreInstance {
   setCollectionMetadata(collection: string, metadata: Record<string, any>): Promise<void>;
   search(collectionPath: string, options: any): Promise<any[]>;
   query?(collectionPath: string, options?: any): Promise<any>;
+  append?(collectionPath: string, items: any | any[]): Promise<any>;
 
   // Namespace operations
   listNamespaces?(parentPath?: string): Promise<string[]>;

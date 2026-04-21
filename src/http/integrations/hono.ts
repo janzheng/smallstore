@@ -368,7 +368,12 @@ export function createHonoRoutes(
     };
   };
 
-  // POST (append) to collection or path
+  // POST /:collection/append — native non-destructive append.
+  // Routed BEFORE the generic POST /:collection handler so Hono matches
+  // the more-specific path first.
+  app.post(`${prefix}/:collection/append`, wrap(handlers.handleAppend));
+
+  // POST (append via set+mode) to collection or path
   app.post(`${prefix}/:collection`, wrap(handlers.handleSet));
   app.post(`${prefix}/:collection/*`, async (c: Context) => {
     return (await wrapWrite(c))();

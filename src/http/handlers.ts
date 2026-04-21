@@ -244,6 +244,81 @@ export async function handleSet(
 }
 
 // ============================================================================
+// Append Operations
+// ============================================================================
+
+/**
+ * Non-destructive append to a collection.
+ * POST /:collection/append
+ *
+ * Forwards to the adapter's native `append()` when available (Sheetlog,
+ * audit logs, append-shaped stores). Unlike POST /:collection (which is
+ * `handleSet` with `mode: 'append'` — read-modify-write semantics that
+ * destructively replace the stored value), this maps directly to the
+ * adapter's native append primitive. Required for adapters where
+ * read-modify-write is inappropriate (e.g. a 7k-row Google Sheet).
+ *
+ * Request body: { items: any | any[] }  — single item or array.
+ *
+ * Responses:
+ *   201 Created  — items accepted (body includes adapter response)
+ *   400          — body missing "items"
+ *   501          — adapter does not support native append
+ */
+export async function handleAppend(
+  request: SmallstoreRequest,
+  smallstore: SmallstoreInstance
+): Promise<SmallstoreResponse> {
+  try {
+    const collection = request.params.collection;
+    if (!collection) {
+      return createErrorResponse(400, 'BadRequest', 'Collection name is required');
+    }
+
+    const body = request.body;
+    if (!body || typeof body !== 'object' || !('items' in body)) {
+      return createErrorResponse(
+        400,
+        'BadRequest',
+        'Request body must contain "items" field (single object or array)'
+      );
+    }
+
+    const fullPath = request.params.path
+      ? `${collection}/${request.params.path}`
+      : collection;
+
+    const result = await smallstore.append(fullPath, (body as any).items);
+
+    return createSuccessResponse(
+      {
+        success: true,
+        collection,
+        path: request.params.path || '',
+        result,
+      },
+      201
+    );
+  } catch (error: any) {
+    console.error('[SmallstoreHandler] Error appending to collection:', error);
+    if (error instanceof UnsupportedOperationError) {
+      return createErrorResponse(
+        501,
+        'NotImplemented',
+        error.message,
+        { collection: request.params.collection }
+      );
+    }
+    return createErrorResponse(
+      500,
+      'InternalServerError',
+      'Failed to append to collection',
+      { collection: request.params.collection }
+    );
+  }
+}
+
+// ============================================================================
 // Delete Operations
 // ============================================================================
 
