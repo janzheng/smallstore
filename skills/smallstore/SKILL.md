@@ -136,13 +136,19 @@ Call mcp__smallstore__sm_sync_jobs
 # → { jobs: [...] }  # recent runs, newest first — useful for post-mortem
 ```
 
-### `sm_write` append pattern
+### `sm_append` (non-destructive append — sheetlog-style adapters)
 
-To append to a sheet/log instead of overwriting, write to a unique key (e.g. timestamp) under the same collection:
+Append items to a log-shaped collection without wiping what's there. `sm_write` on sheetlog is destructive (overwrites the whole tab); `sm_append` is the safe path for adding rows.
 
 ```
-Call mcp__smallstore__sm_write with collection: "logs/events", key: "2026-04-17T12:34:56Z", data: { "type": "deploy", "ref": "main" }
+Call mcp__smallstore__sm_append with collection: "sheets/Sheet1", items: [
+  { "url": "https://example.com", "title": "Example", "date": "2026-04-21 10:00:00" }
+]
 ```
+
+- `items` is a single object or an array of objects.
+- On sheetlog, if the tab has an `_id` column and the payload omits it, the Apps Script auto-generates one and returns the assigned id(s) in `_ids: [...]`.
+- Returns 501 if the target adapter doesn't implement a native `append()` — currently only `SheetlogAdapter` does. For other adapters, write with a unique key via `sm_write` (e.g. `sm_write("logs/events", "2026-04-17T12:34:56Z", {...})`).
 
 ## Relationship to TigerFlare
 
@@ -164,7 +170,7 @@ They can be combined: use TigerFlare to stage drafts, then `sm_write` to publish
 - **Adapter listed but calls fail with auth errors** — env vars missing when the server started. Check `.env` at the server's working directory matches `docs/user-guide/env-vars.md` (e.g. `SM_NOTION_SECRET`, `SM_NOTION_DATABASE_ID`, `SM_SHEET_URL`, `SM_AIRTABLE_API_KEY`). Restart the server after updating `.env`.
 - **Write succeeded but nothing in Notion/Airtable** — check `sm_adapters` mounts: the collection probably routed to the default adapter, not the external one. Add a mount like `"docs/*": "notion"`.
 - **Port mismatch** — `SMALLSTORE_URL` in the MCP server env must match the port in `.smallstore.json` or `SM_PORT`. Repo default: `9998`. Bare default: `9999`.
-- **Sheetlog writes look wrong** — sheet-as-array pattern overwrites the whole tab on `set`. To append rows, use distinct keys per row or use the append-friendly pattern above.
+- **Sheetlog `sm_write` wiped the sheet** — the sheetlog adapter implements `set()` as a destructive replace (bulk-delete + insert). Use `sm_append` instead for row-by-row logging. Key-per-row with `sm_write` does NOT append — the key is ignored and the whole tab is still rewritten.
 
 ## Gotchas
 

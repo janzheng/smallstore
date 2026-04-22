@@ -37,6 +37,13 @@ export interface SheetlogOptions {
   sheetUrl?: string;
   method?: string;
   key?: string;
+  /**
+   * For DELETE / BULK_DELETE: treat the supplied id/ids as `_id` column
+   * values (resolved to row-numbers server-side via `findRowIndexById`).
+   * Default `false` — id/ids are interpreted as 1-indexed row numbers.
+   * Requires the sheetlog Apps Script deploy from 2026-04-21 or later.
+   */
+  byId?: boolean;
   [key: string]: any;
 }
 
@@ -210,6 +217,17 @@ export class Sheetlog {
 
   /**
    * DELETE - Remove row
+   *
+   * By default `id` is a 1-indexed row number. Pass `byId: true` in options
+   * to treat `id` as an `_id` column value instead (resolved to a row number
+   * on the server via `findRowIndexById`).
+   *
+   * @example
+   * // Delete row 5
+   * await client.delete(5);
+   *
+   * // Delete the row whose `_id` column equals 1695394251
+   * await client.delete(1695394251, { byId: true });
    */
   async delete(id: number, options: SheetlogOptions = {}): Promise<any> {
     return this.log({}, { ...options, method: "DELETE", id });
@@ -245,6 +263,17 @@ export class Sheetlog {
 
   /**
    * BULK_DELETE - Delete multiple rows
+   *
+   * By default `ids` are 1-indexed row numbers. Pass `byId: true` in options
+   * to treat each entry as an `_id` column value instead (server resolves
+   * each to a row number via `findRowIndexById`; returns `{deleted, notFound}`).
+   *
+   * @example
+   * // Delete rows 3, 7, 12
+   * await client.bulkDelete([3, 7, 12]);
+   *
+   * // Delete the rows whose `_id` values match
+   * await client.bulkDelete([1695394251, 3593343020], { byId: true });
    */
   async bulkDelete(ids: number[], options: SheetlogOptions = {}): Promise<any> {
     return this.log({}, { ...options, method: "BULK_DELETE", ids });
