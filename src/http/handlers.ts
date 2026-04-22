@@ -288,6 +288,14 @@ export async function handleAppend(
       ? `${collection}/${request.params.path}`
       : collection;
 
+    if (typeof smallstore.append !== 'function') {
+      return createErrorResponse(
+        501,
+        'NotImplemented',
+        'This smallstore instance does not expose append()',
+        { collection }
+      );
+    }
     const result = await smallstore.append(fullPath, (body as any).items);
 
     return createSuccessResponse(

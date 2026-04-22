@@ -705,8 +705,10 @@ export class SmartRouter implements Smallstore {
 
     if (typeof adapter.append !== 'function') {
       throw new UnsupportedOperationError(
-        `Adapter "${adapterName}" does not support native append. ` +
-        `Use set() with mode: 'append' for read-modify-write semantics (not recommended for large collections).`,
+        adapterName,
+        'append',
+        `Adapter "${adapterName}" does not support native append.`,
+        `set() with mode: 'append' for read-modify-write semantics (not recommended for large collections)`,
       );
     }
 
