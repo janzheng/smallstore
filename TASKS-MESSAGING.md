@@ -139,6 +139,27 @@ Expose Inbox operations via MCP so agents can read inboxes without local install
 - [ ] MCP tools: `sm_outbox_send`, `sm_outbox_status`, `sm_outbox_list`, `sm_outbox_cancel`, `sm_outbox_history`, `sm_messaging_respond` (sugar: read inbox item + LLM callback + enqueue with `reply_to` + `idempotency_key`) #outbox #mcp
 - [ ] Webhook output channel — `cf-webhook-out` — generic POST with retry policy. Useful for Slack, Discord, generic webhooks #outbox #channel-webhook-out
 
+### Mailroom pipeline — policy layer on top of messaging primitives
+
+Design brief: `.brief/mailroom-pipeline.md` (written 2026-04-24 after user raised the channel-vs-system question).
+
+Mailroom = receive via channels → classify → fan out to **sinks** (not locked to Inbox/adapter). Policy stack: regex filtering, rules engine, sender index, FTS5 (D1-only), spam layers, unsubscribe, quarantine. Library primitives stay in smallstore; deploy/app can fork to `_deno/apps/mailroom/` when it outgrows one-channel-one-sink.
+
+Commitment-ordered build queue — #0 is the refactor that unlocks everything else:
+
+- [?] **Sink abstraction + email-handler refactor.** Replace "for each inbox in registry, inbox.append(item)" with `Sink = (item, ctx) => Promise<SinkResult>`. `inboxSink(inbox)`, `httpSink({url,token})`, `functionSink(fn)`, `fileSink({path})`. Registry entries become `{ channel, sinks: [...], rules: [...] }` instead of locked-to-adapter. Behavior-preserving refactor. **Unblocks:** tigerflare-bridge via httpSink, file-bridge for `__resources/collections/mailroom/`, fan-out without multiple Inbox registrations. #messaging #mailroom-sinks #needs-before:mailroom-pipeline
+- [?] FTS5 + D1 messaging mode — `cloudflareD1({ messaging: true })` triggers schema migration to proper `messaging_items` table + `items_fts` virtual table + triggers. Only activates per-adapter; other sinks fall through to substring scan. #messaging #mailroom-fts5
+- [?] Sender index — `senders(address PK, display_name, first_seen, last_seen, count, spam_count, tags, list_unsubscribe_url)`. Upserted in postClassify hook. **Must not require D1** — use a smallstore adapter (recursive). #messaging #mailroom-sender-index
+- [?] Header-based classifier — emit standard labels (newsletter/bounce/auto-reply/list-unsubscribe) from `List-Unsubscribe`, `Auto-Submitted`, `Precedence`, `Return-Path`. Pure read, no extra dep. #messaging #mailroom-classifier
+- [?] Hook interface in pipeline — `{ preIngest, postClassify, postStore }` per inbox config. `(item, ctx) => 'drop' | 'quarantine' | item`. Commitment point where the pipeline becomes opinionated. #messaging #mailroom-hooks #needs:mailroom-sinks
+- [?] Regex operator in filter.ts + filter-spec — extend `InboxFilter` with `_regex` suffix on field keys + `present`/`absent` for header existence. Requires cf-email to preserve full `fields.headers`. #messaging #mailroom-regex
+- [?] Rules table + runtime-editable rules — pluggable source (D1 row / YAML file / JS array). `{id, inbox, priority, filter_spec, action, action_args}`. Core rules live in code; user rules extend. #messaging #mailroom-rules #needs:mailroom-regex
+- [?] Unsubscribe surface — detect `List-Unsubscribe`/`List-Unsubscribe-Post` on ingest, store on sender row. `sm_inbox_unsubscribe(inbox, sender)` MCP + HTTP — one-click HTTPS, mailto fallback via outbox, tag sender `unsubscribed`. Don't auto-drop future mail; tag only. #messaging #mailroom-unsubscribe #needs:mailroom-sender-index
+- [?] Spam layers (non-LLM, composed as preIngest rules) — (1) regex blocklist terminal drop→quarantine, (2) header heuristics, (3) sender reputation `spam_count/count > 0.5 && count ≥ 3`, (4) content hash dedup. LLM classifier deferred as optional layer 5. #messaging #mailroom-spam #needs:mailroom-rules #needs:mailroom-sender-index
+- [?] Quarantine sub-inbox + restore surface — dropped items land in `mailroom-quarantine` sink (never silently lost). `sm_inbox_restore(sender, id)` moves back to main. Store-first over filter-first is the explicit choice. #messaging #mailroom-quarantine #needs:mailroom-sinks
+
+Extraction to `_deno/apps/mailroom/` triggers when: multiple channels × multiple sinks × opinionated policy. Not today. See brief for the extraction plan.
+
 ### email() handler enhancements
 
 - [?] **Per-address routing in `email()` handler.** Today, `email-handler.ts` `findByChannel('cf-email')` returns ALL inboxes registered for `cf-email` and ingests the same parsed item into every one (intentional fan-out). To support multi-inbox-per-channel by address (e.g. `mailroom@labspace.ai → mailroom`, `support@labspace.ai → support`), the handler needs to filter by `msg.to` (envelope_to) against either an inbox's `channel_config.address` OR a new `routes:` array on the inbox config. **Triggered by:** tigerflare bridge activation (see `_deno/apps/tigerflare/.brief/smallstore-bridge-activation.md`) OR any time we want a second receive address on labspace.ai. **Not blocking** anything today — we have one inbox + one route. #messaging #channel-cf-email #envelope-to-routing
@@ -153,7 +174,8 @@ Expose Inbox operations via MCP so agents can read inboxes without local install
 
 ## Notes
 
-- Brief: `.brief/messaging-plugins.md`
+- Brief: `.brief/messaging-plugins.md` (foundational primitives — InboxItem, Channel, Inbox)
+- Brief: `.brief/mailroom-pipeline.md` (policy layer on top — sinks, hooks, rules, spam, unsubscribe; answers the "channel or system" question)
 - Predecessor briefs (superseded): `research/_workshop/messaging-plugins-inbox-outbox.md`, `research/_workshop/inboxes-as-first-class.md`
 - First consumer: `__resources/collections/mailroom/`
 - Existing host: `serve.ts` (Hono, runs on Workers; gets `email` + `scheduled` exports added in Phases 1+4+later)
