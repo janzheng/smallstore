@@ -61,3 +61,4 @@ await store.delete("notes/todo");
 | [Standalone Server](./standalone-server.md) | Run as a standalone API service |
 | [Sync](./sync.md) | Bidirectional adapter sync |
 | [Environment Variables](./env-vars.md) | All env var references |
+| [Mailroom + Peers Quickstart](./mailroom-quickstart.md) | Curate newsletters, register external data sources, use the proxy surface against `smallstore.labspace.ai` |

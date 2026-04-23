@@ -1,6 +1,6 @@
 # Peer registry — smallstore knows about other data sources
 
-**Status:** shaping (not started)
+**Status:** SHIPPED 2026-04-25 afternoon (Level 2). Live at `smallstore.labspace.ai` version `b1c385d1`. Sprint narrative: `.brief/2026-04-25-peer-registry-sprint.md`. User guide: `docs/user-guide/mailroom-quickstart.md § Peer registry`. Full task archive: `TASKS.done.md § 2026-04-25 — Peer registry sprint`.
 **From:** 2026-04-25 conversation — user asked about linking smallstore to tigerflare / sheetlogs / other smallstores without fully importing them
 **Pairs with:** `sm_inbox_*` MCP tool family (both contribute to agent-facing data-landscape tooling)
 

@@ -1,21 +1,44 @@
 # smallstore (Cloudflare Worker)
 
-The deployed smallstore. Owns `smallstore.labspace.ai`. Hosts both the universal `/api/*` CRUD surface and the messaging plugin family (`/inbox/*`, `/admin/*`, plus the CF Email Routing `email()` handler).
+The deployed smallstore. Owns `smallstore.labspace.ai`. Hosts the universal `/api/*` CRUD surface, the messaging plugin family (`/inbox/*`, `/admin/*`, plus CF Email Routing `email()` handler), **and** the peer registry (`/peers/*`).
 
 ```
 client → smallstore.labspace.ai (this Worker)
-          ├─ /health              health check
-          ├─ /api/*               smallstore CRUD (collections, search, query, ...)
-          ├─ /inbox/:name/*       messaging — list, read, query, cursor
-          ├─ /admin/inboxes/*     runtime inbox CRUD
-          └─ email(msg)           CF Email Routing → mailroom inbox
+          ├─ /health                   health check
+          ├─ /                         endpoint index (public)
+          ├─ /api/*                    smallstore CRUD (collections, search, query, ...)
+          ├─ /inbox/:name/*            messaging — list, read, query, cursor, export,
+          │                            rules, tag, unsubscribe, quarantine, restore
+          ├─ /admin/inboxes/*          runtime inbox CRUD
+          ├─ /peers/*                  peer registry — CRUD + health + fetch/query proxy
+          └─ email(msg)                CF Email Routing → mailroom inbox
 
-mailroom inbox storage:
-   D1 (mailroom_items table)  ← InboxItem rows + _index
-   R2 (mailroom bucket)        ← raw/<id>.eml, html/<id>.html, attachments/<id>/...
+mailroom storage (single MAILROOM_D1 binding, four tables):
+   mailroom_items      ← InboxItem rows + _index (messaging mode)
+   mailroom_senders    ← per-sender aggregates (count, first_seen, unsubscribe url, tags)
+   mailroom_rules      ← runtime-editable curation rules (archive/bookmark/tag/drop/quarantine)
+   peers               ← peer registry (external data source metadata)
+
+mailroom R2 (mailroom bucket):
+   raw/<id>.eml, html/<id>.html, attachments/<id>/...
 ```
 
-Design: [`.brief/messaging-plugins.md`](../.brief/messaging-plugins.md). Build plan: [`TASKS-MESSAGING.md`](../TASKS-MESSAGING.md).
+## Using the deployed Worker
+
+**→ [`docs/user-guide/mailroom-quickstart.md`](../docs/user-guide/mailroom-quickstart.md)** — practical recipes for every workflow: forward a bookmark, create rules, download as JSONL, register peers, proxy-fetch, the 6 removal levels, common gotchas.
+
+**Design briefs** for when you want the why:
+- Messaging primitives: [`.brief/messaging-plugins.md`](../.brief/messaging-plugins.md)
+- Pipeline architecture: [`.brief/mailroom-pipeline.md`](../.brief/mailroom-pipeline.md)
+- Curation (bookmarks + auto-archive): [`.brief/mailroom-curation.md`](../.brief/mailroom-curation.md)
+- Peer registry: [`.brief/peer-registry.md`](../.brief/peer-registry.md)
+
+**Sprint narratives** (chronological build log):
+- [`.brief/2026-04-24-mailroom-sprint.md`](../.brief/2026-04-24-mailroom-sprint.md) — pipeline foundation
+- [`.brief/2026-04-25-curation-sprint.md`](../.brief/2026-04-25-curation-sprint.md) — bookmarks + rules + removal taxonomy
+- [`.brief/2026-04-25-peer-registry-sprint.md`](../.brief/2026-04-25-peer-registry-sprint.md) — peers level 2
+
+Build plan: [`TASKS-MESSAGING.md`](../TASKS-MESSAGING.md) (messaging-scoped) + [`TASKS.md`](../TASKS.md) (whole-smallstore).
 
 ## First-time setup
 
@@ -54,19 +77,42 @@ yarn r2:create     # wrangler r2 bucket create mailroom
 
 (No id to copy — bucket name is the binding key.)
 
-### 5. Set the auth secret
+### 5. Set secrets + vars
+
+**Required — auth secret:**
 
 ```sh
 yarn secret:set    # wrangler secret put SMALLSTORE_TOKEN
 ```
 
-Pick something long and random. All `/api`, `/inbox`, and `/admin` routes require:
+Pick something long and random. All `/api`, `/inbox`, `/admin`, `/peers` routes require:
 
 ```
 Authorization: Bearer <SMALLSTORE_TOKEN>
 ```
 
 If you skip this step, the deployed Worker is **open**. Only do that for a throwaway test deploy.
+
+**Optional — self-addresses (for forward-detection):**
+
+Add to `wrangler.toml` under `[vars]`:
+
+```toml
+[vars]
+SELF_ADDRESSES = "you@gmail.com,trusted-curator@gmail.com"
+```
+
+Comma-separated addresses the forward-detection hook treats as "user / trusted forwarder." When mail from these addresses hits `mailroom@labspace.ai`, it gets tagged `forwarded` + `manual` and the original sender is extracted from the forwarded body. Omit for header-only forward detection.
+
+**Optional — peer-auth secrets (per peer registered):**
+
+Each peer that needs auth references an env var by name (never stores the secret). For example, a tigerflare peer registered with `auth: { kind: 'bearer', token_env: 'TF_TOKEN' }` needs:
+
+```sh
+echo "<your-tigerflare-token>" | npx wrangler secret put TF_TOKEN
+```
+
+See `docs/user-guide/mailroom-quickstart.md § 2.2 Register a peer` for the full pattern per auth kind.
 
 ### 6. Confirm DNS
 
