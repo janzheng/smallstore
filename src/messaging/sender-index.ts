@@ -81,6 +81,15 @@ export interface SenderIndex {
   query(filter?: SenderQueryFilter): Promise<SenderQueryResult>;
   /** Remove a sender record. Returns true if a row existed. */
   delete(address: string): Promise<boolean>;
+  /**
+   * Internal helper for add-tag / external mutation flows (e.g. the
+   * unsubscribe action). Writes the record verbatim under the normalized
+   * address key — does NOT bump `count`, `last_seen`, or any aggregate.
+   * Callers are responsible for supplying a well-formed record (typically
+   * obtained via `get()` + mutation). Normalizes `record.address` to the
+   * canonical lowercase/trimmed form before persisting.
+   */
+  setRecord(record: SenderRecord): Promise<void>;
 }
 
 // ============================================================================
@@ -264,6 +273,15 @@ export function createSenderIndex(
       const existed = await adapter.has(key);
       await adapter.delete(key);
       return existed;
+    },
+
+    async setRecord(record: SenderRecord): Promise<void> {
+      const norm = normalizeAddress(record.address);
+      if (!norm) {
+        throw new Error('setRecord: record.address is required');
+      }
+      const normalized: SenderRecord = { ...record, address: norm };
+      await adapter.set(keyFor(norm), normalized);
     },
   };
 }

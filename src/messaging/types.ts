@@ -507,3 +507,72 @@ export interface SinkResult {
   /** Non-fatal error message. Dispatcher continues to other sinks when present. */
   error?: string;
 }
+
+// ============================================================================
+// Hooks — pipeline transform/verdict stages
+// ============================================================================
+
+/**
+ * Verdict returned by a preIngest or postClassify hook.
+ *
+ * - `'accept'`: continue the pipeline unchanged (same as returning the
+ *   input item untouched).
+ * - `'drop'`: abort the pipeline for this item; no sinks invoked; the
+ *   item is logged but not stored. Use for explicit blocklist / spam
+ *   hard-drop. Store-first principle: most rules should return
+ *   `'quarantine'` instead so items are recoverable.
+ * - `'quarantine'`: continue to sinks but tag the item with a
+ *   `quarantined` label first. Consumers can filter these out of their
+ *   main inbox view via `exclude_labels: ['quarantined']` and recover
+ *   them via a restore flow (see `src/messaging/quarantine.ts`).
+ * - `InboxItem`: the hook returned a mutated item — continue the
+ *   pipeline with this replacement. Later hooks see the mutation.
+ */
+export type HookVerdict = 'accept' | 'drop' | 'quarantine' | InboxItem;
+
+/**
+ * Context passed to every hook call. Mirrors `SinkContext` so hooks and
+ * sinks share the same per-ingest context shape.
+ */
+export interface HookContext {
+  /** Channel name that produced this item. */
+  channel: string;
+  /** Registration name this hook belongs to (for logging / attribution). */
+  registration?: string;
+}
+
+/**
+ * preIngest hook — runs BEFORE classification + sinks. Typical use:
+ * regex blocklists, rate limiters, custom gate logic that can drop or
+ * quarantine suspect items before they reach the built-in classifier.
+ */
+export type PreIngestHook = (item: InboxItem, ctx: HookContext) => Promise<HookVerdict>;
+
+/**
+ * postClassify hook — runs AFTER the built-in classifier has merged its
+ * labels into the item, BEFORE sinks run. Typical use: sender-index
+ * upsert (reads item.labels to decide tags), unsubscribe-URL extraction,
+ * or any logic that wants to see the canonical labels before storage.
+ */
+export type PostClassifyHook = (item: InboxItem, ctx: HookContext) => Promise<HookVerdict>;
+
+/**
+ * postStore hook — runs AFTER all sinks complete. Receives sink results
+ * for inspection. Cannot alter the item (it's already stored). Typical
+ * use: fan-out notifications, metrics, downstream triggers.
+ */
+export type PostStoreHook = (
+  item: InboxItem,
+  ctx: HookContext,
+  results: SinkResult[],
+) => Promise<void>;
+
+/**
+ * Optional hook bundle on an `InboxRegistration`. All stages are optional;
+ * missing stages simply pass through.
+ */
+export interface RegistrationHooks {
+  preIngest?: PreIngestHook[];
+  postClassify?: PostClassifyHook[];
+  postStore?: PostStoreHook[];
+}

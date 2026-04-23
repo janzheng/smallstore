@@ -33,6 +33,8 @@
 import type { Context, Hono, Next } from 'hono';
 import type { InboxConfig, InboxFilter } from './types.ts';
 import { listChannels, type InboxRegistry } from './registry.ts';
+import type { SenderIndex } from './sender-index.ts';
+import { unsubscribeSender } from './unsubscribe.ts';
 
 export type RequireAuth = (c: Context, next: Next) => Promise<Response | void> | Response | void;
 
@@ -45,13 +47,19 @@ export interface RegisterMessagingRoutesOptions {
    * actual StorageAdapter instances.
    */
   createInbox: (name: string, config: InboxConfig) => Promise<import('./types.ts').Inbox>;
+  /**
+   * Optional per-inbox sender index resolver. When provided, enables the
+   * unsubscribe action route. Return `null`/`undefined` if an inbox doesn't
+   * carry a sender index (route will then 501).
+   */
+  senderIndexFor?: (name: string) => SenderIndex | null | undefined | Promise<SenderIndex | null | undefined>;
 }
 
 export function registerMessagingRoutes(
   app: Hono<any>,
   opts: RegisterMessagingRoutesOptions,
 ): void {
-  const { registry, requireAuth, createInbox } = opts;
+  const { registry, requireAuth, createInbox, senderIndexFor } = opts;
 
   // --------------------------------------------------------------------------
   // Per-inbox surface
@@ -123,6 +131,44 @@ export function registerMessagingRoutes(
 
     const cursor = await inbox.cursor();
     return c.json({ inbox: name, cursor });
+  });
+
+  app.post('/inbox/:name/unsubscribe', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    if (!senderIndexFor) {
+      return c.json(
+        { error: 'NotImplemented', message: 'senderIndexFor not provided — unsubscribe action unavailable' },
+        501,
+      );
+    }
+
+    const senderIndex = await senderIndexFor(name);
+    if (!senderIndex) {
+      return c.json(
+        { error: 'NotImplemented', message: `no sender index wired for inbox "${name}"` },
+        501,
+      );
+    }
+
+    const body = await readJson(c);
+    if (!body || typeof body !== 'object') {
+      return badRequest(c, 'body must be { address: string }');
+    }
+    const address = (body as { address?: unknown }).address;
+    if (typeof address !== 'string' || !address.trim()) {
+      return badRequest(c, 'body.address (non-empty string) required');
+    }
+
+    const skipCall = (body as { skipCall?: unknown }).skipCall === true;
+    const timeoutMs = typeof (body as { timeoutMs?: unknown }).timeoutMs === 'number'
+      ? (body as { timeoutMs: number }).timeoutMs
+      : undefined;
+
+    const result = await unsubscribeSender(senderIndex, address, { skipCall, timeoutMs });
+    return c.json({ inbox: name, result });
   });
 
   // --------------------------------------------------------------------------

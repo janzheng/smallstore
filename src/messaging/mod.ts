@@ -11,6 +11,8 @@ export type {
   BlobPayload,
   Channel,
   ChannelKind,
+  HookContext,
+  HookVerdict,
   IngestOptions,
   Inbox,
   InboxConfig,
@@ -25,9 +27,13 @@ export type {
   OutboxDraft,
   OutboxStatus,
   ParseResult,
+  PostClassifyHook,
+  PostStoreHook,
+  PreIngestHook,
   PullResult,
   QueryOptions,
   ReadOptions,
+  RegistrationHooks,
   Sink,
   SinkContext,
   SinkResult,
@@ -39,13 +45,38 @@ export { Inbox as ReferenceInbox, createInbox } from './inbox.ts';
 export { parseFilterSpec, type FilterSpec } from './filter-spec.ts';
 export {
   InboxRegistry,
+  type HookStage,
   type InboxRegistration,
   type RegisterSinksOptions,
   registerChannel,
   getChannel,
   listChannels,
 } from './registry.ts';
+export { classify, classifyAndMerge } from './classifier.ts';
 export { inboxSink, httpSink, functionSink, type HttpSinkOptions } from './sinks.ts';
 export { registerMessagingRoutes, type RegisterMessagingRoutesOptions, type RequireAuth } from './http-routes.ts';
 export { CloudflareEmailChannel, cloudflareEmailChannel, type EmailInput } from './channels/cf-email.ts';
 export { createEmailHandler, type CreateEmailHandlerOptions, type ForwardableEmailMessage } from './email-handler.ts';
+export {
+  createSenderIndex,
+  parseListUnsubscribe,
+  type SenderIndex,
+  type SenderIndexOptions,
+  type SenderQueryFilter,
+  type SenderQueryResult,
+  type SenderRecord,
+} from './sender-index.ts';
+export {
+  addSenderTag,
+  unsubscribeSender,
+  type UnsubscribeOptions,
+  type UnsubscribeResult,
+} from './unsubscribe.ts';
+export {
+  DEFAULT_QUARANTINE_LABEL,
+  listQuarantined,
+  quarantineItem,
+  quarantineSink,
+  restoreItem,
+  type QuarantineOptions,
+} from './quarantine.ts';

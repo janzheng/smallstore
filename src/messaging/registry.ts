@@ -16,7 +16,16 @@
  * this from a setInterval (Deno) or DO alarm (CF Workers).
  */
 
-import type { Channel, Inbox, InboxConfig, Sink } from './types.ts';
+import type {
+  Channel,
+  Inbox,
+  InboxConfig,
+  PostClassifyHook,
+  PostStoreHook,
+  PreIngestHook,
+  RegistrationHooks,
+  Sink,
+} from './types.ts';
 import { inboxSink } from './sinks.ts';
 
 // ============================================================================
@@ -37,6 +46,16 @@ export interface InboxRegistration {
    * behavior parity with the pre-Sink era.
    */
   sinks: Sink[];
+  /**
+   * Pipeline hooks — preIngest, postClassify, postStore. Always present
+   * (may be empty arrays for stages the caller doesn't use). Mutable via
+   * `addHook(name, stage, hook)`.
+   */
+  hooks: {
+    preIngest: PreIngestHook[];
+    postClassify: PostClassifyHook[];
+    postStore: PostStoreHook[];
+  };
   /** Original config used to create this inbox (for /admin/inboxes GET). */
   config: InboxConfig;
   /** Wall-clock ms when this inbox was registered (used by TTL reaper). */
@@ -54,11 +73,15 @@ export interface RegisterSinksOptions {
   inbox?: Inbox;
   /** Explicit sinks array. If omitted and `inbox` provided, auto-defaults to `[inboxSink(inbox)]`. */
   sinks?: Sink[];
+  /** Optional hooks to attach at registration time. More can be added later via `addHook`. */
+  hooks?: RegistrationHooks;
   /** Config used to create this registration. */
   config: InboxConfig;
   /** Origin tag. Default 'boot'. */
   origin?: 'boot' | 'runtime';
 }
+
+export type HookStage = 'preIngest' | 'postClassify' | 'postStore';
 
 export class InboxRegistry {
   private entries = new Map<string, InboxRegistration>();
@@ -136,6 +159,11 @@ export class InboxRegistry {
     this.entries.set(name, {
       inbox: opts.inbox,
       sinks,
+      hooks: {
+        preIngest: opts.hooks?.preIngest ?? [],
+        postClassify: opts.hooks?.postClassify ?? [],
+        postStore: opts.hooks?.postStore ?? [],
+      },
       config: opts.config,
       created_at: Date.now(),
       origin: opts.origin ?? 'boot',
@@ -153,6 +181,26 @@ export class InboxRegistry {
       throw new Error(`Cannot addSink: inbox "${name}" is not registered`);
     }
     reg.sinks.push(sink);
+  }
+
+  /**
+   * Append a hook to an existing registration at the specified stage.
+   * Hooks run in registration order within their stage.
+   * Throws if name not registered.
+   */
+  addHook(
+    name: string,
+    stage: HookStage,
+    hook: PreIngestHook | PostClassifyHook | PostStoreHook,
+  ): void {
+    const reg = this.entries.get(name);
+    if (!reg) {
+      throw new Error(`Cannot addHook: inbox "${name}" is not registered`);
+    }
+    // Narrow by stage to keep call sites type-safe from the caller's side.
+    if (stage === 'preIngest') reg.hooks.preIngest.push(hook as PreIngestHook);
+    else if (stage === 'postClassify') reg.hooks.postClassify.push(hook as PostClassifyHook);
+    else reg.hooks.postStore.push(hook as PostStoreHook);
   }
 
   /** Unregister an inbox. Returns true if it existed. */

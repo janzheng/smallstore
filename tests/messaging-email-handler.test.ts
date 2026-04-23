@@ -11,7 +11,13 @@ import { createInbox } from '../src/messaging/inbox.ts';
 import { InboxRegistry } from '../src/messaging/registry.ts';
 import { createEmailHandler, type ForwardableEmailMessage } from '../src/messaging/email-handler.ts';
 import { functionSink, inboxSink } from '../src/messaging/sinks.ts';
-import type { InboxConfig, InboxItem, SinkContext } from '../src/messaging/types.ts';
+import type {
+  HookContext,
+  HookVerdict,
+  InboxConfig,
+  InboxItem,
+  SinkContext,
+} from '../src/messaging/types.ts';
 
 const FIXTURES_DIR = new URL('./fixtures/cf-email/', import.meta.url);
 
@@ -237,4 +243,210 @@ Deno.test('email handler — addSink: attaches a sink to an existing registratio
 
   assertEquals((await inbox.list()).items.length, 1);
   assertEquals(seen.length, 1);
+});
+
+// ============================================================================
+// Hook pipeline (Wave 2 #4)
+// ============================================================================
+
+function setupHookedRegistry() {
+  const items = new MemoryAdapter();
+  const blobs = new MemoryAdapter();
+  const registry = new InboxRegistry();
+  const inbox = createInbox({ name: 'mailroom', channel: 'cf-email', storage: { items, blobs } });
+  return { items, blobs, registry, inbox };
+}
+
+Deno.test('email handler — built-in classifier runs by default, emits newsletter/list/bulk/auto-reply/bounce labels', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  registry.register('mailroom', inbox, { channel: 'cf-email', storage: 'a' }, 'boot');
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('06-ooo.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  const [item] = (await inbox.list()).items;
+  assertExists(item);
+  // cf-email inline detector emits auto-reply + ooo; classifier re-emits auto-reply (deduped)
+  assertEquals(item.labels?.includes('auto-reply'), true);
+  assertEquals(item.labels?.includes('ooo'), true);
+});
+
+Deno.test('email handler — classify: false disables built-in classifier', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  registry.register('mailroom', inbox, { channel: 'cf-email', storage: 'a' }, 'boot');
+
+  const handler = createEmailHandler({ registry, classify: false, log: () => {} });
+  const raw = await loadFixture('06-ooo.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  const [item] = (await inbox.list()).items;
+  // Without classifier, only cf-email's inline labels remain (ooo + auto-reply still)
+  // The test here asserts the classifier-only labels (newsletter/list/bulk) are NOT present
+  // for the OOO fixture (which has no List-Unsubscribe etc).
+  assertEquals(item.labels?.includes('newsletter'), false);
+  assertEquals(item.labels?.includes('list'), false);
+});
+
+Deno.test('email handler — preIngest hook: drop verdict skips sinks', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  registry.registerSinks('mailroom', {
+    inbox,
+    hooks: {
+      preIngest: [async (_item, _ctx): Promise<HookVerdict> => 'drop'],
+    },
+    config: { channel: 'cf-email', storage: 'a' } as InboxConfig,
+    origin: 'boot',
+  });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  assertEquals((await inbox.list()).items.length, 0);
+});
+
+Deno.test('email handler — preIngest hook: quarantine verdict tags item with "quarantined" and still stores', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  registry.registerSinks('mailroom', {
+    inbox,
+    hooks: {
+      preIngest: [async (_item, _ctx): Promise<HookVerdict> => 'quarantine'],
+    },
+    config: { channel: 'cf-email', storage: 'a' } as InboxConfig,
+    origin: 'boot',
+  });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  const [item] = (await inbox.list()).items;
+  assertExists(item);
+  assertEquals(item.labels?.includes('quarantined'), true);
+});
+
+Deno.test('email handler — preIngest hook: mutated InboxItem flows downstream', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  registry.registerSinks('mailroom', {
+    inbox,
+    hooks: {
+      preIngest: [async (item, _ctx): Promise<HookVerdict> => ({
+        ...item,
+        labels: [...(item.labels ?? []), 'tagged-by-hook'],
+      })],
+    },
+    config: { channel: 'cf-email', storage: 'a' } as InboxConfig,
+    origin: 'boot',
+  });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  const [item] = (await inbox.list()).items;
+  assertEquals(item.labels?.includes('tagged-by-hook'), true);
+});
+
+Deno.test('email handler — postClassify hook sees classifier labels', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  let observedLabels: string[] | undefined;
+  registry.registerSinks('mailroom', {
+    inbox,
+    hooks: {
+      postClassify: [async (item, _ctx): Promise<HookVerdict> => {
+        observedLabels = item.labels ? [...item.labels] : [];
+        return 'accept';
+      }],
+    },
+    config: { channel: 'cf-email', storage: 'a' } as InboxConfig,
+    origin: 'boot',
+  });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('06-ooo.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  assertExists(observedLabels);
+  // postClassify sees labels AFTER classifier ran — should include auto-reply
+  assertEquals(observedLabels!.includes('auto-reply'), true);
+});
+
+Deno.test('email handler — postStore hook receives sink results', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  let receivedResults: any = null;
+  registry.registerSinks('mailroom', {
+    inbox,
+    hooks: {
+      postStore: [async (_item, _ctx, results) => { receivedResults = results; }],
+    },
+    config: { channel: 'cf-email', storage: 'a' } as InboxConfig,
+    origin: 'boot',
+  });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  assertExists(receivedResults);
+  assertEquals(Array.isArray(receivedResults), true);
+  assertEquals(receivedResults.length, 1);
+  assertEquals(receivedResults[0].stored, true);
+});
+
+Deno.test('email handler — throwing hook does not kill pipeline; item still stored', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  registry.registerSinks('mailroom', {
+    inbox,
+    hooks: {
+      preIngest: [async (_item, _ctx): Promise<HookVerdict> => { throw new Error('bug in hook'); }],
+    },
+    config: { channel: 'cf-email', storage: 'a' } as InboxConfig,
+    origin: 'boot',
+  });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  // Hook threw → treated as pass-through → item still lands
+  assertEquals((await inbox.list()).items.length, 1);
+});
+
+Deno.test('email handler — addHook: attaches hook post-registration', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  registry.register('mailroom', inbox, { channel: 'cf-email', storage: 'a' }, 'boot');
+
+  const seen: string[] = [];
+  registry.addHook('mailroom', 'postStore', async (item) => { seen.push(item.id); });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  assertEquals(seen.length, 1);
+});
+
+Deno.test('email handler — hook chain: multiple preIngest hooks run in order, short-circuit on drop', async () => {
+  const { registry, inbox } = setupHookedRegistry();
+  const callOrder: string[] = [];
+  registry.registerSinks('mailroom', {
+    inbox,
+    hooks: {
+      preIngest: [
+        async (_item, _ctx): Promise<HookVerdict> => { callOrder.push('first'); return 'accept'; },
+        async (_item, _ctx): Promise<HookVerdict> => { callOrder.push('second-drop'); return 'drop'; },
+        async (_item, _ctx): Promise<HookVerdict> => { callOrder.push('third-never'); return 'accept'; },
+      ],
+    },
+    config: { channel: 'cf-email', storage: 'a' } as InboxConfig,
+    origin: 'boot',
+  });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  assertEquals(callOrder, ['first', 'second-drop']);
+  assertEquals((await inbox.list()).items.length, 0);
 });
