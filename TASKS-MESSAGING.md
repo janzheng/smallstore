@@ -152,8 +152,8 @@ Expose Inbox operations via MCP so agents can read inboxes without local install
 Design: `.brief/mailroom-curation.md` (2026-04-25). Reframes mailroom from "spam filter" to "personal email curation surface" — manual forwards as first-class bookmarks, sender rules for auto-archive, retroactive tag application. Composes existing hook pipeline + filter DSL + sender-index; no new pipeline primitives needed.
 
 **Foundational (do first):**
-- [ ] Move sender-index from memory → D1 — swap in `cloudflareD1` in non-messaging mode with `senders/mailroom/*` prefix. Prereq for all rules work. ~30 min #curation-sender-index-d1
-- [ ] CF Email Routing: add `mailroom+*@labspace.ai` rule — dashboard or wrangler config. Unblocks plus-addressing intent. ~10 min #curation-plus-addr-routing
+- [x] [done 2026-04-25: senderD1 adapter instance created with table `mailroom_senders`; createSenderIndex now wraps senderD1 not memory. Keys prefix `senders/`. Build clean (583 KiB), 228/228 tests green] Move sender-index from memory → D1 #curation-sender-index-d1
+- [ ] **ACTION NEEDED (user):** CF Email Routing — add `mailroom+*@labspace.ai` routing rule pointing at worker `smallstore`. Dashboard: https://dash.cloudflare.com → labspace.ai → Email → Routing Rules → "Create address" → `mailroom+*@labspace.ai` → Action: Send to a Worker → `smallstore`. One-time, ~10 min #curation-plus-addr-routing
 
 **Ingestion-side:**
 - [ ] Forward-detection hook — `src/messaging/forward-detect.ts` detects forwarded mail, adds `manual`/`forwarded` labels, best-effort extracts `fields.original_from_email` + `original_from_addr` + `original_subject` from body + `X-Forwarded-*` headers. Uses `SELF_ADDRESSES` env var for self-detection. ~2 hours #curation-forward-detect

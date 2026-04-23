@@ -75,6 +75,12 @@ function buildApp(env: Env): AppHandle {
   const d1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_items' });
   const r2 = createCloudflareR2Adapter({ binding: env.MAILROOM_R2 });
   const memory = createMemoryAdapter();
+  // D1 in generic k/v mode (messaging: false is default) for sender-index
+  // persistence. Same MAILROOM_D1 binding, different table. Cheap —
+  // ensureTable() creates mailroom_senders lazily on first write. Replaces
+  // the earlier memory-backed sender-index which reset on every isolate
+  // cold-start.
+  const senderD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_senders' });
 
   // Smallstore — D1 as default (objects), R2 mounted at blobs/*
   const smallstore = createSmallstore({
@@ -136,13 +142,13 @@ function buildApp(env: Env): AppHandle {
     storage: { items: d1, blobs: r2 },
   });
 
-  // Sender index — tracks per-sender aggregates (count, first_seen, last_seen,
-  // list_unsubscribe_url, spam_count, tags). Backed by memory for now; on
-  // Worker isolate restart the aggregates reset and re-populate from new
-  // incoming mail. Move to D1 when sender reputation / persistence across
-  // cold starts becomes important (follow-up: #sender-index-d1-schema).
+  // Sender index — per-sender aggregates (count, first_seen, last_seen,
+  // list_unsubscribe_url, spam_count, tags). Persisted in D1 via senderD1
+  // (table mailroom_senders) so aggregates survive Worker cold-starts.
+  // The keyPrefix isolates sender keys within the table in case we later
+  // register a second sender-index scope under the same table.
   const senderIndexes = new Map<string, SenderIndex>();
-  const mailroomSenderIndex = createSenderIndex(memory, { keyPrefix: 'senders/mailroom/' });
+  const mailroomSenderIndex = createSenderIndex(senderD1, { keyPrefix: 'senders/' });
   senderIndexes.set('mailroom', mailroomSenderIndex);
 
   // Wire hooks: postClassify runs AFTER the built-in classifier emits
