@@ -4,6 +4,52 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ---
 
+## 2026-04-25 — Mailroom curation sprint
+
+Full narrative: `.brief/2026-04-25-curation-sprint.md`. **322/322 messaging tests green (+94 from 228), 9 commits, 4 live production deploys iterating on real forwarded mail.** Live at `smallstore.labspace.ai` version `c0bd59d7`.
+
+### Foundation
+
+- [x] [done: senderD1 adapter with table `mailroom_senders`, generic k/v mode. createSenderIndex wraps it. Survives isolate cold-starts. Commit `d86d772`] Move sender-index from memory → D1 #curation-sender-index-d1
+- [x] [done: CF Email Routing "Enable subaddressing" already on; `mailroom+*@labspace.ai` reaches worker via existing rule. No dashboard change needed] CF Email Routing: plus-addressing #curation-plus-addr-routing
+
+### Ingestion hooks
+
+- [x] [done agent A, 389 lines + 24 tests: src/messaging/forward-detect.ts. Detects Gmail/Outlook/Apple Mail forwards via SELF_ADDRESSES match + X-Forwarded-*/Resent-From headers. Extracts fields.original_from_* from body. 40-line scan window, best-effort. Commit `59740d4`] Forward-detection hook #curation-forward-detect
+- [x] [done agent B, 249 lines + 19 tests: src/messaging/plus-addr.ts. Reads fields.inbox_addr for mailroom+<intent>@ suffix; tags with intent. Default allowed: bookmark/archive/read-later/star/inbox/snooze. 64-char cap, nested-plus noop, input immutability. Commit `59740d4`] Plus-addressing intent hook #curation-plus-addr-intent
+
+### Rules family
+
+- [x] [done agent C, 375 lines + 19 tests: src/messaging/rules.ts with createRulesStore(adapter, opts) → CRUD + apply + applyRetroactive. MailroomRule = {id, match(InboxFilter), action, action_args, priority, notes, disabled, created_at, updated_at}. 5 action verbs (archive/bookmark/tag/drop/quarantine). Tag-style stack; terminal first-match by priority (ties: oldest created_at first). Retroactive skips already-labeled items. Commit `59740d4`] Rules storage module #curation-rules-store
+- [x] [done agent C, +140 lines + 11 tests in http-routes.ts: GET/POST /inbox/:name/rules, GET/PUT/DELETE /:id, POST /:id/apply-retroactive, POST /rules?apply_retroactive=true. 501 when rulesStoreFor absent. Commit `59740d4`] Rules HTTP surface #curation-rules-http
+- [x] [done agent C, 76 lines + 8 tests: src/messaging/rules-hook.ts. createRulesHook(opts) returns PreIngestHook that calls rulesStore.apply, merges labels, returns drop/mutated-item/accept verdict. quarantineLabel matches email-handler's. Commit `59740d4`] Rules preIngest hook #curation-rules-hook
+- [x] [done agent C: rulesStore.applyRetroactive iterates inbox.query(match) + re-ingests each via _ingest({force:true}). Terminal actions no-op with error message. Commit `59740d4`] Retroactive apply #curation-rules-retroactive
+
+### Deploy wiring
+
+- [x] [done: deploy/src/index.ts wires preIngest hooks in order: forwardDetect → plusAddr → rulesHook. senderUpsertHook stays postClassify. New rulesD1 (table mailroom_rules) + rulesStores Map. rulesStoreFor resolver passed to registerMessagingRoutes. SELF_ADDRESSES env var via parseSelfAddresses. Bundle 583 → 605 KiB (+22 KiB). Commit `59740d4`] Deploy hook wiring #curation-deploy-wire
+- [x] [done: wrangler.toml [vars] SELF_ADDRESSES = "hello@janzheng.com,jan@phage.directory,janeazy@gmail.com,jessica.c.sacher@gmail.com". Commit `b78bd62`] SELF_ADDRESSES var configured
+
+### Polish / ergonomics (same-sprint)
+
+- [x] [done: POST /inbox/:name/items/:id/tag body {add?, remove?}. Set-merge on add, Set-delete on remove, dedup-safe. force:true re-ingest. Used live to undo an over-eager archive rule. Commit `b17fd9e`] Manual-tag surface #curation-manual-tag
+- [x] [done: DELETE /inbox/:name/items/:id + new Inbox.delete(id). Removes item, updates index, best-effort blob ref cleanup. Used live to delete the chicken-crossing test item. Commit `b2591d2`] Hard-delete item endpoint #curation-item-delete
+- [x] [done: 6-level removal taxonomy section in .brief/mailroom-curation.md — CF-drop / rules-drop / quarantine / archive / tag-remove / hard-delete. Captures user insight "archive is stuff I like but back-burner" vs "truly gone". Commit `b2591d2`] Removal taxonomy documented #curation-removal-taxonomy
+- [x] [done: mainViewFilter(base?, opts?) + DEFAULT_HIDDEN_LABELS in filter.ts. Merges {exclude_labels: ['archived','quarantined']} into caller's filter (Set union, dedup). Does not mutate. 7 tests. Commit `68dccd7`] Main-view filter helper #curation-main-view-helper
+- [x] [done: GET /inbox/:name/quarantine?cursor=&limit=&label= + POST /inbox/:name/restore/:id?label=. Thin wrappers over listQuarantined/restoreItem. 6 tests. Live-verified. Commit `68dccd7`] HTTP routes for quarantine/restore #messaging #mailroom-quarantine-routes
+
+### Supersedes (from prior queue)
+
+- [x] [superseded by curation sprint rules family (rules.ts + rules-hook.ts + HTTP routes). Shipped Wave 3 task in a different form than the original brief imagined, same outcome: runtime-editable rules persisted in D1, 5 action verbs, retroactive apply] Rules table + runtime-editable rules #messaging #mailroom-rules
+
+### Live verification (end of sprint)
+
+- [x] [done live on production: Sidebar.io subscription confirmation stored with 'newsletter' label. Whitelist→bookmark rule retroactively tagged 2 self-forwards (Claude + chicken). Archive-rule-on-Sidebar accident corrected via manual tag-remove; rule deleted. Chicken hard-deleted. Full end-to-end workflow exercised during sprint] Verify against real forwarded mail #curation-live-verify
+
+**Session stats:** 322/322 tests (+94 from sprint start), 9 commits, 4 live deploys (iterative), 3 subagent dispatches (one wave, zero merge conflicts), ~2600 net LOC insertions, 2 new briefs.
+
+---
+
 ## 2026-04-24 — Mailroom pipeline + plugin discipline sprint
 
 Full narrative: `.brief/2026-04-24-mailroom-sprint.md`. **228/228 messaging tests green, 8 commits, 1 live production deploy** (smallstore.labspace.ai version `b32121f0`).

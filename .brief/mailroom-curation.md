@@ -1,6 +1,6 @@
 # Mailroom curation — bookmarks, auto-archive, personal KB
 
-**Status:** shaping (not started)
+**Status:** SHIPPED 2026-04-25 (same-day). Live at `smallstore.labspace.ai` version `c0bd59d7`. Sprint narrative: `.brief/2026-04-25-curation-sprint.md`. Full task archive: `TASKS.done.md § 2026-04-25`.
 **Parent:** `.brief/mailroom-pipeline.md` (pipeline + hooks already shipped)
 **From:** 2026-04-25 morning conversation after the mailroom EOD sprint
 

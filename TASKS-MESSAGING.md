@@ -23,13 +23,9 @@ Area backlog for the new `messaging` plugin family — `Channel` + `Inbox` + (la
 - [x] [fixed: deploy/src/index.ts imports from `@yawnxyz/smallstore/factory-slim`] Root `mod.ts` re-exports ALL adapters, including SQLite which loads `@db/sqlite` (Deno FFI) at module init. factory-slim.ts is purpose-built for "create the router without pulling adapter barrels" — exactly what Workers need. Added as a build-npm subpath
 - [*] **dist/ refresh trap** — yarn's `file:` link uses checksum on package.json; rebuilding dist with same package.json (different code) → yarn says "Already up-to-date" and keeps the OLD link. Workaround: `rm -rf deploy/node_modules/@yawnxyz && yarn install --force`. The `predeploy` hook in deploy/package.json triggers a fresh dist build but doesn't auto-prune; document for future contributors
 
-## Plugin discipline (2026-04-24)
+## Plugin discipline — SHIPPED 2026-04-24
 
-Audit ran against the "messaging should be a removable plugin" invariants. 3.5/4 passed out of the box. One real leak fixed same day:
-
-- [x] [fixed 2026-04-24: `postal-mime` lazy-loaded in cf-email.ts + moved to optional peerDependencies] `postal-mime` was in core `dependencies`, meaning every npm consumer of `@yawnxyz/smallstore` pulled it even if they never used messaging. Fix: top-level `import PostalMime from 'postal-mime'` → lazy `loadPostalMime()` helper with clear error if missing. `build-npm.ts` moves it to `peerDependencies` + `peerDependenciesMeta: { optional: true }`, mirroring the `hono` pattern. Verified: 18/18 cf-email tests still green; deploy/ still installs postal-mime directly (as it should — it uses the channel) #plugin-discipline #postal-mime-lazy
-- [ ] Apply same 4-invariant audit to the other plugin families (`search`, `graph`, `episodic`, `blob-middleware`, `disclosure`, `views`, `materializers`, `http`, `sync`) — look for heavy deps in core `dependencies` that only one plugin uses. Mechanical; catches sprawl before it calcifies. #plugin-discipline #audit-all-families
-- [ ] Write `docs/plugin-authoring.md` — one-page: the 4 invariants, sub-entry-point convention, lazy-load pattern for heavy deps, example. Makes plugin-authoring self-serve for agents/contributors instead of tribal knowledge #plugin-discipline #docs
+Full audit + `docs/design/PLUGIN-AUTHORING.md` + postal-mime lazy-load fix all shipped 2026-04-24. Archive: `TASKS.done.md § 2026-04-24`. Deferred adapter-level reshape tasks live in top-level `TASKS.md § Later` → Plugin discipline.
 
 ## Risks
 
@@ -147,46 +143,14 @@ Expose Inbox operations via MCP so agents can read inboxes without local install
 - [ ] MCP tools: `sm_outbox_send`, `sm_outbox_status`, `sm_outbox_list`, `sm_outbox_cancel`, `sm_outbox_history`, `sm_messaging_respond` (sugar: read inbox item + LLM callback + enqueue with `reply_to` + `idempotency_key`) #outbox #mcp
 - [ ] Webhook output channel — `cf-webhook-out` — generic POST with retry policy. Useful for Slack, Discord, generic webhooks #outbox #channel-webhook-out
 
-### Mailroom curation — bookmarks + auto-archive (personal KB use case)
+### Mailroom curation — SHIPPED 2026-04-25
 
-Design: `.brief/mailroom-curation.md` (2026-04-25). Reframes mailroom from "spam filter" to "personal email curation surface" — manual forwards as first-class bookmarks, sender rules for auto-archive, retroactive tag application. Composes existing hook pipeline + filter DSL + sender-index; no new pipeline primitives needed.
+Sprint complete. All ingestion hooks (forward-detect, plus-addr, rules), rules CRUD + retroactive apply, deploy wiring, polish (manual-tag, hard-delete, quarantine/restore routes, mainViewFilter), and removal taxonomy all live at `smallstore.labspace.ai`. Details + commits: `TASKS.done.md § 2026-04-25`. Sprint narrative: `.brief/2026-04-25-curation-sprint.md`. Design: `.brief/mailroom-curation.md`.
 
-**Foundational (do first):**
-- [x] [done 2026-04-25: senderD1 adapter instance created with table `mailroom_senders`; createSenderIndex now wraps senderD1 not memory. Keys prefix `senders/`. Build clean (583 KiB), 228/228 tests green] Move sender-index from memory → D1 #curation-sender-index-d1
-- [x] [done 2026-04-25: CF Email Routing has "Enable subaddressing" toggled on, so `mailroom+anything@labspace.ai` already reaches the worker via the existing `mailroom@labspace.ai` rule. No additional routing rule needed] CF Email Routing: plus-addressing (subaddressing already enabled) #curation-plus-addr-routing
+### Mailroom pipeline — remaining after curation sprint
 
-**Ingestion-side:**
-- [x] [done 2026-04-25 agent A: `src/messaging/forward-detect.ts` (389 lines) + 24/24 tests. Gmail/Outlook/Apple Mail body patterns + Resent-From/X-Forwarded-From headers all extract original_from_* into fields. 40-line scan window prevents quoted-From hijacking. Best-effort — tags even when extraction fails] Forward-detection hook #curation-forward-detect
-- [x] [done 2026-04-25 agent B: `src/messaging/plus-addr.ts` (249 lines) + 19/19 tests. Default allowed intents: bookmark/archive/read-later/star/inbox/snooze. Dedup-safe label merge; input immutability; intents case-folded] Plus-addressing intent hook #curation-plus-addr-intent
-
-**Rules:**
-- [x] [done 2026-04-25 agent C: `src/messaging/rules.ts` (375 lines) + 19/19 tests. CRUD + apply + applyRetroactive. Tag-style stack; terminal first-match by priority (ties → oldest created_at first). Retroactive skips items already carrying the derived label for zero-churn] Rules storage module #curation-rules-store
-- [x] [done 2026-04-25 agent C: `http-routes.ts` +140 lines, 6 routes (GET list/one, POST create with apply_retroactive query, PUT, DELETE, POST apply-retroactive). 11/11 tests. Returns 501 when `rulesStoreFor` resolver absent] Rules HTTP surface #curation-rules-http
-- [x] [done 2026-04-25 agent C: `src/messaging/rules-hook.ts` (76 lines) + 8/8 tests. Calls rulesStore.apply, merges labels, returns drop/mutated-item/accept verdicts. quarantineLabel option matches email-handler's] Rules preIngest hook #curation-rules-hook
-- [x] [done 2026-04-25 agent C: rulesStore.applyRetroactive + HTTP route. Terminal actions (drop/quarantine) are no-op with error message (matches spec). Tag-style actions iterate via inbox.query, skip-already-labeled, _ingest({ force: true })] Retroactive apply #curation-rules-retroactive
-
-**Deploy wiring:**
-- [x] [done 2026-04-25: deploy/src/index.ts wires forwardDetect + plusAddr + rulesHook as preIngest hooks in that order (forward-detect first for auto-detection, plus-addr second for explicit-intent-wins, rules-hook last for user-configured actions). senderUpsertHook stays as postClassify. New rulesD1 adapter (table mailroom_rules) + rulesStores Map. rulesStoreFor resolver passed to registerMessagingRoutes. SELF_ADDRESSES env var threaded through parseSelfAddresses. Bundle: 583 → 605 KiB (+22 KiB for curation modules). Dry-run clean] Deploy hook wiring #curation-deploy-wire
-
-**Polish (optional, same-sprint if time):**
-- [x] [done 2026-04-25: `POST /inbox/:name/items/:id/tag` body `{ add?, remove? }`. Set-merge on add, Set-delete on remove, dedup safe. force:true re-ingest so mutation persists past content-hash dedup. Used live to undo an overzealous archive rule on the Sidebar item] Manual-tag surface #curation-manual-tag
-- [x] [done 2026-04-25: `DELETE /inbox/:name/items/:id` + new `Inbox.delete(id)` method. Removes item record, updates index, best-effort deletes blob refs (raw_ref, body_ref, attachments). Returns 204 or 404. Used live to remove the chicken-crossing test item] Hard-delete item endpoint #curation-item-delete
-- [x] [done 2026-04-25: added 6-level removal taxonomy section to `.brief/mailroom-curation.md` — CF-level drop vs rules drop vs quarantine vs archive vs manual-tag-remove vs hard-delete. Captures user insight: "archive is stuff I like, want to keep but are on the back burner"] Removal taxonomy documented #curation-removal-taxonomy
-- [x] [done 2026-04-25: `mainViewFilter(base?, opts?)` in src/messaging/filter.ts. Returns new filter with `exclude_labels: ['archived', 'quarantined']` (configurable via `opts.hiddenLabels`) merged with caller's existing filter (Set union). Does not mutate input. DEFAULT_HIDDEN_LABELS also exported. 7/7 tests] Main-view filter helper #curation-main-view-helper
-
-**Live verification (at end):**
-- [x] [done 2026-04-25 live: Sidebar.io newsletter subscription → stored with `newsletter` label, appears in main view. Whitelist→bookmark rule created + retroactive-applied → 2 existing self-forwards tagged `bookmark` (Claude convo + chicken test). Archive rule created on Sidebar match + retroactive → Sidebar tagged `archived`. Then un-archived via manual-tag endpoint + rule deleted when user clarified Sidebar was wanted. Chicken hard-deleted via DELETE endpoint. Full curation workflow exercised end-to-end on production smallstore.labspace.ai] Verify against real forwarded mail #curation-live-verify
-
-Success criteria: forward an email to `mailroom+bookmark@labspace.ai` → lands with `bookmark` label + original sender preserved; `POST /rules {match, action:'archive'}` + `?apply_retroactive=true` → existing matching items auto-tagged + future mail archived automatically.
-
-### Mailroom pipeline — Wave 3 (remaining)
-
-Waves 0-2 + newsletter export + deploy all shipped 2026-04-24; see `TASKS.done.md` § 2026-04-24 and narrative in `.brief/2026-04-24-mailroom-sprint.md`. Pipeline is live at `smallstore.labspace.ai` version `b32121f0`. What's left:
-
-- [x] [done 2026-04-25 as part of curation sprint: superseded by `#curation-rules-store` + `#curation-rules-hook` + `#curation-rules-http` — shipped via Wave 3 curation agent C. Rules table is D1-backed, runtime-editable via HTTP, 5 action verbs, priority + disabled flag, retroactive apply] Rules table + runtime-editable rules #messaging #mailroom-rules
-- [?] Spam layers (non-LLM, composed as preIngest rules) — (1) regex blocklist terminal drop→quarantine, (2) header heuristics, (3) sender reputation `spam_count/count > 0.5 && count ≥ 3`, (4) content hash dedup. Note: the rules engine from curation sprint can already express layers 1-2 today via user-configured rules; layers 3-4 need sender-reputation predicate + content-hash helpers. LLM classifier deferred as optional layer 5 #messaging #mailroom-spam #needs:mailroom-sender-index
-- [?] MCP `sm_inbox_*` tool family — `sm_inbox_list/read/query/unsubscribe/restore/quarantine_list/export`. Doesn't exist yet; ship the family together so all inbox ops are equally exposed rather than one-off tools #messaging #mcp-inbox-family
-- [x] [done 2026-04-25: `GET /inbox/:name/quarantine?cursor=&limit=&label=` + `POST /inbox/:name/restore/:id?label=` in http-routes.ts. Thin wrappers over listQuarantined() + restoreItem(). Both support custom label override. 6/6 tests. Live-verified] HTTP routes for quarantine/restore #messaging #mailroom-quarantine-routes
+- [?] **MCP `sm_inbox_*` tool family** — `sm_inbox_list/read/query/unsubscribe/restore/quarantine_list/export/tag/delete/rules_*`. Doesn't exist yet; ship the family together so all inbox ops are equally exposed rather than one-off tools. Biggest remaining UX win — uses mailroom from inside Claude Code / Cursor without curl #messaging #mcp-inbox-family
+- [?] Spam layers (non-LLM, composed as preIngest rules) — (1) regex blocklist terminal drop→quarantine, (2) header heuristics, (3) sender reputation `spam_count/count > 0.5 && count ≥ 3`, (4) content hash dedup. Rules engine already expresses layers 1-2 via user-configured rules; layers 3-4 need sender-reputation predicate + content-hash helpers. LLM classifier deferred as optional layer 5 #messaging #mailroom-spam #needs:mailroom-sender-index
 - [?] Raw + attachments inlining in export — `include=raw` base64-encodes the .eml; `include=attachments` adds presigned URLs. Body covers 80% of newsletter-to-LLM flows so these are polish #messaging #newsletter-export-polish
 
 ### Wave 1+2 discovered follow-ups (2026-04-24, none blocking)
