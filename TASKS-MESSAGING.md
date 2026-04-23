@@ -126,13 +126,24 @@ Expose Inbox operations via MCP so agents can read inboxes without local install
 
 ## Later
 
-### More channels (each is its own small task; ship as needed)
+### RSS as mailbox — bioRxiv + future feeds (design: `.brief/rss-as-mailbox.md`)
 
-- [ ] `src/messaging/channels/webhook.ts` — generic HTTP receiver. Optional HMAC validation in `auth: { hmac: 'env:SECRET' }`. POST body → InboxItem via configurable JSON-path mapping #messaging #channel-webhook
-- [ ] `src/messaging/channels/rss.ts` — pull-shape. Polls feed at `schedule` cadence; dedup by `<guid>` or hash; maps to InboxItem. Needs the runner #messaging #channel-rss #needs:pull-runner
+Two paths: fast (external poller POSTs via existing `/inbox/:name/items`) and later (in-Worker RSS channel). Start fast. Promote to in-Worker when 3+ feeders or valtown hiccups bite.
+
+**Path A — ship today via valtown poller:**
+- [ ] Register `biorxiv` inbox via `POST /admin/inboxes` (reuses mailroom_d1 + mailroom_r2 adapters). One curl. #rss-biorxiv-inbox
+- [ ] Valtown poller for bioRxiv neuroscience feed — adapt sketch in brief; set `SMALLSTORE_TOKEN` as valtown secret; content-addressed `id = sha256(feed_url + ':' + guid)` for idempotent re-polls. ~1 hour #rss-valtown-biorxiv-poller
+- [ ] Generalize poller to feed-config array OR per-feed clones (pick based on polling-cadence needs). #rss-valtown-fanout
+- [ ] Add bioRxiv bioinformatics / genomics / etc as more inboxes (or rows in generalized config). #rss-biorxiv-coverage
+- [ ] Document the pattern in valtown-side README so other agentic feeders reuse the template #rss-valtown-docs
+
+**Path B — in-Worker RSS channel (defer until trigger fires):**
+- [ ] `src/messaging/channels/webhook.ts` — generic HTTP receiver. Optional HMAC validation in `auth: { hmac: 'env:SECRET' }`. POST body → InboxItem via configurable JSON-path mapping. Useful independently (structured target for ANY external poller) #messaging #channel-webhook
+- [ ] `src/messaging/channels/rss.ts` — pull-shape Channel<RssInput>. Parse feed, dedup by `<guid>`, map to InboxItem. Needs the runner #messaging #channel-rss #needs:pull-runner
 - [ ] `src/messaging/channels/api-poll.ts` — generic JSON polling. Config: URL, response-path, item-id field, headers #messaging #channel-api-poll #needs:pull-runner
 - [ ] `src/messaging/channels/voice.ts` — for voice-agent transcript streams (companion to `@cloudflare/voice` `withVoice`/`withVoiceInput`). Push-shape; transcripts arrive as InboxItems #messaging #channel-voice
-- [ ] Pull runner — shared scheduler module reading `inbox.schedule` from config; hooked to CF Worker `scheduled()` cron export. Per-channel concurrency cap #messaging #pull-runner #needs:rss-or-similar
+- [ ] Pull runner — shared scheduler reading `inbox.schedule` from config; hooked to CF Worker `scheduled()` cron export. Per-feed watermark persistence. Per-channel concurrency cap #messaging #pull-runner
+- [?] Promote path A → path B when: 3+ feeders OR valtown hiccup loses a day of data OR unified observability becomes valuable #rss-promotion-trigger
 
 ### Outbox
 
