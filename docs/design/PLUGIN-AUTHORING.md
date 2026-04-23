@@ -216,19 +216,29 @@ Use this as a PR-review / self-review checklist:
 - [ ] Role documented — which of adapter/channel/sink/processor does it implement?
 - [ ] `postal-mime` recipe applied for heavy deps (see "Lazy-load recipe" above)
 
-## Known exceptions (2026-04-24 audit)
+## When something is core vs. a plugin
 
-Some existing subdirectories of `src/` look like plugins but are actually core modules. They're documented here so you don't try to "fix" them:
+The decision criterion: **if ~every consumer wants it, it's core; if it's opt-in, it's a plugin.**
+
+Don't let file organization decide this for you. Code that "sprawled" into lots of call-sites often did so because it's genuinely useful everywhere — that's evidence for core, not evidence of a leak. The leak pattern is when *one* caller drags in a heavy dep the other callers don't need.
+
+### Known core modules (NOT plugin targets)
+
+These live in `src/<name>/` folders but are core, by design:
 
 - `src/views/` — used by `src/router.ts` (core routing depends on it)
 - `src/materializers/` — used by `src/router.ts` (same)
-- `src/search/` — used by 7 adapters for BM25 indexing; adapters depend on it
+- `src/search/` — used by 7 adapters for BM25 indexing. **Intentionally core: every adapter benefits from text search, and the cost of the BM25 provider is low.** Sprawled into adapter imports by accretion, but that's the point — ubiquitous utility promotes to core.
 - `src/utils/`, `src/validation/`, `src/types.ts` — core utility modules, always core
 - `src/namespace/`, `src/keyindex/`, `src/explorer/` — core router helpers
 
-These are not targets for plugin discipline — they're part of the core module.
+Do not try to "unplug" these. They're not plugins.
 
-**Real plugin families** (pass invariant 4, deletable): `graph`, `episodic`, `blob-middleware`, `messaging`, `disclosure`, `http`, `vault-graph`.
+### Real plugin families (pass invariant 4, deletable)
+
+`graph`, `episodic`, `blob-middleware`, `messaging`, `disclosure`, `http`, `vault-graph`.
+
+These are opt-in — a consumer can ignore them entirely without losing core storage functionality.
 
 ## Known sprawl surfaces (to address in follow-up)
 

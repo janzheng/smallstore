@@ -18,10 +18,16 @@ The 4 invariants (a plugin is genuinely a plugin when): (1) core never imports i
 
 **Parked as motivating examples (NOT in this pass):** obsidian adapter + channel, rss channel, webhook channel, tigerflare adapter. These are what the reshape supports — we don't ship them here. Tigerflare specifically: currently being used the *other* direction (tigerflare → smallstore via bridge); adapter direction is theoretically valid but backwards-facing. Re-evaluate when a real consumer appears.
 
-**Deferred follow-ups (post-mailroom-EOD):**
+**Deferred follow-ups (post-mailroom-EOD, priority-ordered):**
 
-- [?] Adapter-level lazy-load refactor — apply postal-mime recipe to notion, r2-direct, unstorage, blob-middleware aws-sdk. Option B from the audit brief: add npm sub-entry-points for every adapter (mirror deno.json) + lazy-load each adapter's SDK + move SDKs to optional peers. Non-breaking. ~2-3 hours. Promote when bundle size or install friction becomes concrete pain #plugin-discipline #adapter-reshape
-- [?] Remove adapter re-exports from root `mod.ts` — Option A from the audit brief, breaking change, clean result. Do this when you're ready for a 0.3.0 major. Consumers migrate to per-adapter imports; factory-slim becomes the root factory #plugin-discipline #adapter-reshape-breaking
+- [?] **blob-middleware aws-sdk lazy-load** — priority fix because blob-middleware IS a real plugin family (not just an adapter). Consumers importing `@yawnxyz/smallstore/blob-middleware` today pull aws-sdk whether or not they use R2-backed presigned URLs. Apply postal-mime recipe to `src/blob-middleware/resolver.ts`. ~30 min #plugin-discipline #blob-middleware-aws-lazy
+- [?] Notion adapter lazy-load (`@notionhq/client`) + `src/clients/notion/*` — postal-mime recipe #plugin-discipline #notion-lazy
+- [?] r2-direct adapter lazy-load (`@aws-sdk/*`) — postal-mime recipe #plugin-discipline #r2-direct-lazy
+- [?] unstorage adapter lazy-load (`unstorage`) — postal-mime recipe #plugin-discipline #unstorage-lazy
+- [?] Add all adapters to `build-npm.ts` `entryPoints` — currently only 5 CF adapters are in npm sub-entries; deno.json already has all adapters. Mirror it. Enables per-adapter npm imports for tree-shaking without factory-slim #plugin-discipline #adapter-npm-entrypoints
+- [?] Remove adapter re-exports from root `mod.ts` — Option A from audit brief, **breaking change** for 0.3.0 major. Consumers migrate to per-adapter imports; factory-slim becomes the default factory. Do after the lazy-load pass above, so the migration target exists #plugin-discipline #adapter-reshape-breaking
+
+**Intentionally NOT on this list:** search/BM25 coupling. Adapters import `MemoryBm25SearchProvider` from `src/search/` and that's **intentional core by design** — ubiquitous utility promotes to core, not a leak. Documented in `docs/design/PLUGIN-AUTHORING.md § When something is core vs. a plugin`.
 
 ### Mailroom pipeline implementation (EOD 2026-04-24)
 
