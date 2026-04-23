@@ -147,6 +147,33 @@ Expose Inbox operations via MCP so agents can read inboxes without local install
 - [ ] MCP tools: `sm_outbox_send`, `sm_outbox_status`, `sm_outbox_list`, `sm_outbox_cancel`, `sm_outbox_history`, `sm_messaging_respond` (sugar: read inbox item + LLM callback + enqueue with `reply_to` + `idempotency_key`) #outbox #mcp
 - [ ] Webhook output channel — `cf-webhook-out` — generic POST with retry policy. Useful for Slack, Discord, generic webhooks #outbox #channel-webhook-out
 
+### Mailroom curation — bookmarks + auto-archive (personal KB use case)
+
+Design: `.brief/mailroom-curation.md` (2026-04-25). Reframes mailroom from "spam filter" to "personal email curation surface" — manual forwards as first-class bookmarks, sender rules for auto-archive, retroactive tag application. Composes existing hook pipeline + filter DSL + sender-index; no new pipeline primitives needed.
+
+**Foundational (do first):**
+- [ ] Move sender-index from memory → D1 — swap in `cloudflareD1` in non-messaging mode with `senders/mailroom/*` prefix. Prereq for all rules work. ~30 min #curation-sender-index-d1
+- [ ] CF Email Routing: add `mailroom+*@labspace.ai` rule — dashboard or wrangler config. Unblocks plus-addressing intent. ~10 min #curation-plus-addr-routing
+
+**Ingestion-side:**
+- [ ] Forward-detection hook — `src/messaging/forward-detect.ts` detects forwarded mail, adds `manual`/`forwarded` labels, best-effort extracts `fields.original_from_email` + `original_from_addr` + `original_subject` from body + `X-Forwarded-*` headers. Uses `SELF_ADDRESSES` env var for self-detection. ~2 hours #curation-forward-detect
+- [ ] Plus-addressing intent hook — preIngest hook reads `fields.inbox_addr` for `mailroom+<intent>@` pattern, tags item with `<intent>` label (`bookmark`, `archive`, `read-later`). ~30 min #curation-plus-addr-intent
+
+**Rules:**
+- [ ] Rules storage module — `src/messaging/rules.ts` with `createRulesStore(adapter, opts)` → CRUD + `apply(item)`. Adapter-agnostic; reuses InboxFilter DSL for match. Actions: `archive`, `bookmark`, `tag`, `drop`, `quarantine`. Tag-style = apply-all; terminal = first-match by priority. ~2 hours #curation-rules-store
+- [ ] Rules HTTP surface — `GET/POST /inbox/:name/rules`, `PUT/DELETE /:id`, `POST /:id/apply-retroactive` in http-routes.ts. Requires `rulesStoreFor(name)` resolver in RegisterMessagingRoutesOptions. ~1 hour #curation-rules-http
+- [ ] Rules preIngest hook — `createRulesHook(rulesStore)` returns PreIngestHook evaluating all rules against item + applying matching actions. ~1 hour #curation-rules-hook
+- [ ] Retroactive apply — `rulesStore.applyRetroactive(rule, inbox)` iterates `inbox.query(rule.match)` + re-ingests each with labels added via `_ingest({ force: true })`. HTTP route wires to this. ~45 min #curation-rules-retroactive
+
+**Deploy wiring:**
+- [ ] deploy/src/index.ts updates — instantiate rulesStore + forwardDetect + plusAddrHook; wire as preIngest hooks; pass `SELF_ADDRESSES` env var; expose `rulesStoreFor` + `senderIndexFor` resolvers in registerMessagingRoutes. ~30 min #curation-deploy-wire
+
+**Polish (optional, same-sprint if time):**
+- [?] Manual-tag surface — `POST /inbox/:name/items/:id/tag` with `{ add?, remove? }` for after-the-fact labeling. Upgrade `manual` to `bookmark` when forward-detection fires but intent wasn't specified #curation-manual-tag
+- [?] Main-view filter helper — `mainViewFilter(extra?)` returning `{ exclude_labels: ['archived', 'quarantined'] }` merged with caller's filter. Prevents "forgot to hide archived" footgun #curation-main-view-helper
+
+Success criteria: forward an email to `mailroom+bookmark@labspace.ai` → lands with `bookmark` label + original sender preserved; `POST /rules {match, action:'archive'}` + `?apply_retroactive=true` → existing matching items auto-tagged + future mail archived automatically.
+
 ### Mailroom pipeline — Wave 3 (remaining)
 
 Waves 0-2 + newsletter export + deploy all shipped 2026-04-24; see `TASKS.done.md` § 2026-04-24 and narrative in `.brief/2026-04-24-mailroom-sprint.md`. Pipeline is live at `smallstore.labspace.ai` version `b32121f0`. What's left:
