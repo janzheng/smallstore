@@ -236,9 +236,35 @@ Deno.test('MCP: tools/list returns all expected tools with inputSchemas', async 
     assertExists(result?.tools);
     const names = result.tools.map((t) => t.name).sort();
     assertEquals(names, [
+      // core
       'sm_adapters', 'sm_append', 'sm_delete', 'sm_list', 'sm_query', 'sm_read',
       'sm_sync', 'sm_sync_jobs', 'sm_sync_status', 'sm_write',
-    ]);
+      // inbox (2026-04-25 reorg)
+      'sm_inbox_delete',
+      'sm_inbox_export',
+      'sm_inbox_list',
+      'sm_inbox_quarantine_list',
+      'sm_inbox_query',
+      'sm_inbox_read',
+      'sm_inbox_restore',
+      'sm_inbox_rules_apply_retroactive',
+      'sm_inbox_rules_create',
+      'sm_inbox_rules_delete',
+      'sm_inbox_rules_get',
+      'sm_inbox_rules_list',
+      'sm_inbox_rules_update',
+      'sm_inbox_tag',
+      'sm_inbox_unsubscribe',
+      // peers (2026-04-25 reorg)
+      'sm_peers_create',
+      'sm_peers_delete',
+      'sm_peers_fetch',
+      'sm_peers_get',
+      'sm_peers_health',
+      'sm_peers_list',
+      'sm_peers_query',
+      'sm_peers_update',
+    ].sort());
     for (const tool of result.tools) {
       assertExists(tool.description, `${tool.name} missing description`);
       assertExists(tool.inputSchema, `${tool.name} missing inputSchema`);

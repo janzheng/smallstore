@@ -4,6 +4,19 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ---
 
+## 2026-04-25 — MCP tool family + reorg (late afternoon)
+
+Canonical access surface. The old monolithic 505-line `src/mcp-server.ts` split into per-family tool files under `src/mcp/`, with two new tool families added alongside the existing core. 33 MCP tools now live: 10 core + 15 inbox + 8 peers. 1203/1203 tests green.
+
+- [x] [done 2026-04-25: Split src/mcp-server.ts (505 LOC) into src/mcp/ folder — config.ts (env validation), http.ts (shared HTTP forwarder with createHttpFn + readCapped), tools/types.ts (Tool, Args, HttpFn, HttpResult, requireString, validateName, formatHttpError, encodeCollectionKey shared helpers), tools/core.ts (existing 10 tools migrated verbatim), server.ts (composition + dispatch), mod.ts (entry). src/mcp-server.ts now a 3-line shim that imports src/mcp/mod.ts — existing ~/.claude.json configs don't break] MCP reorg: src/mcp-server.ts → src/mcp/ folder #mcp-reorg
+- [x] [done 2026-04-25 agent A: src/mcp/tools/inbox.ts (508 LOC, 15 tools) — sm_inbox_list/read/query/export/tag/delete/unsubscribe/quarantine_list/restore + sm_inbox_rules_list/get/create/update/delete/apply_retroactive. Thin HTTP forwarders with arg validation (action enum, at-least-one-of add/remove, etc). Export forces format=json since MCP can't stream. Snake-case MCP args mapped to server camelCase (skip_call → skipCall)] sm_inbox_* tool family #messaging #mcp-inbox-family
+- [x] [done 2026-04-25 agent B: src/mcp/tools/peers.ts (378 LOC, 8 tools) — sm_peers_list/get/create/update/delete + sm_peers_health/fetch/query. Auth JSON schema kept permissive (object with required 'kind' enum); server's runtime validator handles deeper union shape with clean 400s. client_query on fetch merges with path via URLSearchParams.append. Description calls out "secrets via wrangler secret put separately" footgun] sm_peers_* tool family #peers-mcp
+- [x] [done 2026-04-25: skills/smallstore/SKILL.md description + body updated to reflect the new tool families. Added § "Mailroom tools" + § "Peer registry" with typical-workflow code blocks. Pointer to docs/user-guide/mailroom-quickstart.md for full HTTP recipes. Canonical skill stays in smallstore repo per user's "don't fork to mcp-hub" direction] Canonical /smallstore skill updated #skill-update
+- [x] [done 2026-04-25: tests/mcp-server.test.ts tools/list expected list updated from 10 → 33 entries (10 core + 15 inbox + 8 peers). 16/16 mcp tests green. deno check clean on src/mcp-server.ts shim + the whole tree] MCP test coverage refresh #mcp-tests
+- [*] **Session stats:** ~1250 net LOC added (plus 505 LOC removed from old mcp-server.ts and recreated inside the split). 2 parallel agents (inbox + peers, clean file-scope split). 33 MCP tools. 1203/1203 tests green.
+
+---
+
 ## 2026-04-25 — Peer registry sprint (afternoon session)
 
 - [x] [done 2026-04-25 end-of-sprint: registered tigerflare as a live peer end-to-end. TF_TOKEN set as wrangler secret on smallstore Worker (from `_deno/apps/tigerflare/.tigerflare.json` servers.cloud.token). Peer `tigerflare-demo` URL corrected from tigerflare.labspace.ai to the actual tigerflare.yawnxyz.workers.dev via PUT /peers/:name. Required a redeploy because env was captured at buildApp time (cached isolate held the pre-secret env). Post-redeploy verification: health probe returns ok:true status:200 latency 81ms; proxy-fetch GET / returns tigerflare directory listing. Also fixed probePeer to use `/` for tigerflare type (no /health route) instead of /health. Live at version ff397427] Wire up tigerflare as a live peer #peers-wire-tigerflare

@@ -24,10 +24,9 @@ Remaining small polish:
 - [?] HTTP integration tests (tests/peers-http.test.ts) — agents A+B covered registry + proxy; HTTP routes rely on both and have live-verification but no unit tests yet. ~8-10 tests, ~1 hour #peers-tests-http
 - [?] HTTP test fixture polish — extract a reusable buildApp for peers tests matching messaging pattern #peers-tests-fixture
 
-### MCP `sm_*` tool family (pair with peer registry + mailroom inbox)
+### MCP tool family + reorg — SHIPPED 2026-04-25
 
-- [?] `sm_inbox_*` tool family — list/read/query/unsubscribe/restore/quarantine_list/export/tag/delete/rules_*. Mailroom ops from inside Claude Code / Cursor without curl #messaging #mcp-inbox-family
-- [?] `sm_peers_*` tool family — list/get/create/update/delete/fetch/query/health. Data-atlas ops. Ship in the same MCP suite commit as sm_inbox_* for scaffolding reuse #peers-mcp #needs:mcp-inbox-family
+Monolithic `src/mcp-server.ts` split into `src/mcp/` with per-family tool files. Core migrated + 15 inbox tools + 8 peers tools = 33 total. Details in `TASKS.done.md § 2026-04-25 — MCP tool family`.
 
 ### Plugin discipline — adapter-level reshape (post-sprint, priority-ordered)
 

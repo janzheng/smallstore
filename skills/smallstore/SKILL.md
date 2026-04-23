@@ -1,13 +1,18 @@
 ---
 name: smallstore
-description: "External service I/O for agents — read and write Notion, Airtable, Google Sheets, Obsidian, Upstash, R2, and other backends through a single Smallstore API. Use when the user says: \"use smallstore\", \"read from Notion\", \"read from Airtable\", \"read from sheets\", \"write to a sheet\", \"sync between adapters\", \"migrate from X to Y\", \"copy this to Notion\", \"smallstore MCP\", \"list mounted adapters\", or wants to hit an external storage service without wiring adapter code. Peer to TigerFlare — TF is agent memory/filesystem, Smallstore is external service I/O."
+description: "Canonical access surface for agents — read/write Notion/Airtable/Sheets/Upstash/R2/SQLite (sm_* core tools), operate the mailroom inbox (sm_inbox_* — list/query/export/bookmark/archive/unsubscribe/rules/restore), and browse/query external data sources via the peer registry (sm_peers_* — tigerflare, sheetlogs, other smallstores, webdav). Use when the user says: \"use smallstore\", \"read from Notion\", \"read from Airtable\", \"read from sheets\", \"write to a sheet\", \"sync between adapters\", \"check mailroom\", \"bookmark this newsletter\", \"archive this sender\", \"list my rules\", \"show my peers\", \"fetch from tigerflare\", \"what data sources do I have\", \"smallstore MCP\", or wants to hit any external storage, mailroom inbox, or registered peer through a single API surface. Peer to TigerFlare — TF is agent memory/filesystem, Smallstore is external service I/O + mailroom + peer atlas."
 ---
 
 # Smallstore
 
-One API, many backends. Smallstore mounts Notion, Airtable, Sheets, Upstash, R2, SQLite, local files, and more behind a shared collection/key interface. Use it when the user wants to read or write an external service directly, migrate data between services, or let an agent operate on live external data without bespoke glue code.
+One API, many backends — **plus mailroom curation and the peer registry.** Smallstore mounts Notion, Airtable, Sheets, Upstash, R2, SQLite, local files, and more behind a shared `collection/key` interface (core `sm_*` tools). On top of that, two newer tool families extend what an agent can reach:
 
-Smallstore is a **peer** to TigerFlare — not a replacement. TigerFlare = agent memory and cross-session filesystem. Smallstore = external service I/O.
+- **`sm_inbox_*`** — operate the live mailroom inbox at `smallstore.labspace.ai`: list/query/export items, manage rules (archive/bookmark/tag/drop/quarantine), tag/untag items, unsubscribe from senders, quarantine/restore.
+- **`sm_peers_*`** — register and query the peer registry: tigerflare, random sheetlogs, other smallstore deployments, webdav. Adds "sources I know about but don't own," all reachable via one bearer token.
+
+Smallstore is a **peer** to TigerFlare — not a replacement. TigerFlare = agent memory and cross-session filesystem. Smallstore = external service I/O + mailroom + peer atlas.
+
+**Full HTTP recipes (not MCP):** `docs/user-guide/mailroom-quickstart.md` in the smallstore repo. The tools below are thin MCP wrappers around those routes.
 
 ## Preflight: ensure server is up
 
@@ -149,6 +154,98 @@ Call mcp__smallstore__sm_append with collection: "sheets/Sheet1", items: [
 - `items` is a single object or an array of objects.
 - On sheetlog, if the tab has an `_id` column and the payload omits it, the Apps Script auto-generates one and returns the assigned id(s) in `_ids: [...]`.
 - Returns 501 if the target adapter doesn't implement a native `append()` — currently only `SheetlogAdapter` does. For other adapters, write with a unique key via `sm_write` (e.g. `sm_write("logs/events", "2026-04-17T12:34:56Z", {...})`).
+
+## Mailroom tools — `sm_inbox_*`
+
+Operate the live mailroom inbox (bookmarks, auto-archive, export, rules). The inbox is a specific kind of smallstore collection with classifier labels, forward-detection, and a rules engine. Design: `.brief/mailroom-curation.md`. Full HTTP recipes: `docs/user-guide/mailroom-quickstart.md § Part 1`.
+
+**Reading:**
+- `sm_inbox_list(inbox, cursor?, limit?, order?)` — list newest-first by default.
+- `sm_inbox_read(inbox, id, full?)` — single item; `full: true` inflates body_ref from blobs adapter.
+- `sm_inbox_query(inbox, filter, cursor?, limit?)` — filter DSL supports `labels`, `fields`, `fields_regex`, `text`, `text_regex`, `headers`, `since`, `until`.
+- `sm_inbox_export(inbox, filter?, include?, limit?)` — bulk download as JSON array. `include=body` inflates bodies. For streaming JSONL, hit the HTTP endpoint directly (MCP can't stream).
+- `sm_inbox_quarantine_list(inbox, cursor?, limit?, label?)` — list items in quarantine.
+
+**Tagging / mutation:**
+- `sm_inbox_tag(inbox, id, add?, remove?)` — add/remove labels on one item. Use for "changed my mind" corrections.
+- `sm_inbox_restore(inbox, id, label?)` — remove the quarantine label from one item.
+- `sm_inbox_delete(inbox, id)` — hard delete (item + blob refs gone).
+
+**Unsubscribe:**
+- `sm_inbox_unsubscribe(inbox, address, skip_call?, timeout_ms?)` — RFC 8058 one-click (HTTPS) or mailto passthrough; tags sender `unsubscribed` in the sender index.
+
+**Rules (the curation engine):**
+- `sm_inbox_rules_list(inbox, cursor?, limit?)` / `sm_inbox_rules_get(inbox, id)` — inspect.
+- `sm_inbox_rules_create(inbox, match, action, action_args?, priority?, notes?, apply_retroactive?)` — create. `action` is one of `archive | bookmark | tag | drop | quarantine`. Tag-style actions stack; terminal actions (drop/quarantine) use first-match-by-priority. `apply_retroactive: true` tags existing matching items in the same call.
+- `sm_inbox_rules_update(inbox, id, patch)` — partial update (disable/rename/change action).
+- `sm_inbox_rules_delete(inbox, id)` — remove (already-tagged items stay tagged).
+- `sm_inbox_rules_apply_retroactive(inbox, id)` — re-run retroactive tagging on an existing rule. **Only tag-style actions mutate retroactively** — drop/quarantine are no-ops with an error message.
+
+**Typical workflow:**
+```
+// 1. Agent checks what's in the mailroom
+mcp__smallstore__sm_inbox_list { inbox: "mailroom", limit: 20 }
+
+// 2. Queries for bookmarked newsletters
+mcp__smallstore__sm_inbox_query {
+  inbox: "mailroom",
+  filter: { labels: ["bookmark"] }
+}
+
+// 3. Bulk exports bookmarks with bodies inlined for LLM processing
+mcp__smallstore__sm_inbox_export {
+  inbox: "mailroom",
+  filter: { labels: ["bookmark"] },
+  include: "body"
+}
+
+// 4. Creates an archive rule that also retroactively tags existing items
+mcp__smallstore__sm_inbox_rules_create {
+  inbox: "mailroom",
+  match: { fields: { from_email: "noisy@newsletter.com" } },
+  action: "archive",
+  apply_retroactive: true
+}
+```
+
+## Peer registry — `sm_peers_*`
+
+Register + query external data sources (tigerflare, sheetlogs, other smallstores, webdav). Peers are runtime-configurable (no redeploy), auth lives in Worker env vars referenced by peer rows. Design: `.brief/peer-registry.md`. Full HTTP recipes: `docs/user-guide/mailroom-quickstart.md § Part 2`.
+
+**CRUD:**
+- `sm_peers_list(name?, type?, tags?, include_disabled?, cursor?, limit?)` — the data atlas. Call first when an agent needs to orient ("what data sources do I know about?").
+- `sm_peers_get(name)` — one peer's metadata.
+- `sm_peers_create({name, type, url, auth?, headers?, tags?, description?, capabilities?})` — register a new source. Types: `smallstore`, `tigerflare`, `sheetlog`, `http-json`, `webdav`, `generic`. **Auth references an env var** via `token_env` / `value_env` / `user_env`+`pass_env` — the actual secret must be set on the Worker separately via `wrangler secret put`.
+- `sm_peers_update(name, patch)` — partial. Rename via `patch.name = "new-slug"` (id stays stable).
+- `sm_peers_delete(name)` — remove.
+
+**Operational:**
+- `sm_peers_health(name, timeout_ms?)` — probe reachability. Per-type: GET `/health` (smallstore), GET `/` (tigerflare — no dedicated /health), OPTIONS (webdav), HEAD (others).
+- `sm_peers_fetch(name, path, client_query?)` — proxied GET. Smallstore injects the peer's auth from env; client sees just smallstore's bearer.
+- `sm_peers_query(name, body, path?, content_type?)` — proxied POST. `body` is forwarded verbatim.
+
+**Typical workflow:**
+```
+// 1. What's in the atlas?
+mcp__smallstore__sm_peers_list
+
+// 2. Is tigerflare alive?
+mcp__smallstore__sm_peers_health { name: "tigerflare-prod" }
+
+// 3. Browse a path over there
+mcp__smallstore__sm_peers_fetch {
+  name: "tigerflare-prod",
+  path: "/inbox/mailroom.md"
+}
+
+// 4. Register a new peer (one-time; secret must be set via wrangler secret put)
+mcp__smallstore__sm_peers_create {
+  name: "faves-sheetlog",
+  type: "sheetlog",
+  url: "https://script.google.com/macros/s/.../exec",
+  auth: { kind: "query", name: "key", value_env: "SHEETLOG_KEY" }
+}
+```
 
 ## Relationship to TigerFlare
 
