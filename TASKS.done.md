@@ -4,6 +4,36 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ---
 
+## 2026-04-24 — Mailroom pipeline + plugin discipline sprint
+
+Full narrative: `.brief/2026-04-24-mailroom-sprint.md`. **228/228 messaging tests green, 8 commits, 1 live production deploy** (smallstore.labspace.ai version `b32121f0`).
+
+### Plugin discipline audit (brief: `.brief/plugin-discipline-audit.md`, doc: `docs/design/PLUGIN-AUTHORING.md`)
+
+- [x] [done: postal-mime moved to optional peer + lazy-loaded in cf-email.ts; 18/18 tests green. Commit `d4a74a9`] Messaging family audit — 3.5/4 invariants passed; leak fixed same day #plugin-discipline
+- [x] [done: 7 real plugin families audited (messaging/graph/episodic/blob-middleware/http/disclosure/vault-graph) — 6 clean + 1 known-leak (blob-middleware→aws-sdk); 3 "plugins" reclassified as core modules (views/materializers/search). Commit `f549ee7`] Audit other plugin families against 4 invariants #plugin-discipline
+- [x] [done: root deps audited — @notionhq/client, @aws-sdk/*, unstorage leak into core via root barrel; factory-slim.ts is the already-proven mitigation; full fix deferred as follow-up tasks. Commit `f549ee7`] Audit root package.json dependencies #plugin-discipline
+- [x] [done: `docs/design/PLUGIN-AUTHORING.md` shipped — 4 invariants + lazy-load recipe with postal-mime worked example + sub-entry-point convention + checklist + known exceptions + role decision tree (adapter/channel/sink/processor with Obsidian/Tigerflare/Email/RSS worked examples). Commit `f549ee7`] Plugin authoring doc + role decision tree #plugin-discipline #docs
+- [x] [done: user clarified "bm25 is useful might as well make it core (it kind of sprawled but everything wants it)." Ubiquitous utility → core; leak pattern is *one* caller dragging heavy dep the others don't need. Documented + saved to agent memory. Commit `c0585c3`] Core vs plugin decision criterion #plugin-discipline
+
+### Mailroom pipeline (brief: `.brief/mailroom-pipeline.md`)
+
+- [x] [done Wave 0 (claude, sequential): Sink/SinkContext/SinkResult types + sinks.ts (inboxSink/httpSink/functionSink) + InboxRegistration.sinks[] + registerSinks/addSink + email-handler dispatches sinks independently with try/catch per sink + cf-email preserves full headers in fields.headers. 27/27 cf-email + email-handler tests green. Commit `6361d6a`] Sink abstraction + email-handler refactor #mailroom-sinks
+- [x] [done Wave 1 agent A: `cloudflareD1({ messaging: true })` + messaging schema migration (10 migrations, d1_migrations tracking, single-line DDL per D1 exec() gotcha) + items_fts virtual table + 4 triggers (ai/ad/au_delete/au_insert) + `query({ fts: "..." })` option. 26/26 tests pass via in-mem sqlite D1-shim. Adapter does not import from messaging/ — local MessagingRowInput/Output structural types preserve plugin invariant 1. Commit `c851e3f`] FTS5 + D1 messaging mode #mailroom-fts5
+- [x] [done Wave 1 agent B: `src/messaging/sender-index.ts` with createSenderIndex(adapter, opts) → upsert/get/query/delete. Adapter-agnostic. 16/16 tests. Normalizes address lowercase+trim, list-unsubscribe https>mailto>raw extraction, spam_count on spam/quarantine labels, tag merge with bounce→bounce-source. Types kept local per invariant 3. Commit `c851e3f`] Sender index #mailroom-sender-index
+- [x] [done Wave 1 agent C: `src/messaging/classifier.ts` pure `classify(item) → string[]` + `classifyAndMerge(item) → InboxItem`. Labels: newsletter/list/bulk/auto-reply/bounce with 4 independent bounce signals. 37/37 tests. Commit `c851e3f`] Header-based classifier #mailroom-classifier
+- [x] [done Wave 1 agent D: extended `InboxFilter` with `fields_regex`/`text_regex`/`headers` (present/absent/regex). Evaluator: compile-once per invocation, invalid-regex safe-skip, case-insensitive default. filter-spec parses `<field>_regex:` + `headers.<name>:` + `text_regex:`. 39/39 tests (24 filter + 15 filter-spec). AND-semantics when both `from_email` and `from_email_regex` appear. Commit `c851e3f`] Regex operator in filter.ts + filter-spec #mailroom-regex
+- [x] [done: cf-email detectAutoReply() emits 'auto-reply' (was 'auto'); aligns with classifier. 'ooo' stays distinct (specific subtype). 178/178 tests green after rename. Commit `ee4cab0`] Label naming standardization (cf-email auto → auto-reply) #label-naming
+- [x] [done Wave 2 #4 (claude): HookVerdict ('accept'|'drop'|'quarantine'|InboxItem), HookContext, PreIngestHook/PostClassifyHook/PostStoreHook types. RegistrationHooks on InboxRegistration. addHook(name, stage, hook). email-handler refactored into 5 stages: parse → preIngest → built-in classify (opt-out via `classify: false`) → postClassify → sink fan-out → postStore. Quarantine verdict auto-tags 'quarantined' label. Throwing hooks caught + logged, pipeline continues. 10 new tests. Commit `8f36de9`] Hook interface in pipeline #mailroom-hooks
+- [x] [done Wave 2 agent E: `src/messaging/unsubscribe.ts` with unsubscribeSender + addSenderTag. RFC 8058 one-click (POSTs `List-Unsubscribe=One-Click` form-urlencoded). mailto: falls through with ok=false + attempted_url echoed. Sender tagged unsubscribed even when URL missing. sender-index extended with setRecord. POST /inbox/:name/unsubscribe HTTP route via senderIndexFor resolver. 12/12 tests. Commit `8f36de9`] Unsubscribe surface #mailroom-unsubscribe
+- [x] [done Wave 2 agent F: `src/messaging/quarantine.ts` — label-based (NOT sub-inbox) for zero-new-infrastructure + stable content-addressed ids. quarantineSink(inbox, opts) factory; quarantineItem(id)/restoreItem(id) using `_ingest({ force: true })`. listQuarantined() convenience. Consumers of main view must pass exclude_labels: ['quarantined']. 19/19 tests. Commit `8f36de9`] Quarantine sub-inbox + restore surface #mailroom-quarantine
+- [x] [done: `GET /inbox/:name/export?format=jsonl|json&filter=<url-encoded-json>&include=body&limit=N` streams ND-JSON with body inflation from blobs adapter. Filter accepts full InboxFilter shape. ~140 LOC + 9 tests. Partial-export failures land as `{"_error":"..."}` last line. Raw + attachments inlining parked. Commit `e65cddf`] Bulk export endpoint #newsletter-export
+- [x] [done: deploy/src/index.ts registers mailroom with postClassify hook that upserts into a per-inbox memory-backed senderIndex. senderIndexFor resolver wired into registerMessagingRoutes. Built-in classifier runs automatically. Commit `e65cddf`] Deploy hook wiring #mailroom-deploy
+- [x] [done: wrangler deploy → version b32121f0-47e6-4e8d-a262-15ebe5342829 at smallstore.labspace.ai/*. Live-verified /health, /inbox/mailroom, /inbox/mailroom/export end-to-end. D1+R2 data persists across deploys] Production deploy #mailroom-deploy-live
+- [*] **Session stats**: 228/228 messaging tests (+186 from start-of-day), 8 commits, 6 subagent dispatches, 0 merge conflicts across parallel work, 1 live production deploy, ~5400 net LOC insertions, 4 new briefs
+
+---
+
 ## 2026-04-21 — Notion SDK v5 forward-compat
 
 - [x] [done: commit `59c5369`] Added `position` param to `notionModern.appendBlockChildren()` alongside `after` for SDK v5 forward compat. Position wins if both supplied; positioning only applies to first batch when chunking. Mirrored the same change in coverflow-v3 (commit `36546951`) on the same day. 810/810 tests green

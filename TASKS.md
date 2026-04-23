@@ -4,44 +4,42 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ## Current
 
-### Plugin discipline audit — reshape before adding more plugins (2026-04-24, blocks mailroom EOD)
+*(Clean slate — 2026-04-24 mailroom sprint shipped; see `TASKS.done.md` + `.brief/2026-04-24-mailroom-sprint.md`. Messaging plugin family is live at `smallstore.labspace.ai` with hook pipeline + classifier + sender-index + unsubscribe + quarantine + newsletter export. Deferred follow-ups are in ## Later below.)*
 
-Motivation: user wants to add more plugin families (obsidian adapter+channel, rss channel, webhook channel for agentic feeders dumping data, possibly tigerflare). Before shipping any, tighten the existing plugin pattern so each new one follows a documented recipe, not tribal knowledge. Aspirational shape: pi-mono's simple core + opt-in extensions. Full brief: `.brief/plugin-discipline-audit.md`.
+## Later
 
-The 4 invariants (a plugin is genuinely a plugin when): (1) core never imports it, (2) heavy deps are optional peers, (3) sub-entry points are self-contained, (4) it's deletable.
+### Plugin discipline — adapter-level reshape (post-sprint, priority-ordered)
 
-- [x] [done 2026-04-24: postal-mime moved to optional peer + lazy-loaded in cf-email.ts; 18/18 tests green] Messaging family audit — 3.5/4 invariants passed; one leak fixed same day #plugin-discipline #audit-messaging
-- [x] [done 2026-04-24: 7 real plugin families audited, 6 clean + 1 known-leak (blob-middleware→aws-sdk); 3 "plugins" reclassified as core modules (views/materializers/search)] Audit other plugin families against 4 invariants #plugin-discipline #audit-all-families
-- [x] [done 2026-04-24: root deps audited — @notionhq/client, @aws-sdk/*, unstorage leak into core via root barrel; factory-slim.ts is the already-proven mitigation; full fix deferred as follow-up below] Audit root package.json dependencies #plugin-discipline #audit-root-deps
-- [x] [done 2026-04-24: `docs/design/PLUGIN-AUTHORING.md` shipped — 4 invariants + lazy-load recipe with postal-mime worked example + sub-entry-point convention + checklist + known exceptions + known sprawl surfaces] Plugin authoring doc #plugin-discipline #docs-plugin-authoring
-- [x] [done 2026-04-24: role decision tree shipped as § in PLUGIN-AUTHORING.md, with worked examples for Obsidian (all roles), Tigerflare, Email, RSS] Role decision tree #plugin-discipline #docs-roles
+Audit findings from 2026-04-24 surfaced adapter-level sprawl in root `dependencies`. `factory-slim.ts` mitigates this for production consumers, but the underlying leaks are worth fixing when the pain shows up. Full context: `.brief/plugin-discipline-audit.md`, `docs/design/PLUGIN-AUTHORING.md`.
 
-**Parked as motivating examples (NOT in this pass):** obsidian adapter + channel, rss channel, webhook channel, tigerflare adapter. These are what the reshape supports — we don't ship them here. Tigerflare specifically: currently being used the *other* direction (tigerflare → smallstore via bridge); adapter direction is theoretically valid but backwards-facing. Re-evaluate when a real consumer appears.
-
-**Deferred follow-ups (post-mailroom-EOD, priority-ordered):**
-
-- [?] **blob-middleware aws-sdk lazy-load** — priority fix because blob-middleware IS a real plugin family (not just an adapter). Consumers importing `@yawnxyz/smallstore/blob-middleware` today pull aws-sdk whether or not they use R2-backed presigned URLs. Apply postal-mime recipe to `src/blob-middleware/resolver.ts`. ~30 min #plugin-discipline #blob-middleware-aws-lazy
+- [?] **blob-middleware aws-sdk lazy-load** — priority because blob-middleware IS a real plugin family (not just an adapter). Apply postal-mime recipe to `src/blob-middleware/resolver.ts`. ~30 min #plugin-discipline #blob-middleware-aws-lazy
 - [?] Notion adapter lazy-load (`@notionhq/client`) + `src/clients/notion/*` — postal-mime recipe #plugin-discipline #notion-lazy
 - [?] r2-direct adapter lazy-load (`@aws-sdk/*`) — postal-mime recipe #plugin-discipline #r2-direct-lazy
 - [?] unstorage adapter lazy-load (`unstorage`) — postal-mime recipe #plugin-discipline #unstorage-lazy
-- [?] Add all adapters to `build-npm.ts` `entryPoints` — currently only 5 CF adapters are in npm sub-entries; deno.json already has all adapters. Mirror it. Enables per-adapter npm imports for tree-shaking without factory-slim #plugin-discipline #adapter-npm-entrypoints
-- [?] Remove adapter re-exports from root `mod.ts` — Option A from audit brief, **breaking change** for 0.3.0 major. Consumers migrate to per-adapter imports; factory-slim becomes the default factory. Do after the lazy-load pass above, so the migration target exists #plugin-discipline #adapter-reshape-breaking
+- [?] Add all adapters to `build-npm.ts` `entryPoints` — currently only 5 CF adapters are in npm sub-entries; deno.json already has all adapters. Enables per-adapter npm imports for tree-shaking without factory-slim #plugin-discipline #adapter-npm-entrypoints
+- [?] Remove adapter re-exports from root `mod.ts` — **breaking change** for 0.3.0 major. Consumers migrate to per-adapter imports; factory-slim becomes the default factory. Do after the lazy-load pass above, so the migration target exists #plugin-discipline #adapter-reshape-breaking
 
-**Intentionally NOT on this list:** search/BM25 coupling. Adapters import `MemoryBm25SearchProvider` from `src/search/` and that's **intentional core by design** — ubiquitous utility promotes to core, not a leak. Documented in `docs/design/PLUGIN-AUTHORING.md § When something is core vs. a plugin`.
+**Intentionally NOT on this list:** search/BM25 coupling. `src/search/` is imported by 7 adapters for BM25 indexing; this is **intentional core by design** (ubiquitous utility promotes to core, not a leak). Documented in `docs/design/PLUGIN-AUTHORING.md § When something is core vs. a plugin`.
 
-### Mailroom pipeline implementation (EOD 2026-04-24)
+### Motivating examples parked (not in the sprint; unblocked by discipline doc)
 
-- [!] Build mailroom per `.brief/mailroom-pipeline.md` once plugin discipline audit is clean — Sink abstraction as task #0, then FTS5, sender index, classifier, hooks, regex operator, rules, unsubscribe, spam layers, quarantine `-> TASKS-MESSAGING.md § Mailroom pipeline` #mailroom #area #needs:plugin-discipline
+- [?] Obsidian adapter + channel — ~100 LOC adapter (frontmatter-aware local-file); channel is a vault watcher
+- [?] RSS channel — pull-shape; needs the pull runner (queued in TASKS-MESSAGING)
+- [?] Webhook channel — push-shape; the "agentic feeders dump data somewhere" affordance
+- [?] Tigerflare adapter — parked + questioned; tigerflare is being used the OTHER direction today. Re-evaluate when a real consumer appears
 
-### Legacy umbrella (keep for tracking)
+### Mailroom — Wave 3 (not shipped in the EOD sprint)
 
-- [*] Messaging plugin family (Inbox + Channel + later Outbox) — design shipped, Phase 1 + Phase 5 deployed at `smallstore.labspace.ai` 2026-04-23 `-> .brief/messaging-plugins.md` `-> TASKS-MESSAGING.md` #messaging #area
+See `TASKS-MESSAGING.md` § Later for the full deferred list (rules table, spam layers, MCP `sm_inbox_*` tool family, raw/attachments export inlining, 14 Wave 1/2 #discovered follow-ups).
 
-## Later
+### Publishing + infra
 
 - [ ] Publish to npm (`deno task build:npm && cd dist && npm publish`) #npm-publish
 - [ ] Test and validate npm build works in Node.js projects #npm-validate
 - [ ] Migrate coverflow-workers into smallstore-owned worker `-> foxfire .brief/smallstore-workers-takeover.md` #infra
+
+### Known issues
+
 - [*] **Sheetlog adapter `set()` is destructive — added non-destructive `append()` path** #sheetlog #bug 2026-04-21
     - Added `append?(items)` to `StorageAdapter` interface
     - Implemented `SheetlogAdapter.append(items)` — direct wrap of `client.dynamicPost()`, bypasses the destructive `set()` bulkDelete
