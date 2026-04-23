@@ -4,9 +4,31 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ## Current
 
-*(Clean slate — 2026-04-24 mailroom sprint shipped; see `TASKS.done.md` + `.brief/2026-04-24-mailroom-sprint.md`. Messaging plugin family is live at `smallstore.labspace.ai` with hook pipeline + classifier + sender-index + unsubscribe + quarantine + newsletter export. Deferred follow-ups are in ## Later below.)*
+*(Clean slate — 2026-04-24 mailroom sprint + 2026-04-25 curation sprint both shipped; see `TASKS.done.md` + sprint briefs. Messaging + curation are live at `smallstore.labspace.ai`. Next up: peer registry below (`.brief/peer-registry.md`) is the most interesting new direction — design done, implementation ~1 day.)*
 
 ## Later
+
+### Peer registry — smallstore knows about other data sources (2026-04-25 design)
+
+Brief: `.brief/peer-registry.md`. MVP = level 2 (metadata + authenticated proxy). Lets smallstore "symlink" to tigerflare, random sheetlogs, other smallstore deployments, any HTTP data source — an agent gets a single atlas + one auth surface. Pairs with the `sm_inbox_*` MCP tool family (both are agent-facing data-awareness surfaces).
+
+- [?] `src/peers/types.ts` — Peer, PeerAuth, PeerType, PeerStore interfaces. Secrets via env-ref (token_env), never inline #peers-types
+- [?] `src/peers/peer-registry.ts` — createPeerStore(adapter, opts) with CRUD. Adapter-agnostic (MemoryAdapter in tests, D1 in prod). Pattern precedent: `src/messaging/rules.ts`. ~300 LOC #peers-store
+- [?] `src/peers/proxy.ts` — proxyGet / proxyPost / probePeer with per-type auth injection (bearer/header/query/basic), timeout, header forwarding. ~200 LOC #peers-proxy
+- [?] `src/peers/http-routes.ts` — registerPeersRoutes(app, {peerStore, requireAuth, env}). 8 routes: list/get/create/update/delete + health/fetch/query. ~250 LOC #peers-http
+- [?] Plugin entry — `src/peers/mod.ts` + sub-entry `@yawnxyz/smallstore/peers` in deno.json/jsr.json/build-npm.ts entryPoints. Follow PLUGIN-AUTHORING.md invariants #peers-plugin-entry
+- [?] Deploy wiring — peersD1 adapter (table `peers`), peerStore instantiated, routes registered in deploy/src/index.ts #peers-deploy-wire
+- [?] Tests — tests/peers-{registry,proxy,http}.test.ts. 28-34 tests total #peers-tests
+- [?] Live-verify — seed one tigerflare peer + one sheetlog + one other-smallstore against the live deploy; confirm fetch + health round-trip #peers-live-verify #needs:peers-deploy-wire
+
+**Out of scope (level 3 parked):** compound adapter (peer types implement StorageAdapter, `peer:name` as routing target, full webdav/tigerflare adapter semantics). Promote when a specific peer type needs routing-level integration — webdav is the likely first. Briefed as `#peers-level-3-compound`.
+
+### MCP `sm_*` tool family (pair with peer registry + mailroom inbox)
+
+- [?] `sm_inbox_*` tool family — list/read/query/unsubscribe/restore/quarantine_list/export/tag/delete/rules_*. Mailroom ops from inside Claude Code / Cursor without curl #messaging #mcp-inbox-family
+- [?] `sm_peers_*` tool family — list/get/create/update/delete/fetch/query/health. Data-atlas ops. Ship in the same MCP suite commit as sm_inbox_* for scaffolding reuse #peers-mcp #needs:mcp-inbox-family
+
+### Plugin discipline — adapter-level reshape (post-sprint, priority-ordered)
 
 ### Plugin discipline — adapter-level reshape (post-sprint, priority-ordered)
 
