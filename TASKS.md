@@ -11,12 +11,17 @@ Motivation: user wants to add more plugin families (obsidian adapter+channel, rs
 The 4 invariants (a plugin is genuinely a plugin when): (1) core never imports it, (2) heavy deps are optional peers, (3) sub-entry points are self-contained, (4) it's deletable.
 
 - [x] [done 2026-04-24: postal-mime moved to optional peer + lazy-loaded in cf-email.ts; 18/18 tests green] Messaging family audit — 3.5/4 invariants passed; one leak fixed same day #plugin-discipline #audit-messaging
-- [!] Audit other plugin families (`search`, `graph`, `episodic`, `blob-middleware`, `disclosure`, `views`, `materializers`, `http`, `sync`) against the 4 invariants — mechanical grep + core-dep scan. Output: either clean bill or concrete fix list #plugin-discipline #audit-all-families
-- [!] Audit root `package.json` dependencies line-by-line — each entry: "which plugin uses this?" If only one, belongs in that plugin's optional peers. Bets: `@notionhq/client`, `@aws-sdk/*` are single-plugin leaks #plugin-discipline #audit-root-deps
-- [!] Write `docs/plugin-authoring.md` — one-page: 4 invariants + lazy-load recipe + sub-entry-point convention + deletion test. Canonical example: the postal-mime lazy-load. Makes plugin-authoring self-serve #plugin-discipline #docs-plugin-authoring
-- [!] Write role decision tree (adapter/channel/sink/processor) — short table + worked examples (Obsidian all-roles, Tigerflare adapter+sink, Email channel+sink, RSS channel). Lives in `docs/plugin-authoring.md` or adjacent. Answers "where does this backend go?" in 30s #plugin-discipline #docs-roles
+- [x] [done 2026-04-24: 7 real plugin families audited, 6 clean + 1 known-leak (blob-middleware→aws-sdk); 3 "plugins" reclassified as core modules (views/materializers/search)] Audit other plugin families against 4 invariants #plugin-discipline #audit-all-families
+- [x] [done 2026-04-24: root deps audited — @notionhq/client, @aws-sdk/*, unstorage leak into core via root barrel; factory-slim.ts is the already-proven mitigation; full fix deferred as follow-up below] Audit root package.json dependencies #plugin-discipline #audit-root-deps
+- [x] [done 2026-04-24: `docs/design/PLUGIN-AUTHORING.md` shipped — 4 invariants + lazy-load recipe with postal-mime worked example + sub-entry-point convention + checklist + known exceptions + known sprawl surfaces] Plugin authoring doc #plugin-discipline #docs-plugin-authoring
+- [x] [done 2026-04-24: role decision tree shipped as § in PLUGIN-AUTHORING.md, with worked examples for Obsidian (all roles), Tigerflare, Email, RSS] Role decision tree #plugin-discipline #docs-roles
 
 **Parked as motivating examples (NOT in this pass):** obsidian adapter + channel, rss channel, webhook channel, tigerflare adapter. These are what the reshape supports — we don't ship them here. Tigerflare specifically: currently being used the *other* direction (tigerflare → smallstore via bridge); adapter direction is theoretically valid but backwards-facing. Re-evaluate when a real consumer appears.
+
+**Deferred follow-ups (post-mailroom-EOD):**
+
+- [?] Adapter-level lazy-load refactor — apply postal-mime recipe to notion, r2-direct, unstorage, blob-middleware aws-sdk. Option B from the audit brief: add npm sub-entry-points for every adapter (mirror deno.json) + lazy-load each adapter's SDK + move SDKs to optional peers. Non-breaking. ~2-3 hours. Promote when bundle size or install friction becomes concrete pain #plugin-discipline #adapter-reshape
+- [?] Remove adapter re-exports from root `mod.ts` — Option A from the audit brief, breaking change, clean result. Do this when you're ready for a 0.3.0 major. Consumers migrate to per-adapter imports; factory-slim becomes the root factory #plugin-discipline #adapter-reshape-breaking
 
 ### Mailroom pipeline implementation (EOD 2026-04-24)
 

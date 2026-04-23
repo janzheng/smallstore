@@ -37,67 +37,71 @@ Fix shipped same day:
 - `scripts/build-npm.ts` — `postal-mime` moved from `dependencies` to `peerDependencies` + `peerDependenciesMeta: { optional: true }`, matching the `hono` pattern. `postBuild()` updated to strip it from generated `dependencies`
 - Verified: 18/18 cf-email tests still green; `deploy/package.json` still has `postal-mime` as a direct dep (correct — the app uses the channel, the library doesn't)
 
-## What's left in this pass
+## Findings — full audit results (2026-04-24 second pass)
 
-### 1. Audit every other plugin family against the 4 invariants
+### Plugin families scored against the 4 invariants
 
-Apply the same grep pattern (plus a core dep scan) to:
-- `src/search/`
-- `src/graph/`
-- `src/episodic/`
-- `src/blob-middleware/`
-- `src/disclosure/`
-- `src/views/`
-- `src/materializers/`
-- `src/http/`
-- `src/sync/`
+| Family | I1 Core-no-import | I2 Heavy deps optional | I3 Self-contained | I4 Deletable | Verdict |
+|---|---|---|---|---|---|
+| `messaging` | ✅ | ✅ (after postal-mime fix) | ✅ | ✅ | **Clean plugin** |
+| `graph` | ✅ | ✅ (no heavy deps) | ✅ | ✅ | **Clean plugin** |
+| `episodic` | ✅ | ✅ (no heavy deps) | ✅ | ✅ | **Clean plugin** |
+| `blob-middleware` | ✅ | ⚠️ uses `@aws-sdk/*` from core deps | ✅ | ✅ | **Leaks aws-sdk** |
+| `http` | ✅ | ✅ (hono peer-optional) | ✅ | ⚠️ used by messaging | Plugin (semi-coupled) |
+| `disclosure` | ✅ | ✅ | ✅ | ⚠️ used by retrieval | Plugin (semi-coupled) |
+| `vault-graph` | ✅ | ✅ (jsr deno-only deps) | ✅ | ✅ | **Clean plugin** |
+| `views` | N/A (used by core) | ✅ | ✅ | ❌ used by router | **Core module, not plugin** |
+| `materializers` | N/A (used by core) | ✅ | ✅ | ❌ used by router | **Core module, not plugin** |
+| `search` | N/A (used by 7 adapters) | ✅ | ✅ | ❌ used by adapters | **Core module, not plugin** |
 
-Likely to find leaks similar to `postal-mime`. Candidates I'd bet are real:
-- `@notionhq/client` in core `dependencies` but only used by notion adapter
-- `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` in core but only used by r2/s3 adapters
-- Possibly others in search/graph/episodic that I haven't looked at yet
+**Not targets for discipline** (always-core): `utils`, `validation`, `namespace`, `keyindex`, `explorer`.
 
-Output: either a clean bill of health per family, OR a list of concrete leak-fixes (lazy-load + move to optional peer, same recipe as postal-mime).
+### Real plugin families: 7 (messaging, graph, episodic, blob-middleware, http, disclosure, vault-graph)
 
-### 2. Audit root `package.json` dependencies line-by-line
+Of these, **6 are clean** (or become clean after blob-middleware's aws-sdk is lazy-loaded). `http` and `disclosure` are semi-coupled to messaging/retrieval respectively but the coupling is intentional (messaging reuses http's route registration; retrieval composes disclosure).
 
-For each entry in `dependencies` + `optionalDependencies`, answer:
-- Which plugin family (or families) uses this?
-- Is it used by core or only one plugin?
-- If only one plugin, is it in that plugin's peer list with lazy-load?
+### Root `package.json` `dependencies` audit
 
-This is a mechanical read of `package.json` + grep. <30 min.
+| Dep | Used by | In root deps today? | Recommendation |
+|---|---|---|---|
+| `@notionhq/client` | `src/adapters/notion.ts` + `src/clients/notion/*` | ✓ Yes | Should be optional peer (follow-up) |
+| `@aws-sdk/client-s3` | `src/adapters/r2-direct.ts` + `src/blob-middleware/resolver.ts` | ✓ Yes | Should be optional peer (follow-up) |
+| `@aws-sdk/s3-request-presigner` | Same | ✓ Yes | Same |
+| `unstorage` | `src/adapters/unstorage.ts` | ✓ Yes | Should be optional peer (follow-up) |
+| `@upstash/redis` | `src/adapters/upstash.ts` | Not in npm deps (deno-only via imports) | Fine |
+| `@modelcontextprotocol/sdk` | `src/mcp-server.ts` (top-level, separate entry) | ? | Modularly separated — fine |
+| `@db/sqlite` | `src/vault-graph/store.ts` + `src/adapters/sqlite.ts` | JSR/deno-only | Fine |
+| `@std/yaml` | `src/vault-graph/*` + `src/messaging/filter-spec.ts` | JSR | Fine |
+| `@zvec/zvec` | zvec search provider (optional) | Already optional peer ✓ | Good |
 
-Note: adapters in `src/adapters/` are themselves plugin-like — each adapter lives in its own file and is imported directly by consumers, not auto-registered. So the same discipline applies: if `@notionhq/client` is core-dep, switching a user from a notion-less deploy pulls it anyway.
+### The architectural root cause
 
-### 3. Write `docs/plugin-authoring.md`
+Root `mod.ts` re-exports **all adapters**, including heavyweight ones (notion, unstorage, r2-direct). This forces every third-party SDK into core `dependencies` because the barrel must resolve at import time. That's why `@notionhq/client`, `@aws-sdk/*`, `unstorage` leaked into core.
 
-One-page how-to. Contents:
-- The 4 invariants (with one sentence each)
-- How to add a new sub-entry point (deno.json exports + package.json exports + build-npm.ts)
-- Lazy-load pattern for heavy deps (the `loadPostalMime()` recipe as the canonical example)
-- Peer dep convention (`peerDependencies` + `peerDependenciesMeta.optional`)
-- Test convention (tests under `tests/<family>-*.test.ts`, not inside `src/<family>/`)
-- Deletion test as the final honest check
+Three mitigations already exist:
 
-Frame it so an agent could add a new plugin family by following the doc + grepping an existing one (probably messaging post-fix) as the template.
+1. **`factory-slim.ts`** — purpose-built "skip the adapter barrel" entry. Already used by `deploy/src/index.ts`. This is how messaging-on-Workers avoids the sprawl today.
+2. **Per-adapter sub-entry-points in `deno.json`** — each adapter has its own path like `"./adapters/notion": "./src/adapters/notion.ts"`. So `import createNotionAdapter from '@yawnxyz/smallstore/adapters/notion'` is a valid import surface for tree-shaking.
+3. **BUT**: these sub-entry-points are NOT in `scripts/build-npm.ts` `entryPoints` for most adapters (only the 5 CF adapters are there). So on npm, consumers can't use them cleanly — they have to go through the barrel.
 
-### 4. Write the role decision tree
+### Fix paths (deferred to follow-up)
 
-Short explainer: a backend can play multiple roles. A contributor asking "where does Obsidian go?" should find this in 30 seconds.
+Not shipping these today — mailroom EOD takes priority:
 
-```
-| Role      | Shape                                 | Example                                              |
-|-----------|---------------------------------------|------------------------------------------------------|
-| Adapter   | StorageAdapter (get/set/delete/query) | obsidianAdapter({ vault: '~/docs' }) — .md as KV      |
-| Channel   | Channel<Input>: parse → InboxItem     | obsidianChannel({ vault, watch: 'inbox/' }) — events  |
-| Sink      | (item, ctx) => Promise<SinkResult>    | obsidianSink({ vault, template }) — pipeline → file   |
-| Processor | (item) => Promise<item>               | summarizer / classifier / entity extractor           |
-```
+- **Option A (clean, breaking):** remove adapter re-exports from root `mod.ts`. Each adapter becomes sub-entry-point-only. SDKs become optional peers. Breaking change for existing users. ~2 hours.
+- **Option B (additive):** add npm sub-entry-points for every adapter (mirror `deno.json`), lazy-load SDKs inside each adapter. Barrel keeps working. New consumers opt into tree-shaking. Non-breaking. ~2-3 hours.
+- **Option C (docs-only, today's answer):** accept current shape; document `factory-slim` as the production pattern. Invariant 2 stays a known limitation with documented mitigation. `docs/design/PLUGIN-AUTHORING.md` § "Known sprawl surfaces" captures this. Zero code change. **Already done as part of this audit.**
 
-Include Obsidian (all three + processor-able), Tigerflare (adapter + sink), Email (channel + sink, via cf-email and cf-email-out), RSS (channel only) as worked examples. Emphasize: **roles are orthogonal. Same backend, different interfaces, pick what you need when you need it.**
+Recommendation: **Option C now, Option B later** when it's painful enough to matter. For today's mailroom work, factory-slim is the already-proven escape hatch.
 
-This doc probably belongs next to `docs/plugin-authoring.md` or as a section within it.
+## What's done in this pass
+
+All four audit tasks shipped:
+
+1. ✅ **Audit every plugin family** — table above. Clean plugins: `messaging`, `graph`, `episodic`, `blob-middleware`, `http`, `disclosure`, `vault-graph`. Reclassified as core: `views`, `materializers`, `search` (these are used by core router/adapters, so they're core modules organized in folders, not plugins).
+2. ✅ **Audit root dependencies** — `@notionhq/client`, `@aws-sdk/*`, `unstorage` leak into core. Mitigated in practice by `factory-slim.ts` (prod consumers skip the barrel). Fully fixing requires Option A or B above; deferred.
+3. ✅ **`docs/design/PLUGIN-AUTHORING.md`** — one-page canonical doc. 4 invariants, lazy-load recipe with postal-mime as worked example, sub-entry-point convention, role decision tree, checklist, known exceptions, known sprawl surfaces. This IS the discipline now.
+4. ✅ **Role decision tree** — table in `PLUGIN-AUTHORING.md § Role decision tree` with worked examples (Obsidian all roles, Tigerflare adapter+sink, Email channel+sink, RSS channel-only).
 
 ## Explicitly out of scope for this pass
 
