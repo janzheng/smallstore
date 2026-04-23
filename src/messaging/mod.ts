@@ -40,7 +40,7 @@ export type {
 } from './types.ts';
 
 export { decodeCursor, encodeCursor, type Cursor } from './cursor.ts';
-export { evaluateFilter } from './filter.ts';
+export { evaluateFilter, mainViewFilter, DEFAULT_HIDDEN_LABELS } from './filter.ts';
 export { Inbox as ReferenceInbox, createInbox } from './inbox.ts';
 export { parseFilterSpec, type FilterSpec } from './filter-spec.ts';
 export {

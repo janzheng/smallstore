@@ -36,6 +36,7 @@ import { listChannels, type InboxRegistry } from './registry.ts';
 import type { SenderIndex } from './sender-index.ts';
 import { unsubscribeSender } from './unsubscribe.ts';
 import type { MailroomRule, RuleAction, RulesStore } from './rules.ts';
+import { listQuarantined, restoreItem } from './quarantine.ts';
 
 export type RequireAuth = (c: Context, next: Next) => Promise<Response | void> | Response | void;
 
@@ -263,6 +264,53 @@ export function registerMessagingRoutes(
 
     const result = await unsubscribeSender(senderIndex, address, { skipCall, timeoutMs });
     return c.json({ inbox: name, result });
+  });
+
+  /**
+   * List quarantined items in the inbox. Thin wrapper over
+   * `Inbox.query({ labels: ['quarantined'] })` with cursor/limit support.
+   * Returns the same shape as `GET /inbox/:name` but scoped to items
+   * carrying the quarantine label.
+   *
+   * Custom label via `?label=<name>` (default: `quarantined`).
+   */
+  app.get('/inbox/:name/quarantine', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const label = c.req.query('label');
+    const cursor = c.req.query('cursor');
+    const limit = parseLimit(c.req.query('limit'));
+
+    const result = await listQuarantined(inbox, { label, cursor, limit });
+    return c.json({ inbox: name, ...result });
+  });
+
+  /**
+   * Restore a quarantined item — removes the quarantine label, preserving
+   * any other labels (classifier output, reason labels like 'spam' etc).
+   * Item stays in storage; this is a soft action that takes it out of the
+   * quarantine view.
+   *
+   * Returns the restored item on success. 404 if id not found OR if the
+   * item wasn't quarantined (distinguishes "did something" from "was
+   * already fine" per the restoreItem library contract).
+   *
+   * Custom label via `?label=<name>` (default: `quarantined`).
+   */
+  app.post('/inbox/:name/restore/:id', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const label = c.req.query('label');
+    const restored = await restoreItem(inbox, id, { label });
+    if (!restored) {
+      return notFound(c, `item "${id}" not in inbox "${name}" or not quarantined`);
+    }
+    return c.json({ inbox: name, item: restored });
   });
 
   /**

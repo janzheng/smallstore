@@ -462,3 +462,108 @@ Deno.test('export — unknown inbox returns 404', async () => {
   const res = await fx.fetch('/inbox/nope/export');
   assertEquals(res.status, 404);
 });
+
+// ============================================================================
+// Quarantine / restore — GET /quarantine + POST /restore/:id
+// ============================================================================
+
+async function seedQuarantined(fx: Fixture, count: number, quarantinedCount: number) {
+  const inbox = fx.registry.get('mailroom');
+  if (!inbox) throw new Error('no mailroom inbox registered');
+  for (let i = 0; i < count; i++) {
+    const id = `qitem-${String(i).padStart(3, '0')}`;
+    const item: InboxItem = {
+      id,
+      source: 'cf-email',
+      received_at: new Date(Date.UTC(2026, 3, 25, 9, i, 0)).toISOString(),
+      summary: `Item ${i}`,
+      body: `Body ${i}`,
+      fields: { from_email: 'sender@example.com' },
+      labels: i < quarantinedCount ? ['quarantined'] : [],
+    };
+    await inbox._ingest(item);
+  }
+}
+
+Deno.test('quarantine — GET returns only quarantined items', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  await seedQuarantined(fx, 5, 2); // 5 total, 2 quarantined
+
+  const res = await fx.fetch('/inbox/mailroom/quarantine');
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  assertEquals(body.items.length, 2);
+  for (const item of body.items) {
+    assertEquals(item.labels.includes('quarantined'), true);
+  }
+});
+
+Deno.test('quarantine — honors ?label=<custom> parameter', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  const inbox = fx.registry.get('mailroom')!;
+  // One item with a custom 'needs-review' label
+  await inbox._ingest({
+    id: 'review-1',
+    source: 'cf-email',
+    received_at: '2026-04-25T10:00:00Z',
+    summary: 'Needs review',
+    body: '',
+    fields: { from_email: 'x@y.com' },
+    labels: ['needs-review'],
+  });
+
+  const res = await fx.fetch('/inbox/mailroom/quarantine?label=needs-review');
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  assertEquals(body.items.length, 1);
+  assertEquals(body.items[0].id, 'review-1');
+});
+
+Deno.test('quarantine — unknown inbox returns 404', async () => {
+  const fx = buildApp();
+  const res = await fx.fetch('/inbox/nope/quarantine');
+  assertEquals(res.status, 404);
+});
+
+Deno.test('restore — removes quarantined label + preserves others', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  const inbox = fx.registry.get('mailroom')!;
+  await inbox._ingest({
+    id: 'quar-1',
+    source: 'cf-email',
+    received_at: '2026-04-25T10:00:00Z',
+    summary: 'Quarantined thing',
+    body: '',
+    fields: { from_email: 'x@y.com' },
+    labels: ['newsletter', 'quarantined'],
+  });
+
+  const res = await fx.fetch('/inbox/mailroom/restore/quar-1', { method: 'POST' });
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  assertEquals(body.item.labels.includes('quarantined'), false);
+  assertEquals(body.item.labels.includes('newsletter'), true);
+});
+
+Deno.test('restore — unknown id returns 404', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  const res = await fx.fetch('/inbox/mailroom/restore/nope', { method: 'POST' });
+  assertEquals(res.status, 404);
+});
+
+Deno.test('restore — non-quarantined item returns 404 (no-op signalled)', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  const inbox = fx.registry.get('mailroom')!;
+  await inbox._ingest({
+    id: 'clean-1',
+    source: 'cf-email',
+    received_at: '2026-04-25T10:00:00Z',
+    summary: 'Not quarantined',
+    body: '',
+    fields: { from_email: 'x@y.com' },
+    labels: ['newsletter'],
+  });
+
+  const res = await fx.fetch('/inbox/mailroom/restore/clean-1', { method: 'POST' });
+  assertEquals(res.status, 404);
+});

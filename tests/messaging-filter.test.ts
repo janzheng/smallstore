@@ -3,8 +3,8 @@
  */
 
 import { assertEquals } from 'jsr:@std/assert';
-import { evaluateFilter } from '../src/messaging/filter.ts';
-import type { InboxItem } from '../src/messaging/types.ts';
+import { evaluateFilter, mainViewFilter, DEFAULT_HIDDEN_LABELS } from '../src/messaging/filter.ts';
+import type { InboxFilter, InboxItem } from '../src/messaging/types.ts';
 
 const baseItem: InboxItem = {
   id: 'item1',
@@ -245,4 +245,68 @@ Deno.test('filter — fields_regex on array field value matches any entry', () =
     evaluateFilter({ fields_regex: { to_addrs: '@example\\.org$' } }, item),
     true,
   );
+});
+
+// ============================================================================
+// mainViewFilter helper
+// ============================================================================
+
+Deno.test('mainViewFilter — no base: returns default hidden labels as exclude_labels', () => {
+  const filter = mainViewFilter();
+  assertEquals(filter.exclude_labels, DEFAULT_HIDDEN_LABELS);
+});
+
+Deno.test('mainViewFilter — base with no exclude_labels: adds hidden', () => {
+  const filter = mainViewFilter({ labels: ['newsletter'] });
+  assertEquals(filter.labels, ['newsletter']);
+  assertEquals(filter.exclude_labels, ['archived', 'quarantined']);
+});
+
+Deno.test('mainViewFilter — base with existing exclude_labels: merges + dedups', () => {
+  const filter = mainViewFilter({ exclude_labels: ['archived', 'spam'] });
+  // Set union: archived (dup), spam (preserved), quarantined (added)
+  assertEquals(filter.exclude_labels?.sort(), ['archived', 'quarantined', 'spam']);
+});
+
+Deno.test('mainViewFilter — custom hiddenLabels override default', () => {
+  const filter = mainViewFilter(undefined, { hiddenLabels: ['read-later'] });
+  assertEquals(filter.exclude_labels, ['read-later']);
+});
+
+Deno.test('mainViewFilter — preserves all other base filter fields', () => {
+  const base: InboxFilter = {
+    labels: ['newsletter'],
+    fields: { from_email: 'substack' },
+    text: 'weekly',
+    since: '2026-01-01',
+  };
+  const filter = mainViewFilter(base);
+  assertEquals(filter.labels, ['newsletter']);
+  assertEquals(filter.fields, { from_email: 'substack' });
+  assertEquals(filter.text, 'weekly');
+  assertEquals(filter.since, '2026-01-01');
+  assertEquals(filter.exclude_labels, ['archived', 'quarantined']);
+});
+
+Deno.test('mainViewFilter — does not mutate base', () => {
+  const base: InboxFilter = { exclude_labels: ['spam'] };
+  const filter = mainViewFilter(base);
+  // Base still has its original single entry
+  assertEquals(base.exclude_labels, ['spam']);
+  // Returned filter has the merged set
+  assertEquals(filter.exclude_labels?.sort(), ['archived', 'quarantined', 'spam']);
+});
+
+Deno.test('mainViewFilter — evaluator correctly hides archived items when filter applied', () => {
+  const archivedItem: InboxItem = {
+    ...baseItem,
+    labels: ['newsletter', 'archived'],
+  };
+  const mainItem: InboxItem = {
+    ...baseItem,
+    labels: ['newsletter'],
+  };
+  const filter = mainViewFilter({ labels: ['newsletter'] });
+  assertEquals(evaluateFilter(filter, archivedItem), false);
+  assertEquals(evaluateFilter(filter, mainItem), true);
 });

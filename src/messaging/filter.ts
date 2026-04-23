@@ -158,3 +158,46 @@ function compileRegex(pattern: string): RegExp | null {
     return null;
   }
 }
+
+// ============================================================================
+// mainViewFilter — ergonomic helper for "the default inbox view"
+// ============================================================================
+
+/** Labels excluded from a main inbox view by default. Override via opts.hiddenLabels. */
+export const DEFAULT_HIDDEN_LABELS: string[] = ['archived', 'quarantined'];
+
+/**
+ * Build a filter that excludes the default "hidden" labels (archived +
+ * quarantined) while preserving any existing filter conditions. Prevents
+ * the "forgot to hide archived" footgun when querying the main inbox view.
+ *
+ * Behavior:
+ * - If `base` has `exclude_labels`, the helper merges them with hidden
+ *   labels (Set union, deduped)
+ * - All other `base` fields pass through unchanged
+ * - `base` is NOT mutated — a new filter object is returned
+ *
+ * Use `opts.hiddenLabels` to override the default (e.g. to also hide
+ * `read-later`, or to only hide `quarantined` but show `archived`).
+ *
+ * Example:
+ * ```ts
+ * // Main view: exclude archived + quarantined from newsletters
+ * const filter = mainViewFilter({ labels: ['newsletter'] });
+ * // → { labels: ['newsletter'], exclude_labels: ['archived', 'quarantined'] }
+ *
+ * const result = await inbox.query(filter);
+ * ```
+ */
+export function mainViewFilter(
+  base?: InboxFilter,
+  opts?: { hiddenLabels?: string[] },
+): InboxFilter {
+  const hidden = opts?.hiddenLabels ?? DEFAULT_HIDDEN_LABELS;
+  const existing = base?.exclude_labels ?? [];
+  const merged = Array.from(new Set([...existing, ...hidden]));
+  return {
+    ...base,
+    exclude_labels: merged,
+  };
+}
