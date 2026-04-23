@@ -5,6 +5,18 @@ compatibility_flags = ["nodejs_compat"]
 
 account_id = "cceae190abc777c64fb8d7a98be577a3"
 
+# ============================================================================
+# Vars — plain config, not secrets
+# ============================================================================
+
+[vars]
+# Comma-separated addresses the user forwards from. The forward-detection
+# hook checks incoming from_email against this list to tag mail as
+# `forwarded` + `manual` and extract original_from_* from the body.
+# Whitelisted "trusted forwarders" (friends who curate mail for me) are
+# included here so their forwards also trigger detection.
+SELF_ADDRESSES = "hello@janzheng.com,jan@phage.directory,janeazy@gmail.com,jessica.c.sacher@gmail.com"
+
 # Worker owns smallstore.labspace.ai. The DNS record must exist in the
 # labspace.ai zone (orange-cloud / Proxied) before the first deploy — its
 # CNAME target is a fallback only; when the Worker is active, requests are
