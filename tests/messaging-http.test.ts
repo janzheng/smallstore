@@ -328,3 +328,137 @@ Deno.test('admin — GET /admin/channels returns registered channels', async () 
   // No channels registered in this test (Phase 4 adds cf-email channel)
   assertEquals(Array.isArray(body.channels), true);
 });
+
+// ============================================================================
+// Export — bulk newsletter download endpoint
+// ============================================================================
+
+async function seedInbox(fx: Fixture, count: number, opts: { with_body_ref?: boolean } = {}) {
+  const inbox = fx.registry.get('mailroom');
+  if (!inbox) throw new Error('no mailroom inbox registered');
+  for (let i = 0; i < count; i++) {
+    const id = `item-${String(i).padStart(3, '0')}`;
+    const labels = i % 3 === 0 ? ['newsletter'] : [];
+    const item: InboxItem = {
+      id,
+      source: 'cf-email',
+      received_at: new Date(Date.UTC(2026, 3, 24, 10, i, 0)).toISOString(),
+      summary: `Subject ${i}`,
+      body: opts.with_body_ref ? null : `Body for ${i}`,
+      body_ref: opts.with_body_ref ? `bodies/${id}.txt` : undefined,
+      fields: { from_email: i % 2 === 0 ? 'news@substack.com' : 'other@example.com' },
+      labels,
+    };
+    if (opts.with_body_ref) {
+      await fx.adapters.blobs.set(`bodies/${id}.txt`, `Inflated body ${i}`);
+    }
+    await inbox._ingest(item);
+  }
+}
+
+Deno.test('export — JSONL format streams one item per line', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  await seedInbox(fx, 5);
+
+  const res = await fx.fetch('/inbox/mailroom/export');
+  assertEquals(res.status, 200);
+  assertEquals(res.headers.get('content-type')?.startsWith('application/x-ndjson'), true);
+
+  const text = await res.text();
+  const lines = text.split('\n').filter((l) => l.length > 0);
+  assertEquals(lines.length, 5);
+  const first = JSON.parse(lines[0]);
+  assertEquals(typeof first.id, 'string');
+  assertEquals(typeof first.summary, 'string');
+});
+
+Deno.test('export — format=json returns a single array', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  await seedInbox(fx, 3);
+
+  const res = await fx.fetch('/inbox/mailroom/export?format=json');
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  assertEquals(body.count, 3);
+  assertEquals(Array.isArray(body.items), true);
+  assertEquals(body.items.length, 3);
+});
+
+Deno.test('export — filter narrows to newsletter label', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  await seedInbox(fx, 10);
+
+  const filter = encodeURIComponent(JSON.stringify({ labels: ['newsletter'] }));
+  const res = await fx.fetch(`/inbox/mailroom/export?format=json&filter=${filter}`);
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  // 10 items seeded; every 3rd gets 'newsletter' label → items 0, 3, 6, 9 = 4
+  assertEquals(body.count, 4);
+  for (const item of body.items) {
+    assertEquals(item.labels?.includes('newsletter'), true);
+  }
+});
+
+Deno.test('export — filter with regex operator matches sender domain', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  await seedInbox(fx, 10);
+
+  const filter = encodeURIComponent(JSON.stringify({
+    fields_regex: { from_email: '^news@' },
+  }));
+  const res = await fx.fetch(`/inbox/mailroom/export?format=json&filter=${filter}`);
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  // 10 items; even-indexed ones use 'news@substack.com' = 5 matches
+  assertEquals(body.count, 5);
+});
+
+Deno.test('export — limit caps total items returned', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  await seedInbox(fx, 20);
+
+  const res = await fx.fetch('/inbox/mailroom/export?format=json&limit=7');
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  assertEquals(body.count, 7);
+});
+
+Deno.test('export — include=body inflates body_ref from blobs adapter', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  await seedInbox(fx, 3, { with_body_ref: true });
+
+  const res = await fx.fetch('/inbox/mailroom/export?format=json&include=body');
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  for (const item of body.items) {
+    assertEquals(typeof item.body, 'string');
+    assertEquals(item.body.startsWith('Inflated body'), true);
+    // body_inflated field is stripped — body replaces it
+    assertEquals(item.body_inflated, undefined);
+  }
+});
+
+Deno.test('export — without include=body, body_ref stays as reference', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  await seedInbox(fx, 3, { with_body_ref: true });
+
+  const res = await fx.fetch('/inbox/mailroom/export?format=json');
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  for (const item of body.items) {
+    assertEquals(typeof item.body_ref, 'string');
+    assertEquals(item.body, null);
+  }
+});
+
+Deno.test('export — bad filter JSON returns 400', async () => {
+  const fx = buildApp({ inboxes: { mailroom: { channel: 'cf-email', storage: 'items' } } });
+  const res = await fx.fetch('/inbox/mailroom/export?filter=not-json');
+  assertEquals(res.status, 400);
+});
+
+Deno.test('export — unknown inbox returns 404', async () => {
+  const fx = buildApp();
+  const res = await fx.fetch('/inbox/nope/export');
+  assertEquals(res.status, 404);
+});

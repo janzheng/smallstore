@@ -133,6 +133,92 @@ export function registerMessagingRoutes(
     return c.json({ inbox: name, cursor });
   });
 
+  /**
+   * Bulk export — the "download newsletters for processing" affordance.
+   *
+   * `GET /inbox/:name/export?format=jsonl&filter=<url-encoded-json>&include=body&limit=N`
+   *
+   * - `format`: `jsonl` (default, streams one JSON object per line) or `json`
+   *   (single array response — use only for small exports, holds all in memory)
+   * - `filter`: URL-encoded JSON matching `InboxFilter` (regex + headers + text
+   *   + labels supported). Optional — omit for all items.
+   * - `include`: comma-separated. Currently honors `body` (inflates body_ref
+   *   from blobs adapter into `body` field). `raw` and `attachments` keep
+   *   their refs as-is for now (see follow-ups in TASKS-MESSAGING.md).
+   * - `limit`: cap on total items returned. Optional.
+   *
+   * Use cases this enables: "give me every Substack newsletter from this
+   * week as JSONL with inline body" (one curl); "feed last 50 newsletters
+   * to LLM summarizer" (stream into the model); "archive month-old items
+   * to R2" (export → re-upload).
+   */
+  app.get('/inbox/:name/export', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const format = (c.req.query('format') ?? 'jsonl').toLowerCase();
+    if (format !== 'jsonl' && format !== 'json') {
+      return badRequest(c, "format must be 'jsonl' or 'json'");
+    }
+
+    const includeRaw = c.req.query('include') ?? '';
+    const include = new Set(includeRaw.split(',').map((s) => s.trim()).filter(Boolean));
+    const inflateBody = include.has('body');
+
+    const filterRaw = c.req.query('filter');
+    let filter: InboxFilter | undefined;
+    if (filterRaw) {
+      try {
+        filter = JSON.parse(filterRaw);
+      } catch {
+        return badRequest(c, "filter must be URL-encoded JSON matching InboxFilter shape");
+      }
+    }
+
+    const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
+    if (limit !== undefined && (Number.isNaN(limit) || limit < 0)) {
+      return badRequest(c, 'limit must be a non-negative integer');
+    }
+
+    // Streaming JSONL response. For format=json, we collect into an array
+    // (slower for large exports but simpler for small consumer scripts).
+    if (format === 'jsonl') {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          try {
+            for await (const item of streamItems(inbox, filter, inflateBody, limit)) {
+              controller.enqueue(encoder.encode(JSON.stringify(item) + '\n'));
+            }
+            controller.close();
+          } catch (err) {
+            // Surface the error inline as the last line so consumers can
+            // detect partial-export failures (vs HTTP 500 mid-stream which
+            // is harder to diagnose).
+            const message = err instanceof Error ? err.message : String(err);
+            controller.enqueue(encoder.encode(JSON.stringify({ _error: message }) + '\n'));
+            controller.close();
+          }
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'application/x-ndjson; charset=utf-8',
+          'X-Inbox': name,
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
+
+    // format === 'json': collect into array
+    const items: any[] = [];
+    for await (const item of streamItems(inbox, filter, inflateBody, limit)) {
+      items.push(item);
+    }
+    return c.json({ inbox: name, items, count: items.length });
+  });
+
   app.post('/inbox/:name/unsubscribe', requireAuth, async (c) => {
     const name = c.req.param('name')!;
     const inbox = registry.get(name);
@@ -258,4 +344,48 @@ function serializeRegistration(name: string, reg: import('./registry.ts').InboxR
     created_at: new Date(reg.created_at).toISOString(),
     config: { ...reg.config },
   };
+}
+
+/**
+ * Async generator that yields items from an inbox, optionally inflating the
+ * body via `inbox.read({ full: true })`. Walks the cursor until exhaustion
+ * or `limit` items yielded. Used by the export route.
+ */
+async function* streamItems(
+  inbox: import('./types.ts').Inbox,
+  filter: import('./types.ts').InboxFilter | undefined,
+  inflateBody: boolean,
+  limit: number | undefined,
+): AsyncGenerator<Record<string, any>> {
+  let cursor: string | undefined;
+  let yielded = 0;
+  const pageLimit = 100; // server-side page size; client sees one continuous stream
+
+  while (true) {
+    const result = filter
+      ? await inbox.query(filter, { cursor, limit: pageLimit })
+      : await inbox.list({ cursor, limit: pageLimit });
+
+    for (const item of result.items) {
+      if (limit !== undefined && yielded >= limit) return;
+
+      if (inflateBody && item.body_ref) {
+        // read({ full: true }) fetches the body_ref content from blobs adapter.
+        // If it fails (blob missing, adapter down), fall through to the
+        // uninflated item rather than killing the entire stream.
+        const full = await inbox.read(item.id, { full: true }).catch(() => null);
+        if (full?.body_inflated) {
+          yield { ...full, body: full.body_inflated, body_inflated: undefined };
+        } else {
+          yield item;
+        }
+      } else {
+        yield item;
+      }
+      yielded++;
+    }
+
+    if (!result.next_cursor) return;
+    cursor = result.next_cursor;
+  }
 }

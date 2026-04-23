@@ -34,10 +34,15 @@ import {
   createInbox,
   createEmailHandler,
   cloudflareEmailChannel,
+  createSenderIndex,
   registerChannel,
   registerMessagingRoutes,
   InboxRegistry,
+  type HookContext,
+  type HookVerdict,
   type InboxConfig,
+  type InboxItem,
+  type SenderIndex,
 } from '@yawnxyz/smallstore/messaging';
 
 // ============================================================================
@@ -60,6 +65,7 @@ export interface Env {
 interface AppHandle {
   app: Hono;
   email: ReturnType<typeof createEmailHandler>;
+  senderIndexes: Map<string, SenderIndex>;
 }
 
 let appHandle: AppHandle | null = null;
@@ -129,7 +135,38 @@ function buildApp(env: Env): AppHandle {
     channel: 'cf-email',
     storage: { items: d1, blobs: r2 },
   });
-  registry.register('mailroom', mailroom, mailroomConfig, 'boot');
+
+  // Sender index — tracks per-sender aggregates (count, first_seen, last_seen,
+  // list_unsubscribe_url, spam_count, tags). Backed by memory for now; on
+  // Worker isolate restart the aggregates reset and re-populate from new
+  // incoming mail. Move to D1 when sender reputation / persistence across
+  // cold starts becomes important (follow-up: #sender-index-d1-schema).
+  const senderIndexes = new Map<string, SenderIndex>();
+  const mailroomSenderIndex = createSenderIndex(memory, { keyPrefix: 'senders/mailroom/' });
+  senderIndexes.set('mailroom', mailroomSenderIndex);
+
+  // Wire hooks: postClassify runs AFTER the built-in classifier emits
+  // newsletter/list/bulk/auto-reply/bounce labels, so the sender-index
+  // upsert sees the canonical tags. We return 'accept' because this hook
+  // is a side-effect (index update) — no verdict change.
+  const senderUpsertHook = async (item: InboxItem, _ctx: HookContext): Promise<HookVerdict> => {
+    try {
+      await mailroomSenderIndex.upsert(item);
+    } catch (err) {
+      // Hook errors are caught by the pipeline; log but don't fail the item.
+      console.log(`[sender-upsert] failed for ${item.id}:`, err instanceof Error ? err.message : err);
+    }
+    return 'accept';
+  };
+
+  registry.registerSinks('mailroom', {
+    inbox: mailroom,
+    hooks: {
+      postClassify: [senderUpsertHook],
+    },
+    config: mailroomConfig,
+    origin: 'boot',
+  });
 
   // Hono app
   const app = new Hono();
@@ -150,22 +187,30 @@ function buildApp(env: Env): AppHandle {
     }),
   );
 
-  // Messaging routes (mount before /api so wildcards stay disjoint)
+  // Messaging routes (mount before /api so wildcards stay disjoint).
+  // `senderIndexFor` resolves the per-inbox sender index for the unsubscribe
+  // route (POST /inbox/:name/unsubscribe); returns null for inboxes without
+  // a registered index, which cleanly fails the route with 501.
   registerMessagingRoutes(app, {
     registry,
     requireAuth,
     createInbox: buildInboxFromConfig,
+    senderIndexFor: (name: string) => senderIndexes.get(name) ?? null,
   });
 
   // Universal CRUD surface at /api/*
   createHonoRoutes(app, smallstore, '/api');
 
+  // email() handler: runs the parse → preIngest → classify → postClassify
+  // → sinks → postStore pipeline. Built-in classify emits label set so
+  // consumers can filter by `newsletter` / `list` / `bulk` / `auto-reply` /
+  // `bounce` out of the box.
   const email = createEmailHandler({
     registry,
     log: (msg, extra) => console.log(`[email] ${msg}`, JSON.stringify(extra ?? {})),
   });
 
-  return { app, email };
+  return { app, email, senderIndexes };
 }
 
 function ensureApp(env: Env): AppHandle {
