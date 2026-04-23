@@ -123,6 +123,46 @@ export class Inbox implements InboxInterface {
     return encodeCursor(head);
   }
 
+  /**
+   * Delete an item and remove it from the index. Best-effort cleanup of
+   * blob refs (raw_ref, body_ref, attachments[].ref) when a blobs adapter
+   * is configured — individual blob deletes swallow errors so a missing
+   * blob doesn't block the item delete.
+   *
+   * Returns `true` if the item existed and was removed; `false` if the id
+   * wasn't indexed. Not idempotent on blobs (calling twice may try to
+   * re-delete already-gone blobs — harmless but noisy in logs).
+   */
+  async delete(id: string): Promise<boolean> {
+    const index = await this.loadIndex();
+    const entryIdx = index.entries.findIndex((e) => e.id === id);
+    if (entryIdx < 0) return false;
+
+    const existing = (await this.storage.items.get(itemKey(id))) as InboxItem | null;
+
+    // Best-effort blob cleanup before we drop the item record.
+    if (existing && this.storage.blobs) {
+      const blobKeys: string[] = [];
+      if (existing.raw_ref) blobKeys.push(existing.raw_ref);
+      if (existing.body_ref) blobKeys.push(existing.body_ref);
+      const attachments = (existing.fields as any)?.attachments;
+      if (Array.isArray(attachments)) {
+        for (const att of attachments) {
+          if (att?.ref && typeof att.ref === 'string') blobKeys.push(att.ref);
+        }
+      }
+      for (const key of blobKeys) {
+        await this.storage.blobs.delete(key).catch(() => {/* noop */});
+      }
+    }
+
+    // Remove item, rewrite index.
+    await this.storage.items.delete(itemKey(id));
+    index.entries.splice(entryIdx, 1);
+    await this.storage.items.set(INDEX_KEY, index);
+    return true;
+  }
+
   async _ingest(item: InboxItem, options: IngestOptions = {}): Promise<InboxItem> {
     const finalItem = applyRefs(item, options.refs);
 

@@ -170,6 +170,8 @@ Design: `.brief/mailroom-curation.md` (2026-04-25). Reframes mailroom from "spam
 
 **Polish (optional, same-sprint if time):**
 - [x] [done 2026-04-25: `POST /inbox/:name/items/:id/tag` body `{ add?, remove? }`. Set-merge on add, Set-delete on remove, dedup safe. force:true re-ingest so mutation persists past content-hash dedup. Used live to undo an overzealous archive rule on the Sidebar item] Manual-tag surface #curation-manual-tag
+- [x] [done 2026-04-25: `DELETE /inbox/:name/items/:id` + new `Inbox.delete(id)` method. Removes item record, updates index, best-effort deletes blob refs (raw_ref, body_ref, attachments). Returns 204 or 404. Used live to remove the chicken-crossing test item] Hard-delete item endpoint #curation-item-delete
+- [x] [done 2026-04-25: added 6-level removal taxonomy section to `.brief/mailroom-curation.md` — CF-level drop vs rules drop vs quarantine vs archive vs manual-tag-remove vs hard-delete. Captures user insight: "archive is stuff I like, want to keep but are on the back burner"] Removal taxonomy documented #curation-removal-taxonomy
 - [?] Main-view filter helper — `mainViewFilter(extra?)` returning `{ exclude_labels: ['archived', 'quarantined'] }` merged with caller's filter. Prevents "forgot to hide archived" footgun #curation-main-view-helper
 
 **Live verification (at end):**

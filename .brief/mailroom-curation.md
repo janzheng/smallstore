@@ -176,6 +176,27 @@ Ordered by dependency. Each is small; total is ~1 day of work.
 - [ ] **Manual-tag surface** — `POST /inbox/:name/items/:id/tag` with `{ add?: string[], remove?: string[] }` for after-the-fact labeling. Useful when forward-detection fires but user wants to upgrade the label (e.g. from `manual` to `bookmark`). ~30 min #manual-tag-action
 - [ ] **Main-view filter helper** — `mainViewFilter()` returning `{ exclude_labels: ['archived', 'quarantined'] }` merged with caller's filter. So consumers don't have to remember every "hide these" label. Follow-up from quarantine work #main-view-helper
 
+## Removal / hiding taxonomy — 6 levels of "don't show this"
+
+A design observation surfaced 2026-04-25 during live use: different "hide/remove" workflows have genuinely different semantics, and smushing them together makes the model worse. The system now supports six levels, ordered roughly by destructiveness:
+
+| Level | Where | Effect | Use when |
+|---|---|---|---|
+| **CF-level drop** | Cloudflare Email Routing dashboard — set action on a routing rule to "Drop" | Email never reaches the worker; not stored anywhere, not counted, not auditable | Domain-level true unsubscribe — spam relays, ex-newsletters you want zero trace of |
+| **Rules `drop` action** | `POST /inbox/:name/rules {match, action:"drop"}` | Email reaches worker + gets parsed, but hook returns `'drop'` verdict → no sink invoked, no storage | Same intent as CF-level drop but runtime-editable without touching CF dashboard. Use when you want a quick "stop seeing this" that you can toggle off later |
+| **Rules `quarantine` action** | `POST /inbox/:name/rules {match, action:"quarantine"}` | Stored + labeled `quarantined`; main view excludes via `exclude_labels` | "Probably spam, want to review" — recoverable, auditable |
+| **Rules `archive` action** | `POST /inbox/:name/rules {match, action:"archive"}` | Stored + labeled `archived`; main view excludes | **"Stuff I like, want to keep, but are on the back burner"** (user's phrasing). Dedicated archive view via `?labels=archived` |
+| **Manual tag remove** | `POST /inbox/:name/items/:id/tag {remove:["<label>"]}` | Strips a label from one item without deleting it | "Auto-labeler was wrong on this specific item" — item stays, just reclassified |
+| **Hard delete** | `DELETE /inbox/:name/items/:id` | Item + blobs fully removed; index updated | "This one item I don't want anywhere" — one-off cleanup, not pattern-based |
+
+Key distinction: **archive is aspirational keeping, CF-drop is declared non-existence.** If you liked a newsletter and keep "archiving" it, you actually want to keep it — just not at the top of the inbox. If you genuinely never want to see anything from `news@spammer.com` again, use CF-level drop (or the rules `drop` action) — the storage cost is zero, and queries can't accidentally re-surface it.
+
+The `drop` action and CF-level drop are technically equivalent for storage purposes, but differ operationally:
+- **CF-level** = managed via CF dashboard, requires dashboard access, more permanent-feeling, harder to debug ("why didn't this email arrive?")
+- **Rules-level** = managed via our HTTP API, easy to toggle `disabled: true`, shows up in a `GET /rules` audit
+
+Lean towards archive for "like but busy"; lean towards CF-level drop for "truly gone"; use rules-level drop when you want the easy-to-toggle middle ground.
+
 ## Out of scope for this brief
 
 These are real other use cases / features that the same primitives could support — **not deprecated by this brief, just not addressed by it.** Each has its own follow-up task (or already exists):

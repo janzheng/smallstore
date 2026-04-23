@@ -266,6 +266,32 @@ export function registerMessagingRoutes(
   });
 
   /**
+   * Hard-delete an item. Removes the item record, updates the inbox index,
+   * and best-effort deletes blob refs (raw_ref, body_ref, attachments).
+   * For *soft* removal that keeps the item queryable via `?labels=archived`,
+   * use the tag endpoint or a rules-engine archive action instead.
+   *
+   * 204 on success, 404 if id not in the inbox.
+   */
+  app.delete('/inbox/:name/items/:id', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const anyInbox = inbox as { delete?: (id: string) => Promise<boolean> };
+    if (typeof anyInbox.delete !== 'function') {
+      return c.json(
+        { error: 'NotImplemented', message: `inbox "${name}" has no delete() method` },
+        501,
+      );
+    }
+    const ok = await anyInbox.delete(id);
+    if (!ok) return notFound(c, `item "${id}" not in inbox "${name}"`);
+    return c.json({ inbox: name, deleted: id });
+  });
+
+  /**
    * Manual label edit — add or remove labels on an already-stored item.
    *
    * POST /inbox/:name/items/:id/tag
