@@ -50,6 +50,11 @@ import {
   type RulesStore,
   type SenderIndex,
 } from '@yawnxyz/smallstore/messaging';
+import {
+  createPeerStore,
+  registerPeersRoutes,
+  type PeerStore,
+} from '@yawnxyz/smallstore/peers';
 
 // ============================================================================
 // Env shape
@@ -81,6 +86,7 @@ interface AppHandle {
   email: ReturnType<typeof createEmailHandler>;
   senderIndexes: Map<string, SenderIndex>;
   rulesStores: Map<string, RulesStore>;
+  peerStore: PeerStore;
 }
 
 let appHandle: AppHandle | null = null;
@@ -98,6 +104,10 @@ function buildApp(env: Env): AppHandle {
   const senderD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_senders' });
   // Rules table — same D1 binding, generic k/v mode. Table created lazily.
   const rulesD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_rules' });
+  // Peers table — runtime-configurable registry of external data sources
+  // (tigerflare, sheetlogs, other smallstores, etc.). Same D1 binding.
+  // See `.brief/peer-registry.md`.
+  const peersD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'peers' });
 
   // Smallstore — D1 as default (objects), R2 mounted at blobs/*
   const smallstore = createSmallstore({
@@ -232,7 +242,11 @@ function buildApp(env: Env): AppHandle {
         api: 'GET/POST /api/:collection',
         inbox_list: 'GET /inbox/:name',
         inbox_query: 'POST /inbox/:name/query',
+        inbox_rules: 'GET/POST /inbox/:name/rules',
+        inbox_export: 'GET /inbox/:name/export?format=jsonl',
         admin_inboxes: 'GET /admin/inboxes',
+        peers: 'GET/POST /peers',
+        peers_proxy: 'GET /peers/:name/fetch?path=... | POST /peers/:name/query',
       },
     }),
   );
@@ -250,6 +264,17 @@ function buildApp(env: Env): AppHandle {
     rulesStoreFor: (name: string) => rulesStores.get(name) ?? null,
   });
 
+  // Peer registry routes — /peers CRUD + /peers/:name/{health,fetch,query}
+  // proxy surface. env is passed so the proxy can resolve env-referenced
+  // auth secrets (e.g. `{ kind: 'bearer', token_env: 'TF_TOKEN' }` →
+  // Authorization: Bearer ${env.TF_TOKEN}).
+  const peerStore = createPeerStore(peersD1, { keyPrefix: 'peers/' });
+  registerPeersRoutes(app, {
+    peerStore,
+    requireAuth,
+    env: env as unknown as Record<string, string | undefined>,
+  });
+
   // Universal CRUD surface at /api/*
   createHonoRoutes(app, smallstore, '/api');
 
@@ -262,7 +287,7 @@ function buildApp(env: Env): AppHandle {
     log: (msg, extra) => console.log(`[email] ${msg}`, JSON.stringify(extra ?? {})),
   });
 
-  return { app, email, senderIndexes, rulesStores };
+  return { app, email, senderIndexes, rulesStores, peerStore };
 }
 
 function ensureApp(env: Env): AppHandle {

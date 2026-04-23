@@ -8,20 +8,21 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ## Later
 
-### Peer registry — smallstore knows about other data sources (2026-04-25 design)
+### Peer registry — SHIPPED 2026-04-25 (same-day after design)
 
-Brief: `.brief/peer-registry.md`. MVP = level 2 (metadata + authenticated proxy). Lets smallstore "symlink" to tigerflare, random sheetlogs, other smallstore deployments, any HTTP data source — an agent gets a single atlas + one auth surface. Pairs with the `sm_inbox_*` MCP tool family (both are agent-facing data-awareness surfaces).
+Level 2 (metadata + authenticated proxy) live at `smallstore.labspace.ai` version `b1c385d1`. 45 peer tests + 1203/1203 total tests green. Brief: `.brief/peer-registry.md`. Full archive: `TASKS.done.md § 2026-04-25`.
 
-- [?] `src/peers/types.ts` — Peer, PeerAuth, PeerType, PeerStore interfaces. Secrets via env-ref (token_env), never inline #peers-types
-- [?] `src/peers/peer-registry.ts` — createPeerStore(adapter, opts) with CRUD. Adapter-agnostic (MemoryAdapter in tests, D1 in prod). Pattern precedent: `src/messaging/rules.ts`. ~300 LOC #peers-store
-- [?] `src/peers/proxy.ts` — proxyGet / proxyPost / probePeer with per-type auth injection (bearer/header/query/basic), timeout, header forwarding. ~200 LOC #peers-proxy
-- [?] `src/peers/http-routes.ts` — registerPeersRoutes(app, {peerStore, requireAuth, env}). 8 routes: list/get/create/update/delete + health/fetch/query. ~250 LOC #peers-http
-- [?] Plugin entry — `src/peers/mod.ts` + sub-entry `@yawnxyz/smallstore/peers` in deno.json/jsr.json/build-npm.ts entryPoints. Follow PLUGIN-AUTHORING.md invariants #peers-plugin-entry
-- [?] Deploy wiring — peersD1 adapter (table `peers`), peerStore instantiated, routes registered in deploy/src/index.ts #peers-deploy-wire
-- [?] Tests — tests/peers-{registry,proxy,http}.test.ts. 28-34 tests total #peers-tests
-- [?] Live-verify — seed one tigerflare peer + one sheetlog + one other-smallstore against the live deploy; confirm fetch + health round-trip #peers-live-verify #needs:peers-deploy-wire
+Live workflow verified end-to-end:
+- `POST /peers` creates a peer (tigerflare example) with auto id/created_at/disabled defaults
+- `GET /peers` lists registered peers
+- `GET /peers/:name/health` cleanly surfaces "env var X not set" when auth env missing (no crash)
+- `GET /peers/:name/fetch?path=...` + `POST /peers/:name/query` proxy with per-type auth injection
 
-**Out of scope (level 3 parked):** compound adapter (peer types implement StorageAdapter, `peer:name` as routing target, full webdav/tigerflare adapter semantics). Promote when a specific peer type needs routing-level integration — webdav is the likely first. Briefed as `#peers-level-3-compound`.
+**Out of scope (level 3 parked):** compound adapter — peer types implement StorageAdapter, `peer:name` as routing target, full webdav/tigerflare adapter semantics. Promote when a specific peer type needs routing-level integration (webdav likely first). Tracked as `#peers-level-3-compound`.
+
+Remaining small polish:
+- [?] HTTP integration tests (tests/peers-http.test.ts) — agents A+B covered registry + proxy; HTTP routes rely on both and have live-verification but no unit tests yet. ~8-10 tests, ~1 hour #peers-tests-http
+- [?] HTTP test fixture polish — extract a reusable buildApp for peers tests matching messaging pattern #peers-tests-fixture
 
 ### MCP `sm_*` tool family (pair with peer registry + mailroom inbox)
 

@@ -41,6 +41,8 @@ await build({
     { name: "./materializers", path: "./src/materializers/mod.ts" },
     { name: "./messaging", path: "./src/messaging/mod.ts" },
     { name: "./messaging/types", path: "./src/messaging/types.ts" },
+    { name: "./peers", path: "./src/peers/mod.ts" },
+    { name: "./peers/types", path: "./src/peers/types.ts" },
     { name: "./http", path: "./src/http/mod.ts" },
     { name: "./sync", path: "./src/sync.ts" },
     // CF adapters as standalone subpaths so Worker code can `import { ... } from 'smallstore/adapters/cloudflare-d1'`

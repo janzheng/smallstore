@@ -4,6 +4,22 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ---
 
+## 2026-04-25 — Peer registry sprint (afternoon session)
+
+Shipped same-day after morning curation sprint. Brief: `.brief/peer-registry.md`. Level 2 (metadata + authenticated proxy) live at `smallstore.labspace.ai` version `b1c385d1`.
+
+- [x] [done: src/peers/types.ts. Peer, PeerAuth, PeerType, PeerStore, PeerQueryFilter, PeerQueryResult, CreatePeerStoreOptions + proxy types. Secrets via env-ref (token_env/user_env/pass_env), never inline. Reserved path_mapping for level-3 compound adapter] Peer types #peers-types
+- [x] [done agent A, 316 LOC + 18 tests: src/peers/peer-registry.ts with createPeerStore(adapter, opts) → CRUD + list + paging. Slug regex `[a-z0-9][a-z0-9_-]{0,63}` enforces URL-safe names 1-64 chars. Alias key `_by_id/<id>` stores slug string (not full record) so renames are 3 writes with stable id. Tags permissive (32-char entries, 16-total cap, no case normalization)] Peer registry storage #peers-store
+- [x] [done agent B, 528 LOC + 27 tests: src/peers/proxy.ts with resolvePeerAuth + proxyGet + proxyPost + probePeer. Per-type auth (bearer/header/query/basic) with env-var resolution at request time. Header precedence auth > peer-static > client with hop-by-hop + authorization stripped. AbortController timeout (default 10s). Health probe per type: GET /health for smallstore/tigerflare, OPTIONS for webdav, HEAD for others. 2xx + 3xx both count as reachable. Fetch-mocking test helper w/ abort-signal support for timeout tests] Peer proxy #peers-proxy
+- [x] [done: src/peers/http-routes.ts ~390 LOC with registerPeersRoutes(app, {peerStore, requireAuth, env}). 8 routes: GET/POST/PUT/DELETE /peers + GET /peers/:name/health + GET /peers/:name/fetch + POST /peers/:name/query. HTTP-boundary input validation (type/auth-kind/header-shape). Disabled peers 404 from operational routes but remain in CRUD. Proxy responses scrub hop-by-hop + content-encoding; add X-Peer-Latency-Ms header. Auth short-circuit on missing env → 502 Bad Gateway] Peer HTTP routes #peers-http
+- [x] [done: src/peers/mod.ts + sub-entry "./peers" + "./peers/types" in deno.json, jsr.json, scripts/build-npm.ts entryPoints. Plugin invariants verified: core doesn't import peers, no heavy deps (fetch/crypto/btoa only), self-contained, deletable] Peer plugin entry #peers-plugin-entry
+- [x] [done: deploy/src/index.ts wires peersD1 adapter (table peers) + peerStore Map + registerPeersRoutes. env cast through for auth resolution. Landing page updated to advertise /peers + peers_proxy endpoints. AppHandle type extended with peerStore] Peer deploy wiring #peers-deploy-wire
+- [x] [done: wrangler deploy → version b1c385d1-f2d1-4ccb-88db-2842945dbfd1 at smallstore.labspace.ai. Live-verified: POST /peers creates tigerflare-demo with correct defaults. GET /peers lists it. GET /peers/tigerflare-demo/health cleanly surfaces "env var TF_TOKEN is not set" (graceful failure, no crash) — proves auth resolution + error-path propagation both work end-to-end] Peer live verification #peers-live-verify
+- [x] [bonus, unrelated-pre-existing fix: tests/mcp-server.test.ts tools/list expected list didn't include sm_append which was added 2026-04-21. One-line fix — 1202 → 1203/1203 tests green] sm_append tools/list test fix
+- [*] Session stats: 45 peer tests (18 registry + 27 proxy) + 1 mcp fix; ~1250 LOC across types/registry/proxy/http-routes/mod; 2 parallel agents + me sequential; 1 hour wall-clock; zero merge conflicts; 1 live production deploy
+
+---
+
 ## 2026-04-25 — Mailroom curation sprint
 
 Full narrative: `.brief/2026-04-25-curation-sprint.md`. **322/322 messaging tests green (+94 from 228), 9 commits, 4 live production deploys iterating on real forwarded mail.** Live at `smallstore.labspace.ai` version `c0bd59d7`.

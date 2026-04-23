@@ -236,7 +236,7 @@ Deno.test('MCP: tools/list returns all expected tools with inputSchemas', async 
     assertExists(result?.tools);
     const names = result.tools.map((t) => t.name).sort();
     assertEquals(names, [
-      'sm_adapters', 'sm_delete', 'sm_list', 'sm_query', 'sm_read',
+      'sm_adapters', 'sm_append', 'sm_delete', 'sm_list', 'sm_query', 'sm_read',
       'sm_sync', 'sm_sync_jobs', 'sm_sync_status', 'sm_write',
     ]);
     for (const tool of result.tools) {

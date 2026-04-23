@@ -31,6 +31,8 @@
     "./materializers": "./src/materializers/mod.ts",
     "./messaging": "./src/messaging/mod.ts",
     "./messaging/types": "./src/messaging/types.ts",
+    "./peers": "./src/peers/mod.ts",
+    "./peers/types": "./src/peers/types.ts",
     "./http": "./src/http/mod.ts",
     "./sync": "./src/sync.ts",
     "./vfs": "./apps/cli/vfs.ts",
