@@ -6,6 +6,10 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ## 2026-04-25 — Peer registry sprint (afternoon session)
 
+- [x] [done 2026-04-25 end-of-sprint: registered tigerflare as a live peer end-to-end. TF_TOKEN set as wrangler secret on smallstore Worker (from `_deno/apps/tigerflare/.tigerflare.json` servers.cloud.token). Peer `tigerflare-demo` URL corrected from tigerflare.labspace.ai to the actual tigerflare.yawnxyz.workers.dev via PUT /peers/:name. Required a redeploy because env was captured at buildApp time (cached isolate held the pre-secret env). Post-redeploy verification: health probe returns ok:true status:200 latency 81ms; proxy-fetch GET / returns tigerflare directory listing. Also fixed probePeer to use `/` for tigerflare type (no /health route) instead of /health. Live at version ff397427] Wire up tigerflare as a live peer #peers-wire-tigerflare
+
+
+
 Shipped same-day after morning curation sprint. Brief: `.brief/peer-registry.md`. Level 2 (metadata + authenticated proxy) live at `smallstore.labspace.ai` version `b1c385d1`.
 
 - [x] [done: src/peers/types.ts. Peer, PeerAuth, PeerType, PeerStore, PeerQueryFilter, PeerQueryResult, CreatePeerStoreOptions + proxy types. Secrets via env-ref (token_env/user_env/pass_env), never inline. Reserved path_mapping for level-3 compound adapter] Peer types #peers-types

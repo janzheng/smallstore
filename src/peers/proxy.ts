@@ -358,7 +358,9 @@ export async function proxyPost(args: ProxyPostArgs): Promise<ProxyResult> {
 /**
  * Best-effort reachability probe. Type-specific:
  *
- * - `smallstore` / `tigerflare` → `GET ${peer.url}/health`
+ * - `smallstore` → `GET ${peer.url}/health` (smallstore Workers ship a health route)
+ * - `tigerflare` → `GET ${peer.url}/` (tigerflare Workers respond to root with a
+ *   directory listing; no dedicated /health route as of 2026-04-25)
  * - `webdav` → `OPTIONS ${peer.url}`
  * - everything else → `HEAD ${peer.url}`
  *
@@ -389,9 +391,13 @@ export async function probePeer(
   let path: string;
   switch (peer.type) {
     case 'smallstore':
-    case 'tigerflare':
       method = 'GET';
       path = '/health';
+      break;
+    case 'tigerflare':
+      // Tigerflare doesn't expose /health; root returns a directory listing.
+      method = 'GET';
+      path = '/';
       break;
     case 'webdav':
       method = 'OPTIONS';
