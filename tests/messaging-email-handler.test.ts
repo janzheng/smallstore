@@ -10,7 +10,8 @@ import { MemoryAdapter } from '../src/adapters/memory.ts';
 import { createInbox } from '../src/messaging/inbox.ts';
 import { InboxRegistry } from '../src/messaging/registry.ts';
 import { createEmailHandler, type ForwardableEmailMessage } from '../src/messaging/email-handler.ts';
-import type { InboxConfig } from '../src/messaging/types.ts';
+import { functionSink, inboxSink } from '../src/messaging/sinks.ts';
+import type { InboxConfig, InboxItem, SinkContext } from '../src/messaging/types.ts';
 
 const FIXTURES_DIR = new URL('./fixtures/cf-email/', import.meta.url);
 
@@ -156,4 +157,84 @@ Deno.test('email handler — fan-out: same email lands in multiple inboxes for s
 
   assertEquals((await inboxA.list()).items.length, 1);
   assertEquals((await inboxB.list()).items.length, 1);
+});
+
+Deno.test('email handler — sink fan-out: one registration with multiple sinks runs all independently', async () => {
+  const items = new MemoryAdapter();
+  const blobs = new MemoryAdapter();
+  const registry = new InboxRegistry();
+
+  const inbox = createInbox({ name: 'mailroom', channel: 'cf-email', storage: { items, blobs } });
+
+  // Capture side effects from a functionSink alongside the primary inboxSink.
+  const seen: Array<{ id: string; channel: string; registration?: string }> = [];
+  registry.registerSinks('mailroom', {
+    inbox,
+    sinks: [
+      inboxSink(inbox),
+      functionSink(async (item: InboxItem, ctx: SinkContext) => {
+        seen.push({ id: item.id, channel: ctx.channel, registration: ctx.registration });
+      }),
+    ],
+    config: { channel: 'cf-email', storage: 'a' } as InboxConfig,
+    origin: 'boot',
+  });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  // Both sinks fired: inbox persisted + function saw the item
+  const listed = await inbox.list();
+  assertEquals(listed.items.length, 1);
+  assertEquals(seen.length, 1);
+  assertEquals(seen[0].id, listed.items[0].id);
+  assertEquals(seen[0].channel, 'cf-email');
+  assertEquals(seen[0].registration, 'mailroom');
+});
+
+Deno.test('email handler — sink fan-out: a failing sink does not block siblings', async () => {
+  const items = new MemoryAdapter();
+  const blobs = new MemoryAdapter();
+  const registry = new InboxRegistry();
+
+  const inbox = createInbox({ name: 'mailroom', channel: 'cf-email', storage: { items, blobs } });
+
+  // Sink that always throws — we want to verify the inboxSink next to it still runs
+  const throwingSink = functionSink(async () => {
+    throw new Error('simulated downstream failure');
+  });
+
+  registry.registerSinks('mailroom', {
+    inbox,
+    sinks: [throwingSink, inboxSink(inbox)],
+    config: { channel: 'cf-email', storage: 'a' } as InboxConfig,
+    origin: 'boot',
+  });
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  // Despite the throwing sink, the inboxSink persisted the item
+  assertEquals((await inbox.list()).items.length, 1);
+});
+
+Deno.test('email handler — addSink: attaches a sink to an existing registration', async () => {
+  const items = new MemoryAdapter();
+  const blobs = new MemoryAdapter();
+  const registry = new InboxRegistry();
+
+  const inbox = createInbox({ name: 'mailroom', channel: 'cf-email', storage: { items, blobs } });
+  registry.register('mailroom', inbox, { channel: 'cf-email', storage: 'a' }, 'boot');
+
+  const seen: string[] = [];
+  registry.addSink('mailroom', functionSink(async (item) => { seen.push(item.id); }));
+
+  const handler = createEmailHandler({ registry, log: () => {} });
+  const raw = await loadFixture('01-plain-text.eml');
+  await handler(makeMessage(raw, { to: 'mailroom@labspace.ai' }));
+
+  assertEquals((await inbox.list()).items.length, 1);
+  assertEquals(seen.length, 1);
 });

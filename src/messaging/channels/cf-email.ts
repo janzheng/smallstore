@@ -197,6 +197,19 @@ export class CloudflareEmailChannel implements Channel<EmailInput> {
     if (verdicts.dmarc) fields.dmarc_pass = verdicts.dmarc === 'pass';
     if (attachmentMeta.length > 0) fields.attachments = attachmentMeta;
 
+    // Preserve full headers for downstream classifier + regex-filter access.
+    // Stored as a lowercase-keyed map (postal-mime headers are arrays of
+    // {key, value}; we collapse to first-occurrence-wins for ergonomics —
+    // duplicates are rare in practice for the headers consumers care about).
+    if (parsed.headers && parsed.headers.length > 0) {
+      const headerMap: Record<string, string> = {};
+      for (const h of parsed.headers) {
+        const k = (h.key ?? '').toLowerCase();
+        if (k && !(k in headerMap)) headerMap[k] = h.value ?? '';
+      }
+      fields.headers = headerMap;
+    }
+
     const item: InboxItem = {
       id,
       source: this.source,

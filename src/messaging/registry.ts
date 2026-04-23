@@ -16,20 +16,48 @@
  * this from a setInterval (Deno) or DO alarm (CF Workers).
  */
 
-import type { Channel, Inbox, InboxConfig } from './types.ts';
+import type { Channel, Inbox, InboxConfig, Sink } from './types.ts';
+import { inboxSink } from './sinks.ts';
 
 // ============================================================================
 // Inbox registry
 // ============================================================================
 
 export interface InboxRegistration {
-  inbox: Inbox;
+  /**
+   * Inbox providing the read surface (list/query/read). Usually present;
+   * absent only for pure fan-out registrations (sinks without a local pool,
+   * e.g. cf-email → Slack webhook with no storage on our side).
+   */
+  inbox?: Inbox;
+  /**
+   * Sinks for ingest fan-out. Each Sink runs independently — one failing
+   * does not prevent others. When `register(name, inbox, config)` is called
+   * without explicit sinks, this defaults to `[inboxSink(inbox)]` for
+   * behavior parity with the pre-Sink era.
+   */
+  sinks: Sink[];
   /** Original config used to create this inbox (for /admin/inboxes GET). */
   config: InboxConfig;
   /** Wall-clock ms when this inbox was registered (used by TTL reaper). */
   created_at: number;
   /** `boot` = from .smallstore.json; `runtime` = via admin API. */
   origin: 'boot' | 'runtime';
+}
+
+/**
+ * Options for `registerSinks` — the full API. Use when you want to specify
+ * sinks explicitly, skip the inbox (pure fan-out), or both.
+ */
+export interface RegisterSinksOptions {
+  /** Optional Inbox for read surface. If provided and `sinks` is omitted, defaults to `[inboxSink(inbox)]`. */
+  inbox?: Inbox;
+  /** Explicit sinks array. If omitted and `inbox` provided, auto-defaults to `[inboxSink(inbox)]`. */
+  sinks?: Sink[];
+  /** Config used to create this registration. */
+  config: InboxConfig;
+  /** Origin tag. Default 'boot'. */
+  origin?: 'boot' | 'runtime';
 }
 
 export class InboxRegistry {
@@ -61,7 +89,22 @@ export class InboxRegistry {
   }
 
   /**
-   * Register an inbox. Throws if name already taken.
+   * Iterate `[name, registration]` pairs. Useful for serializing all
+   * registrations when the caller needs the name (since `registration.inbox`
+   * is now optional — pure-sink registrations have no inbox to read `.name` from).
+   */
+  *listEntries(): IterableIterator<[string, InboxRegistration]> {
+    for (const [name, reg] of this.entries) {
+      yield [name, reg];
+    }
+  }
+
+  /**
+   * Register an inbox. Throws if name already taken. The inbox is wrapped
+   * as the default sink via `inboxSink(inbox)` so the email-handler fans
+   * out to it the same way as for any other sink. For registrations with
+   * additional sinks (HTTP fan-out, function callback, etc.) use
+   * `registerSinks` instead, or call `addSink(name, sink)` post-registration.
    *
    * @param name - logical inbox name (must match `inbox.name`)
    * @param inbox - the inbox instance
@@ -69,15 +112,47 @@ export class InboxRegistry {
    * @param origin - 'boot' (from .smallstore.json) or 'runtime' (from admin API)
    */
   register(name: string, inbox: Inbox, config: InboxConfig, origin: 'boot' | 'runtime' = 'boot'): void {
+    this.registerSinks(name, { inbox, sinks: [inboxSink(inbox)], config, origin });
+  }
+
+  /**
+   * Register with explicit sinks. Use when you want fan-out beyond a single
+   * inbox, or a pure-sink registration (no inbox, fire-and-forget).
+   *
+   * If `sinks` is omitted and `inbox` is provided, defaults to
+   * `[inboxSink(inbox)]`. If both are omitted, throws — a registration
+   * with zero sinks has nothing to do when an item arrives.
+   */
+  registerSinks(name: string, opts: RegisterSinksOptions): void {
     if (this.entries.has(name)) {
       throw new Error(`Inbox "${name}" already registered`);
     }
+    const sinks = opts.sinks ?? (opts.inbox ? [inboxSink(opts.inbox)] : []);
+    if (sinks.length === 0) {
+      throw new Error(
+        `Registration "${name}" has no sinks. Pass sinks[] or an inbox so there's a destination for incoming items.`,
+      );
+    }
     this.entries.set(name, {
-      inbox,
-      config,
+      inbox: opts.inbox,
+      sinks,
+      config: opts.config,
       created_at: Date.now(),
-      origin,
+      origin: opts.origin ?? 'boot',
     });
+  }
+
+  /**
+   * Append a sink to an existing registration. Handy for attaching fan-out
+   * sinks (HTTP webhook, cross-inbox mirror) after initial register().
+   * Throws if name not registered.
+   */
+  addSink(name: string, sink: Sink): void {
+    const reg = this.entries.get(name);
+    if (!reg) {
+      throw new Error(`Cannot addSink: inbox "${name}" is not registered`);
+    }
+    reg.sinks.push(sink);
   }
 
   /** Unregister an inbox. Returns true if it existed. */

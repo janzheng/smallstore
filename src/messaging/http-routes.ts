@@ -151,8 +151,8 @@ export function registerMessagingRoutes(
   });
 
   app.get('/admin/inboxes', requireAuth, (c) => {
-    const all = registry.listRegistrations().map((reg) =>
-      serializeRegistration(reg.inbox.name, reg),
+    const all = [...registry.listEntries()].map(([name, reg]) =>
+      serializeRegistration(name, reg),
     );
     return c.json({ inboxes: all });
   });

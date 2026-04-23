@@ -28,6 +28,9 @@ export type {
   PullResult,
   QueryOptions,
   ReadOptions,
+  Sink,
+  SinkContext,
+  SinkResult,
 } from './types.ts';
 
 export { decodeCursor, encodeCursor, type Cursor } from './cursor.ts';
@@ -37,10 +40,12 @@ export { parseFilterSpec, type FilterSpec } from './filter-spec.ts';
 export {
   InboxRegistry,
   type InboxRegistration,
+  type RegisterSinksOptions,
   registerChannel,
   getChannel,
   listChannels,
 } from './registry.ts';
+export { inboxSink, httpSink, functionSink, type HttpSinkOptions } from './sinks.ts';
 export { registerMessagingRoutes, type RegisterMessagingRoutesOptions, type RequireAuth } from './http-routes.ts';
 export { CloudflareEmailChannel, cloudflareEmailChannel, type EmailInput } from './channels/cf-email.ts';
 export { createEmailHandler, type CreateEmailHandlerOptions, type ForwardableEmailMessage } from './email-handler.ts';

@@ -423,3 +423,64 @@ export interface InboxStorage {
   items: StorageAdapter;
   blobs?: StorageAdapter;
 }
+
+// ============================================================================
+// Sink — pipeline egress primitive
+// ============================================================================
+
+/**
+ * Sink — a destination for an ingested InboxItem.
+ *
+ * The Sink abstraction decouples "where an item goes" from "what it is." A
+ * channel produces an InboxItem; the pipeline fans it out to N sinks.
+ * Adapter-backed inbox is one flavor of sink (see `inboxSink`); HTTP POST,
+ * function callback, file write, cross-inbox mirror are others.
+ *
+ * Design constraints:
+ * - Sinks run **independently**: one sink's failure must not prevent others.
+ *   The dispatcher should collect results, not abort on first error.
+ * - Sinks are **idempotent where possible**: same item hitting the same sink
+ *   twice should not double-persist (inbox does this via content-hash dedup;
+ *   HTTP sinks rely on downstream idempotency).
+ * - Sinks receive the **parsed item + blob payload** (via `SinkContext`) —
+ *   the channel already did the parsing; sinks don't re-parse.
+ *
+ * See `.brief/mailroom-pipeline.md` § "The key abstraction that makes
+ * everything else work" for rationale.
+ */
+export type Sink = (item: InboxItem, ctx: SinkContext) => Promise<SinkResult>;
+
+/**
+ * Context passed to every Sink call.
+ */
+export interface SinkContext {
+  /**
+   * Blobs the channel produced alongside the item (raw .eml, html, attachments).
+   * Sinks that persist binaries (e.g. `inboxSink` with a blobs adapter) use
+   * these; sinks that don't (e.g. `httpSink`) can ignore them or forward the
+   * blob keys as references.
+   */
+  blobs?: Record<string, BlobPayload>;
+
+  /** Channel name that produced this item (e.g. "cf-email"). For logging/routing. */
+  channel: string;
+
+  /** Registration name this sink belongs to (for error attribution / logging). */
+  registration?: string;
+}
+
+/**
+ * Result of a single Sink call. The dispatcher collects these across all
+ * sinks in a registration; non-fatal errors are attached here rather than
+ * thrown, so one failing sink doesn't tank the others.
+ */
+export interface SinkResult {
+  /** Did this sink persist/forward the item? */
+  stored: boolean;
+
+  /** Sink-assigned id if any (e.g. inbox's canonical id; may differ from item.id). */
+  id?: string;
+
+  /** Non-fatal error message. Dispatcher continues to other sinks when present. */
+  error?: string;
+}
