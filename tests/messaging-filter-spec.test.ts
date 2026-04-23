@@ -113,3 +113,80 @@ match:
 ---`;
   assertThrows(() => parseFilterSpec(md), Error, 'must be an array');
 });
+
+// ============================================================================
+// Regex operator + header presence
+// ============================================================================
+
+Deno.test('filter-spec — <field>_regex scalar maps to fields_regex.<field>', () => {
+  const md = `---
+match:
+  from_email_regex: "^.*@noreply\\\\."
+  subject_regex: "(unsubscribe|newsletter)"
+---`;
+  const spec = parseFilterSpec(md);
+  assertEquals(spec.filter.fields_regex, {
+    from_email: '^.*@noreply\\.',
+    subject: '(unsubscribe|newsletter)',
+  });
+});
+
+Deno.test('filter-spec — <field>_regex array becomes OR array', () => {
+  const md = `---
+match:
+  from_email_regex:
+    - "^.*@mailer-daemon\\\\."
+    - "^noreply@"
+---`;
+  const spec = parseFilterSpec(md);
+  assertEquals(spec.filter.fields_regex, {
+    from_email: ['^.*@mailer-daemon\\.', '^noreply@'],
+  });
+});
+
+Deno.test('filter-spec — text_regex maps to top-level text_regex', () => {
+  const md = `---
+match:
+  text_regex: "password reset"
+---`;
+  const spec = parseFilterSpec(md);
+  assertEquals(spec.filter.text_regex, 'password reset');
+  assertEquals(spec.filter.fields, undefined);
+});
+
+Deno.test('filter-spec — headers.<name>: present maps to filter.headers', () => {
+  const md = `---
+match:
+  headers.list-unsubscribe: present
+  headers.x-spam: absent
+---`;
+  const spec = parseFilterSpec(md);
+  assertEquals(spec.filter.headers, {
+    'list-unsubscribe': 'present',
+    'x-spam': 'absent',
+  });
+});
+
+Deno.test('filter-spec — headers.<name>: <regex> passes regex string through', () => {
+  const md = `---
+match:
+  headers.auto-submitted: "auto-generated"
+  headers.content-type: "^text/"
+---`;
+  const spec = parseFilterSpec(md);
+  assertEquals(spec.filter.headers, {
+    'auto-submitted': 'auto-generated',
+    'content-type': '^text/',
+  });
+});
+
+Deno.test('filter-spec — from_email + from_email_regex coexist (AND)', () => {
+  const md = `---
+match:
+  from_email: "@example.com"
+  from_email_regex: "^noreply@"
+---`;
+  const spec = parseFilterSpec(md);
+  assertEquals(spec.filter.fields, { from_email: '@example.com' });
+  assertEquals(spec.filter.fields_regex, { from_email: '^noreply@' });
+});

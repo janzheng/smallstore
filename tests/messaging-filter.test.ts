@@ -105,3 +105,144 @@ Deno.test('filter — top-level keys AND together', () => {
   );
   assertEquals(fail, false);
 });
+
+// ============================================================================
+// Regex / headers — InboxFilter.fields_regex, text_regex, headers
+// ============================================================================
+
+const emailItem: InboxItem = {
+  id: 'item-email',
+  source: 'cf-email',
+  source_version: 'email/v1',
+  received_at: '2026-04-22T12:00:00Z',
+  summary: 'Please confirm your subscription',
+  body: 'Click here for a password reset link if you need one.',
+  fields: {
+    from_email: 'noreply@mailer-daemon.example.com',
+    subject: 'Please confirm your subscription',
+    headers: {
+      'list-unsubscribe': '<https://example.com/unsub?u=123>',
+      'auto-submitted': 'auto-generated',
+      'content-type': 'text/html; charset=utf-8',
+    },
+  },
+  labels: [],
+};
+
+Deno.test('filter — fields_regex matches exact regex', () => {
+  const ok = evaluateFilter(
+    { fields_regex: { from_email: '^.*@(mailer-daemon|noreply)\\.' } },
+    emailItem,
+  );
+  assertEquals(ok, true);
+});
+
+Deno.test('filter — fields_regex array value is OR', () => {
+  const ok = evaluateFilter(
+    { fields_regex: { from_email: ['never-matches-xyz', '^noreply@'] } },
+    emailItem,
+  );
+  assertEquals(ok, true);
+
+  const miss = evaluateFilter(
+    { fields_regex: { from_email: ['^foo@', '^bar@'] } },
+    emailItem,
+  );
+  assertEquals(miss, false);
+});
+
+Deno.test('filter — fields_regex on missing field is false', () => {
+  assertEquals(
+    evaluateFilter({ fields_regex: { not_a_field: '.*' } }, emailItem),
+    false,
+  );
+});
+
+Deno.test('filter — fields_regex is case-insensitive by default', () => {
+  assertEquals(
+    evaluateFilter({ fields_regex: { from_email: 'MAILER-DAEMON' } }, emailItem),
+    true,
+  );
+});
+
+Deno.test('filter — text_regex matches summary or body', () => {
+  assertEquals(evaluateFilter({ text_regex: 'password reset' }, emailItem), true);
+  assertEquals(evaluateFilter({ text_regex: 'confirm your subscription' }, emailItem), true);
+  assertEquals(evaluateFilter({ text_regex: 'unrelated.*topic' }, emailItem), false);
+});
+
+Deno.test('filter — headers present when header exists', () => {
+  assertEquals(
+    evaluateFilter({ headers: { 'list-unsubscribe': 'present' } }, emailItem),
+    true,
+  );
+  // Case of the rule key normalizes to lowercase for lookup.
+  assertEquals(
+    evaluateFilter({ headers: { 'List-Unsubscribe': 'present' } }, emailItem),
+    true,
+  );
+  assertEquals(
+    evaluateFilter({ headers: { 'x-not-there': 'present' } }, emailItem),
+    false,
+  );
+});
+
+Deno.test('filter — headers absent when header missing', () => {
+  assertEquals(
+    evaluateFilter({ headers: { 'x-not-there': 'absent' } }, emailItem),
+    true,
+  );
+  assertEquals(
+    evaluateFilter({ headers: { 'list-unsubscribe': 'absent' } }, emailItem),
+    false,
+  );
+});
+
+Deno.test('filter — headers with regex value matches header content', () => {
+  assertEquals(
+    evaluateFilter({ headers: { 'auto-submitted': 'auto-generated' } }, emailItem),
+    true,
+  );
+  assertEquals(
+    evaluateFilter({ headers: { 'content-type': '^text/' } }, emailItem),
+    true,
+  );
+  assertEquals(
+    evaluateFilter({ headers: { 'content-type': '^application/json' } }, emailItem),
+    false,
+  );
+  // Missing header with regex rule → no-match (not present → empty value)
+  assertEquals(
+    evaluateFilter({ headers: { 'x-not-there': '.*' } }, emailItem),
+    false,
+  );
+});
+
+Deno.test('filter — invalid regex is skipped (no throw, no match)', () => {
+  // Invalid regex in fields_regex
+  assertEquals(
+    evaluateFilter({ fields_regex: { from_email: '([a-z' } }, emailItem),
+    false,
+  );
+  // Invalid regex in text_regex
+  assertEquals(
+    evaluateFilter({ text_regex: '([a-z' }, emailItem),
+    false,
+  );
+  // Invalid regex in headers rule
+  assertEquals(
+    evaluateFilter({ headers: { 'content-type': '([a-z' } }, emailItem),
+    false,
+  );
+});
+
+Deno.test('filter — fields_regex on array field value matches any entry', () => {
+  const item: InboxItem = {
+    ...emailItem,
+    fields: { ...emailItem.fields, to_addrs: ['alice@x.com', 'bob@example.org'] },
+  };
+  assertEquals(
+    evaluateFilter({ fields_regex: { to_addrs: '@example\\.org$' } }, item),
+    true,
+  );
+});

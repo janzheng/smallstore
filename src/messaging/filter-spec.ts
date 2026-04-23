@@ -24,7 +24,12 @@
  *
  * `match:` keys map to `InboxFilter`:
  * - `<field>_in: [...]`  → `fields.<field>: [...]` (OR-of-array)
+ * - `<field>_regex: <value>` → `fields_regex.<field>: <value>` (single or array)
  * - `<field>: value`     → `fields.<field>: value` (single)
+ * - `text_regex: <value>` → top-level `text_regex`
+ * - `headers.<name>: <value>` → `headers[<name>]: <value>`
+ *   ('present' | 'absent' | regex pattern; name preserved as authored —
+ *   evaluator lowercases for lookup)
  * - `since`, `until`     → top-level
  * - `text`               → top-level
  * - `labels`, `exclude_labels` → top-level
@@ -88,6 +93,8 @@ function parseMatchBlock(match: any): InboxFilter {
 
   const filter: InboxFilter = {};
   const fields: Record<string, string | string[]> = {};
+  const fieldsRegex: Record<string, string | string[]> = {};
+  const headers: Record<string, string> = {};
 
   for (const [key, raw] of Object.entries(match)) {
     if (raw === undefined || raw === null) continue;
@@ -101,6 +108,9 @@ function parseMatchBlock(match: any): InboxFilter {
       case 'text':
         filter[key] = String(raw);
         continue;
+      case 'text_regex':
+        filter[key] = String(raw);
+        continue;
       case 'labels':
       case 'exclude_labels':
         filter[key] = toStringArray(raw, key);
@@ -109,6 +119,31 @@ function parseMatchBlock(match: any): InboxFilter {
       case 'thread_id':
         filter[key] = Array.isArray(raw) ? toStringArray(raw, key) : String(raw);
         continue;
+    }
+
+    // headers.<name>: <value> → filter.headers[<name>]
+    if (key.startsWith('headers.')) {
+      const name = key.slice('headers.'.length);
+      if (!name) throw new Error(`Invalid filter key: '${key}'`);
+      if (typeof raw !== 'string' && typeof raw !== 'number' && typeof raw !== 'boolean') {
+        throw new Error(`'${key}' must be a string ('present' | 'absent' | regex)`);
+      }
+      headers[name] = String(raw);
+      continue;
+    }
+
+    // <field>_regex suffix → single string or array
+    if (key.endsWith('_regex')) {
+      const field = key.slice(0, -'_regex'.length);
+      if (!field) throw new Error(`Invalid filter key: '${key}'`);
+      if (Array.isArray(raw)) {
+        fieldsRegex[field] = toStringArray(raw, key);
+      } else if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') {
+        fieldsRegex[field] = String(raw);
+      } else {
+        throw new Error(`Unsupported value type for '${key}' in match block`);
+      }
+      continue;
     }
 
     // <field>_in suffix → array
@@ -135,6 +170,8 @@ function parseMatchBlock(match: any): InboxFilter {
   }
 
   if (Object.keys(fields).length > 0) filter.fields = fields;
+  if (Object.keys(fieldsRegex).length > 0) filter.fields_regex = fieldsRegex;
+  if (Object.keys(headers).length > 0) filter.headers = headers;
   return filter;
 }
 

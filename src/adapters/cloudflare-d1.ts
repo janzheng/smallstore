@@ -28,6 +28,19 @@ import type { AdapterCapabilities } from '../types.ts';
 import type { RetryOptions } from '../utils/retry.ts';
 import { retryFetch, type RetryFetchOptions } from '../utils/retry-fetch.ts';
 import { debug } from '../utils/debug.ts';
+import {
+  applyMessagingMigrations,
+  buildDeleteByIdSql,
+  buildFtsSql,
+  buildKeysSql,
+  buildListSql,
+  buildSelectByIdSql,
+  buildUpsertSql,
+  decodeItemRow,
+  encodeItemRow,
+  MESSAGING_COLUMNS,
+  type MessagingRowInput,
+} from './cloudflare-d1-messaging-schema.ts';
 
 // ============================================================================
 // Cloudflare D1 Config
@@ -54,6 +67,30 @@ export interface CloudflareD1Config {
 
   /** HTTP Mode: Retry options for transient failures (false to disable) */
   retry?: RetryOptions | false;
+
+  /**
+   * Opt into the messaging-mode schema (native mode only).
+   *
+   * When truthy, `ensureTable()` migrates to an `InboxItem`-shaped table
+   * (denormalized columns + FTS5 virtual table + mirror triggers) instead
+   * of the generic `{key, value, metadata}` KV schema.
+   *
+   * In messaging mode:
+   * - `set(id, item)` upserts by `id` into the denormalized columns
+   * - `get(id)` returns the reconstructed `InboxItem` (null if missing)
+   * - `delete(id)` removes the row (FTS stays in sync via triggers)
+   * - `query({ fts: "text" })` runs an FTS5 MATCH against
+   *   summary/body/from_display/subject
+   * - `query({ prefix, filter, limit })` still works (fallback to generic
+   *   in-memory filter over the decoded items)
+   *
+   * HTTP mode rejects `messaging: true` because the HTTP surface is the
+   * generic k/v endpoint; the messaging pipeline is expected to run inside
+   * a Worker with a native D1 binding.
+   *
+   * See `.brief/mailroom-pipeline.md` § FTS5 for product-level rationale.
+   */
+  messaging?: boolean;
 }
 
 interface ApiResponse<T = any> {
@@ -81,6 +118,9 @@ export class CloudflareD1Adapter implements StorageAdapter {
   private apiKey?: string;
   private mode: 'http' | 'native';
   private retryOpts?: RetryFetchOptions;
+  private messaging: boolean;
+  /** Cached flag — true once ensureTable() has completed successfully. */
+  private migrated = false;
   
   // Adapter capabilities
   readonly capabilities: AdapterCapabilities = {
@@ -123,6 +163,14 @@ export class CloudflareD1Adapter implements StorageAdapter {
     
     this.table = config.table || DEFAULT_TABLE;
     this.retryOpts = config.retry === false ? { enabled: false } : config.retry ? { ...config.retry } : undefined;
+    this.messaging = config.messaging === true;
+
+    if (this.messaging && this.mode !== 'native') {
+      throw new Error(
+        'CloudflareD1Adapter: messaging mode requires native D1 binding (got HTTP mode). ' +
+        'Pass { binding: env.SM_D1, messaging: true } from inside a Worker.',
+      );
+    }
   }
   
   // ============================================================================
@@ -138,21 +186,34 @@ export class CloudflareD1Adapter implements StorageAdapter {
   // ============================================================================
   
   private async ensureTable(): Promise<void> {
+    if (this.migrated) return;
+
     if (this.mode === 'native' && this.binding) {
-      // D1 `binding.exec()` splits on newlines and requires each line to be a
-      // complete statement. Use prepare()/run() for multi-statement DDL, OR
-      // collapse to a single line. Single-line is simpler and works with both
-      // exec and prepare. (Bug fixed 2026-04-23: previous multi-line template
-      // tripped `Error in line 1: CREATE TABLE ... incomplete input`.)
-      const sql = `CREATE TABLE IF NOT EXISTS ${this.table} (key TEXT PRIMARY KEY, value TEXT NOT NULL, metadata TEXT, created_at INTEGER DEFAULT (strftime('%s', 'now')), updated_at INTEGER DEFAULT (strftime('%s', 'now')))`;
-      await this.binding.prepare(sql).run();
+      if (this.messaging) {
+        // Messaging mode — denormalized InboxItem columns + FTS5 + triggers.
+        // Each migration step is a single-line statement so it's safe for
+        // both `exec()` and `prepare().run()`. Idempotent via the
+        // `d1_migrations` tracking table (see migration helper comments).
+        await applyMessagingMigrations(this.binding as any, this.table);
+      } else {
+        // D1 `binding.exec()` splits on newlines and requires each line to be a
+        // complete statement. Use prepare()/run() for multi-statement DDL, OR
+        // collapse to a single line. Single-line is simpler and works with both
+        // exec and prepare. (Bug fixed 2026-04-23: previous multi-line template
+        // tripped `Error in line 1: CREATE TABLE ... incomplete input`.)
+        const sql = `CREATE TABLE IF NOT EXISTS ${this.table} (key TEXT PRIMARY KEY, value TEXT NOT NULL, metadata TEXT, created_at INTEGER DEFAULT (strftime('%s', 'now')), updated_at INTEGER DEFAULT (strftime('%s', 'now')))`;
+        await this.binding.prepare(sql).run();
+      }
     } else {
       // HTTP mode - table creation is handled by the API
+      // (messaging mode is rejected at construction time)
       await this.httpRequest('/d1/table/create', {
         method: 'POST',
         body: JSON.stringify({ table: this.table }),
       });
     }
+
+    this.migrated = true;
   }
   
   // ============================================================================
@@ -203,14 +264,24 @@ export class CloudflareD1Adapter implements StorageAdapter {
       if (this.mode === 'native' && this.binding) {
         // Native mode
         await this.ensureTable();
-        
+
+        if (this.messaging) {
+          // Messaging mode: key is the InboxItem id; reconstruct the item
+          // from denormalized columns + JSON blob.
+          const row = await this.binding
+            .prepare(buildSelectByIdSql(this.table))
+            .bind(key)
+            .first();
+          return row ? decodeItemRow(row) : null;
+        }
+
         const sql = `SELECT value FROM ${this.table} WHERE key = ?`;
         const result = await this.binding.prepare(sql).bind(key).first();
-        
+
         if (!result) {
           return null;
         }
-        
+
         // Parse value
         try {
           return JSON.parse(result.value as string);
@@ -246,13 +317,40 @@ export class CloudflareD1Adapter implements StorageAdapter {
    * @param value - Value to store
    */
   async set(key: string, value: any): Promise<void> {
+    if (this.mode === 'native' && this.binding && this.messaging) {
+      // Messaging mode: value must be InboxItem-shaped. Denormalize into
+      // columns + JSON blob so FTS5 + indexes work. The `key` argument is
+      // expected to equal `value.id` — we don't force it, but callers that
+      // pass a mismatched key will get a surprising lookup miss later.
+      await this.ensureTable();
+
+      if (!value || typeof value !== 'object') {
+        throw new Error(
+          `CloudflareD1Adapter(messaging): set() expects an InboxItem-shaped object, got ${typeof value}`,
+        );
+      }
+
+      const item = value as MessagingRowInput;
+      // Prefer the explicit key when callers pass one; otherwise use item.id.
+      const rowId = key ?? item.id;
+      if (!rowId) {
+        throw new Error('CloudflareD1Adapter(messaging): missing id — pass key or value.id');
+      }
+      const row = encodeItemRow({ ...item, id: rowId });
+
+      const sql = buildUpsertSql(this.table);
+      const params = MESSAGING_COLUMNS.map(c => row[c]);
+      await this.binding.prepare(sql).bind(...params).run();
+      return;
+    }
+
     // Serialize value to JSON string
     const serialized = typeof value === 'string' ? value : JSON.stringify(value);
-    
+
     if (this.mode === 'native' && this.binding) {
       // Native mode
       await this.ensureTable();
-      
+
       const sql = `
         INSERT INTO ${this.table} (key, value, updated_at)
         VALUES (?, ?, strftime('%s', 'now'))
@@ -260,7 +358,7 @@ export class CloudflareD1Adapter implements StorageAdapter {
           value = excluded.value,
           updated_at = excluded.updated_at
       `;
-      
+
       await this.binding.prepare(sql).bind(key, serialized).run();
     } else {
       // HTTP mode
@@ -285,8 +383,10 @@ export class CloudflareD1Adapter implements StorageAdapter {
       if (this.mode === 'native' && this.binding) {
         // Native mode
         await this.ensureTable();
-        
-        const sql = `DELETE FROM ${this.table} WHERE key = ?`;
+
+        const sql = this.messaging
+          ? buildDeleteByIdSql(this.table)
+          : `DELETE FROM ${this.table} WHERE key = ?`;
         await this.binding.prepare(sql).bind(key).run();
       } else {
         // HTTP mode
@@ -326,19 +426,29 @@ export class CloudflareD1Adapter implements StorageAdapter {
       if (this.mode === 'native' && this.binding) {
         // Native mode
         await this.ensureTable();
-        
+
+        if (this.messaging) {
+          // Messaging mode: the PK column is `id`, not `key`.
+          const sql = buildKeysSql(this.table, prefix);
+          const stmt = this.binding.prepare(sql);
+          const result = prefix !== undefined
+            ? await stmt.bind(`${prefix}%`).all()
+            : await stmt.all();
+          return result.results.map((row: any) => row.id);
+        }
+
         let sql = `SELECT key FROM ${this.table}`;
         const bindings: any[] = [];
-        
+
         if (prefix) {
           sql += ` WHERE key LIKE ?`;
           bindings.push(`${prefix}%`);
         }
-        
+
         sql += ` ORDER BY key ASC`;
-        
+
         const result = await this.binding.prepare(sql).bind(...bindings).all();
-        
+
         return result.results.map((row: any) => row.key);
       } else {
         // HTTP mode
@@ -471,18 +581,72 @@ export class CloudflareD1Adapter implements StorageAdapter {
   
   /**
    * Query items with filtering
-   * 
-   * Basic in-memory filtering
-   * 
-   * @param prefix - Key prefix to search
-   * @param filter - Filter function
+   *
+   * Basic in-memory filtering. In messaging mode, additionally supports:
+   * - `fts: "query"` — run an FTS5 MATCH against summary/body/from_display/subject
+   *   and return decoded items, newest-first. Post-filtered by `filter`/`limit`
+   *   if provided.
+   *
+   * Non-messaging mode ignores `fts` (no FTS index exists in the generic
+   * k/v schema).
+   *
+   * @param params - Query params
    * @returns Filtered items
    */
   async query(params: {
     prefix?: string;
     filter?: (item: any) => boolean;
     limit?: number;
+    /**
+     * Messaging-mode only: FTS5 MATCH query string. Falls through to the
+     * scan path when omitted, or when the adapter isn't in messaging mode.
+     */
+    fts?: string;
   }): Promise<{ data: any[]; totalCount: number }> {
+    // FTS5 path (messaging mode only).
+    if (params.fts && this.mode === 'native' && this.binding && this.messaging) {
+      await this.ensureTable();
+
+      const sql = buildFtsSql(this.table);
+      const result = await this.binding.prepare(sql).bind(params.fts).all();
+
+      const results: any[] = [];
+      for (const row of result.results ?? []) {
+        const item = decodeItemRow(row);
+        if (!params.filter || params.filter(item)) {
+          results.push(item);
+          if (params.limit && results.length >= params.limit) break;
+        }
+      }
+
+      return { data: results, totalCount: results.length };
+    }
+
+    // Messaging-mode non-FTS path: use column-based list scan instead of
+    // the get()-per-key loop. Cheaper (one round trip) and preserves the
+    // received_at DESC ordering callers expect.
+    if (this.mode === 'native' && this.binding && this.messaging) {
+      await this.ensureTable();
+
+      const sql = buildListSql(this.table, params.prefix);
+      const stmt = this.binding.prepare(sql);
+      const result = params.prefix !== undefined
+        ? await stmt.bind(`${params.prefix}%`).all()
+        : await stmt.all();
+
+      const results: any[] = [];
+      for (const row of result.results ?? []) {
+        const item = decodeItemRow(row);
+        if (!params.filter || params.filter(item)) {
+          results.push(item);
+          if (params.limit && results.length >= params.limit) break;
+        }
+      }
+
+      return { data: results, totalCount: results.length };
+    }
+
+    // Fallback: generic k/v keys-and-get loop.
     const keys = await this.keys(params.prefix);
     const results: any[] = [];
 
@@ -592,6 +756,15 @@ export class CloudflareD1Adapter implements StorageAdapter {
  *   binding: env.SM_D1,
  *   table: "my_collection"
  * });
+ *
+ * @example Messaging Mode (InboxItem schema + FTS5)
+ * const adapter = createCloudflareD1Adapter({
+ *   binding: env.MAILROOM_D1,
+ *   table: "mailroom_items",
+ *   messaging: true,
+ * });
+ * await adapter.set(item.id, item);
+ * const { data } = await adapter.query({ fts: "newsletter stripe" });
  */
 export function createCloudflareD1Adapter(config: CloudflareD1Config): CloudflareD1Adapter {
   return new CloudflareD1Adapter(config);

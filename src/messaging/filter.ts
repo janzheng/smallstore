@@ -11,6 +11,11 @@
  * - `labels`/`exclude_labels` test the `labels` array (whole-tag match)
  * - `since`/`until` compare ISO timestamps against `received_at`
  * - `source`/`thread_id` whole-string match (or OR within array)
+ * - `fields_regex.<key>` tests case-insensitive JS regex against stringified field
+ * - `text_regex` tests case-insensitive JS regex against summary + body
+ * - `headers.<name>` matches against item.fields.headers (lowercase-keyed):
+ *   'present' | 'absent' | regex pattern
+ * - Invalid regex in any *_regex / headers rule → no-match (never throws)
  */
 
 import type { InboxFilter, InboxItem } from './types.ts';
@@ -53,6 +58,43 @@ export function evaluateFilter(filter: InboxFilter, item: InboxItem): boolean {
     }
   }
 
+  if (filter.fields_regex) {
+    for (const [key, expected] of Object.entries(filter.fields_regex)) {
+      const actual = item.fields?.[key];
+      if (actual === undefined || actual === null) return false;
+      if (!matchFieldRegex(expected, actual)) return false;
+    }
+  }
+
+  if (filter.text_regex !== undefined && filter.text_regex.length > 0) {
+    const re = compileRegex(filter.text_regex);
+    if (!re) return false;
+    const hay = `${item.summary ?? ''}\n${item.body ?? ''}`;
+    if (!re.test(hay)) return false;
+  }
+
+  if (filter.headers) {
+    const headers = (item.fields?.headers ?? {}) as Record<string, any>;
+    for (const [rawName, rule] of Object.entries(filter.headers)) {
+      const name = rawName.toLowerCase();
+      const has = Object.prototype.hasOwnProperty.call(headers, name);
+      if (rule === 'present') {
+        if (!has) return false;
+        continue;
+      }
+      if (rule === 'absent') {
+        if (has) return false;
+        continue;
+      }
+      // regex rule
+      const re = compileRegex(rule);
+      if (!re) return false;
+      const value = has ? String(headers[name] ?? '') : '';
+      if (!value) return false;
+      if (!re.test(value)) return false;
+    }
+  }
+
   return true;
 }
 
@@ -84,4 +126,35 @@ function matchFieldPartial(expected: string | string[], actual: any): boolean {
 
   // OR within expected, OR across haystacks
   return needles.some(n => haystacks.some(h => h.includes(n)));
+}
+
+/**
+ * Regex match for `fields_regex.<key>`.
+ *
+ * - Patterns compiled case-insensitive.
+ * - Invalid patterns → skipped (no-match) rather than throwing.
+ * - Field value array → ANY entry matches.
+ * - Expected array → ANY pattern must match (OR).
+ */
+function matchFieldRegex(expected: string | string[], actual: any): boolean {
+  const patterns = (Array.isArray(expected) ? expected : [expected])
+    .map(compileRegex)
+    .filter((r): r is RegExp => r !== null);
+
+  if (patterns.length === 0) return false;
+
+  const haystacks = Array.isArray(actual)
+    ? actual.map(v => String(v))
+    : [String(actual)];
+
+  return patterns.some(re => haystacks.some(h => re.test(h)));
+}
+
+/** Compile a regex pattern, case-insensitive; return null on SyntaxError. */
+function compileRegex(pattern: string): RegExp | null {
+  try {
+    return new RegExp(pattern, 'i');
+  } catch {
+    return null;
+  }
 }

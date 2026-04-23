@@ -318,6 +318,29 @@ export interface InboxFilter {
 
   /** Match by thread_id. */
   thread_id?: string | string[];
+
+  /**
+   * Regex match on InboxItem.fields.<key>. Key = field name; value = regex pattern
+   * (JavaScript regex source, case-insensitive by default). Array value = OR.
+   * Invalid regex patterns are skipped (treated as no-match) rather than throwing.
+   *
+   * Example: { fields_regex: { from_email: "^.*@(mailer-daemon|noreply)\\." } }
+   */
+  fields_regex?: Record<string, string | string[]>;
+
+  /**
+   * Regex match on summary + body (case-insensitive by default). Invalid regex
+   * is skipped. Same ergonomics as `text` but with pattern matching.
+   */
+  text_regex?: string;
+
+  /**
+   * Header matching on item.fields.headers (lowercase-keyed map).
+   * - 'present'  : header key must exist
+   * - 'absent'   : header key must NOT exist
+   * - any other string: treated as regex to match against the header value
+   */
+  headers?: Record<string, 'present' | 'absent' | string>;
 }
 
 // ============================================================================
