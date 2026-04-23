@@ -117,20 +117,20 @@ Deno.test('cf-email — missing Message-ID: parsing same bytes twice yields same
 // 05 — Bounce
 // ============================================================================
 
-Deno.test('cf-email — bounce: tagged with "bounce" + "auto" labels', async () => {
+Deno.test('cf-email — bounce: tagged with "bounce" + "auto-reply" labels', async () => {
   const { item } = await parse('05-bounce.eml');
   assertEquals(item.labels?.includes('bounce'), true);
-  assertEquals(item.labels?.includes('auto'), true);
+  assertEquals(item.labels?.includes('auto-reply'), true);
 });
 
 // ============================================================================
 // 06 — OOO
 // ============================================================================
 
-Deno.test('cf-email — OOO: tagged with "ooo" + "auto"', async () => {
+Deno.test('cf-email — OOO: tagged with "ooo" + "auto-reply"', async () => {
   const { item } = await parse('06-ooo.eml');
   assertEquals(item.labels?.includes('ooo'), true);
-  assertEquals(item.labels?.includes('auto'), true);
+  assertEquals(item.labels?.includes('auto-reply'), true);
 });
 
 // ============================================================================

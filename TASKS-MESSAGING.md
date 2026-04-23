@@ -166,6 +166,21 @@ Commitment-ordered build queue — #0 is the refactor that unlocks everything el
 - [?] Spam layers (non-LLM, composed as preIngest rules) — (1) regex blocklist terminal drop→quarantine, (2) header heuristics, (3) sender reputation `spam_count/count > 0.5 && count ≥ 3`, (4) content hash dedup. LLM classifier deferred as optional layer 5. #messaging #mailroom-spam #needs:mailroom-rules #needs:mailroom-sender-index
 - [?] Quarantine sub-inbox + restore surface — dropped items land in `mailroom-quarantine` sink (never silently lost). `sm_inbox_restore(sender, id)` moves back to main. Store-first over filter-first is the explicit choice. #messaging #mailroom-quarantine #needs:mailroom-sinks
 
+### Newsletter bulk export — first real use case (2026-04-24)
+
+User stated goal: "handle lots of subscribed newsletters — easy way to download them raw (JSON/JSONL), plugin ecosystem to process them, hand them off to something else."
+
+Existing surface covers most of it already: Wave 1's classifier tags newsletters; regex filter matches them; `POST /inbox/:name/query` returns JSON; `GET /inbox/:name/items/:id?full=true` inflates body. Sink abstraction handles handoff (httpSink to external processor). Gap for BULK processing: inbox.list() returns metadata only (no body inflation) — consumers would make N separate blob fetches for N newsletters. Need one-shot bulk export.
+
+- [?] **Bulk export endpoint** — `GET /inbox/:name/export?format=jsonl&filter=<url-encoded-json>&include=body,raw,attachments&limit=N` — streams JSONL (one item per line) with optional blob inlining. Inline policy: `include=body` fetches `body_ref` and puts content in `body` field; `include=raw` base64-encodes the raw .eml; `include=attachments` adds presigned URLs. Uses existing filter DSL (regex supported). ~150 LOC in http-routes.ts + streaming response. **This is the "download newsletters for LLM processing" affordance.** #messaging #newsletter-export #needs:mailroom-hooks
+- [?] **MCP tool: `sm_inbox_export`** — mirror of the HTTP export but returns a JSON array (MCP doesn't stream). Limit 100 items per call for safety; use cursor for paging. #messaging #newsletter-export-mcp #needs:newsletter-export
+
+Use case walkthroughs this unblocks:
+- "Give me every newsletter from substack.com this week as JSONL with inline body" → one curl
+- "Feed last 50 newsletters into an LLM summarizer" → client: fetch export → stream to LLM
+- "Route all Cloudflare blog newsletters to a second smallstore inbox" → httpSink + filter
+- "Archive newsletters older than 30 days to R2 as JSONL" → scheduled export + R2 write
+
 Extraction to `_deno/apps/mailroom/` triggers when: multiple channels × multiple sinks × opinionated policy. Not today. See brief for the extraction plan.
 
 ### Wave 1 discovered follow-ups (2026-04-24)

@@ -343,9 +343,11 @@ function detectAutoReply(parsed: any, autoSubmitted: string | undefined): string
   const subject = (parsed.subject ?? '').toLowerCase();
   const fromAddr = (parsed.from?.address ?? '').toLowerCase();
 
-  // RFC 3834 — auto-submitted header is the canonical signal
+  // RFC 3834 — auto-submitted header is the canonical signal.
+  // Emits 'auto-reply' (aligns with classifier.ts; replaces legacy 'auto').
+  // 'ooo' stays as the specific subtype for auto-replied out-of-office.
   if (autoSubmitted && autoSubmitted.toLowerCase() !== 'no') {
-    labels.push('auto');
+    labels.push('auto-reply');
     if (autoSubmitted.toLowerCase().includes('auto-replied')) labels.push('ooo');
   }
 
