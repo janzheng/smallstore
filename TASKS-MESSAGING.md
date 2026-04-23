@@ -153,20 +153,20 @@ Design: `.brief/mailroom-curation.md` (2026-04-25). Reframes mailroom from "spam
 
 **Foundational (do first):**
 - [x] [done 2026-04-25: senderD1 adapter instance created with table `mailroom_senders`; createSenderIndex now wraps senderD1 not memory. Keys prefix `senders/`. Build clean (583 KiB), 228/228 tests green] Move sender-index from memory → D1 #curation-sender-index-d1
-- [ ] **ACTION NEEDED (user):** CF Email Routing — add `mailroom+*@labspace.ai` routing rule pointing at worker `smallstore`. Dashboard: https://dash.cloudflare.com → labspace.ai → Email → Routing Rules → "Create address" → `mailroom+*@labspace.ai` → Action: Send to a Worker → `smallstore`. One-time, ~10 min #curation-plus-addr-routing
+- [x] [done 2026-04-25: CF Email Routing has "Enable subaddressing" toggled on, so `mailroom+anything@labspace.ai` already reaches the worker via the existing `mailroom@labspace.ai` rule. No additional routing rule needed] CF Email Routing: plus-addressing (subaddressing already enabled) #curation-plus-addr-routing
 
 **Ingestion-side:**
-- [ ] Forward-detection hook — `src/messaging/forward-detect.ts` detects forwarded mail, adds `manual`/`forwarded` labels, best-effort extracts `fields.original_from_email` + `original_from_addr` + `original_subject` from body + `X-Forwarded-*` headers. Uses `SELF_ADDRESSES` env var for self-detection. ~2 hours #curation-forward-detect
-- [ ] Plus-addressing intent hook — preIngest hook reads `fields.inbox_addr` for `mailroom+<intent>@` pattern, tags item with `<intent>` label (`bookmark`, `archive`, `read-later`). ~30 min #curation-plus-addr-intent
+- [x] [done 2026-04-25 agent A: `src/messaging/forward-detect.ts` (389 lines) + 24/24 tests. Gmail/Outlook/Apple Mail body patterns + Resent-From/X-Forwarded-From headers all extract original_from_* into fields. 40-line scan window prevents quoted-From hijacking. Best-effort — tags even when extraction fails] Forward-detection hook #curation-forward-detect
+- [x] [done 2026-04-25 agent B: `src/messaging/plus-addr.ts` (249 lines) + 19/19 tests. Default allowed intents: bookmark/archive/read-later/star/inbox/snooze. Dedup-safe label merge; input immutability; intents case-folded] Plus-addressing intent hook #curation-plus-addr-intent
 
 **Rules:**
-- [ ] Rules storage module — `src/messaging/rules.ts` with `createRulesStore(adapter, opts)` → CRUD + `apply(item)`. Adapter-agnostic; reuses InboxFilter DSL for match. Actions: `archive`, `bookmark`, `tag`, `drop`, `quarantine`. Tag-style = apply-all; terminal = first-match by priority. ~2 hours #curation-rules-store
-- [ ] Rules HTTP surface — `GET/POST /inbox/:name/rules`, `PUT/DELETE /:id`, `POST /:id/apply-retroactive` in http-routes.ts. Requires `rulesStoreFor(name)` resolver in RegisterMessagingRoutesOptions. ~1 hour #curation-rules-http
-- [ ] Rules preIngest hook — `createRulesHook(rulesStore)` returns PreIngestHook evaluating all rules against item + applying matching actions. ~1 hour #curation-rules-hook
-- [ ] Retroactive apply — `rulesStore.applyRetroactive(rule, inbox)` iterates `inbox.query(rule.match)` + re-ingests each with labels added via `_ingest({ force: true })`. HTTP route wires to this. ~45 min #curation-rules-retroactive
+- [x] [done 2026-04-25 agent C: `src/messaging/rules.ts` (375 lines) + 19/19 tests. CRUD + apply + applyRetroactive. Tag-style stack; terminal first-match by priority (ties → oldest created_at first). Retroactive skips items already carrying the derived label for zero-churn] Rules storage module #curation-rules-store
+- [x] [done 2026-04-25 agent C: `http-routes.ts` +140 lines, 6 routes (GET list/one, POST create with apply_retroactive query, PUT, DELETE, POST apply-retroactive). 11/11 tests. Returns 501 when `rulesStoreFor` resolver absent] Rules HTTP surface #curation-rules-http
+- [x] [done 2026-04-25 agent C: `src/messaging/rules-hook.ts` (76 lines) + 8/8 tests. Calls rulesStore.apply, merges labels, returns drop/mutated-item/accept verdicts. quarantineLabel option matches email-handler's] Rules preIngest hook #curation-rules-hook
+- [x] [done 2026-04-25 agent C: rulesStore.applyRetroactive + HTTP route. Terminal actions (drop/quarantine) are no-op with error message (matches spec). Tag-style actions iterate via inbox.query, skip-already-labeled, _ingest({ force: true })] Retroactive apply #curation-rules-retroactive
 
 **Deploy wiring:**
-- [ ] deploy/src/index.ts updates — instantiate rulesStore + forwardDetect + plusAddrHook; wire as preIngest hooks; pass `SELF_ADDRESSES` env var; expose `rulesStoreFor` + `senderIndexFor` resolvers in registerMessagingRoutes. ~30 min #curation-deploy-wire
+- [x] [done 2026-04-25: deploy/src/index.ts wires forwardDetect + plusAddr + rulesHook as preIngest hooks in that order (forward-detect first for auto-detection, plus-addr second for explicit-intent-wins, rules-hook last for user-configured actions). senderUpsertHook stays as postClassify. New rulesD1 adapter (table mailroom_rules) + rulesStores Map. rulesStoreFor resolver passed to registerMessagingRoutes. SELF_ADDRESSES env var threaded through parseSelfAddresses. Bundle: 583 → 605 KiB (+22 KiB for curation modules). Dry-run clean] Deploy hook wiring #curation-deploy-wire
 
 **Polish (optional, same-sprint if time):**
 - [?] Manual-tag surface — `POST /inbox/:name/items/:id/tag` with `{ add?, remove? }` for after-the-fact labeling. Upgrade `manual` to `bookmark` when forward-detection fires but intent wasn't specified. Works for the "I received a newsletter already and decided it's worth bookmarking" case too, not just forwards #curation-manual-tag

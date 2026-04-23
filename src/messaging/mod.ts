@@ -80,3 +80,29 @@ export {
   restoreItem,
   type QuarantineOptions,
 } from './quarantine.ts';
+export {
+  createForwardDetectHook,
+  detectForward,
+  parseSelfAddresses,
+  type ForwardDetectOptions,
+  type ForwardDetectResult,
+  type ParsedForwardBody,
+} from './forward-detect.ts';
+export {
+  createPlusAddrHook,
+  extractPlusIntent,
+  type PlusAddressingOptions,
+  type PlusAddressingResult,
+} from './plus-addr.ts';
+export {
+  createRulesStore,
+  deriveRuleLabel,
+  isTagStyleAction,
+  isTerminalAction,
+  type CreateRulesStoreOptions,
+  type MailroomRule,
+  type RuleAction,
+  type RulesApplyResult,
+  type RulesStore,
+} from './rules.ts';
+export { createRulesHook, type RulesHookOptions } from './rules-hook.ts';

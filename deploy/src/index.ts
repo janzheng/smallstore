@@ -35,6 +35,11 @@ import {
   createEmailHandler,
   cloudflareEmailChannel,
   createSenderIndex,
+  createForwardDetectHook,
+  createPlusAddrHook,
+  createRulesStore,
+  createRulesHook,
+  parseSelfAddresses,
   registerChannel,
   registerMessagingRoutes,
   InboxRegistry,
@@ -42,6 +47,7 @@ import {
   type HookVerdict,
   type InboxConfig,
   type InboxItem,
+  type RulesStore,
   type SenderIndex,
 } from '@yawnxyz/smallstore/messaging';
 
@@ -56,6 +62,14 @@ export interface Env {
   MAILROOM_D1: D1Database;
   /** R2 binding for the mailroom inbox's blobs (raw .eml, html, attachments). */
   MAILROOM_R2: R2Bucket;
+  /**
+   * Comma-separated list of the user's own email addresses. Used by the
+   * forward-detection hook to recognize mail the user forwarded from their
+   * own account (e.g. from Gmail) as "manual / forwarded" bookmarks.
+   * Example: `jan@phage.directory,hello@janzheng.com`. Optional — if unset,
+   * the hook falls back to header-only detection (X-Forwarded-For etc).
+   */
+  SELF_ADDRESSES?: string;
 }
 
 // ============================================================================
@@ -66,6 +80,7 @@ interface AppHandle {
   app: Hono;
   email: ReturnType<typeof createEmailHandler>;
   senderIndexes: Map<string, SenderIndex>;
+  rulesStores: Map<string, RulesStore>;
 }
 
 let appHandle: AppHandle | null = null;
@@ -81,6 +96,8 @@ function buildApp(env: Env): AppHandle {
   // the earlier memory-backed sender-index which reset on every isolate
   // cold-start.
   const senderD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_senders' });
+  // Rules table — same D1 binding, generic k/v mode. Table created lazily.
+  const rulesD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_rules' });
 
   // Smallstore — D1 as default (objects), R2 mounted at blobs/*
   const smallstore = createSmallstore({
@@ -151,15 +168,41 @@ function buildApp(env: Env): AppHandle {
   const mailroomSenderIndex = createSenderIndex(senderD1, { keyPrefix: 'senders/' });
   senderIndexes.set('mailroom', mailroomSenderIndex);
 
-  // Wire hooks: postClassify runs AFTER the built-in classifier emits
-  // newsletter/list/bulk/auto-reply/bounce labels, so the sender-index
-  // upsert sees the canonical tags. We return 'accept' because this hook
-  // is a side-effect (index update) — no verdict change.
+  // Rules store — runtime-editable archive/bookmark/tag/drop/quarantine
+  // rules per inbox. Same D1 binding, dedicated table. Rules are matched
+  // against InboxItem via the existing filter DSL (including regex).
+  const rulesStores = new Map<string, RulesStore>();
+  const mailroomRulesStore = createRulesStore(rulesD1, { keyPrefix: 'rules/' });
+  rulesStores.set('mailroom', mailroomRulesStore);
+
+  // -------------------------------------------------------------------------
+  // Hook pipeline (curation-aware)
+  // -------------------------------------------------------------------------
+  //
+  // preIngest order matters:
+  //   1. forward-detect — detects mail the user forwarded from Gmail (via
+  //      SELF_ADDRESSES match or X-Forwarded-* headers), tags 'forwarded' +
+  //      'manual', extracts original_from_* into fields. Runs first so plus-
+  //      addressing intent (next) can OVERRIDE the 'manual' label when the
+  //      user explicitly typed mailroom+bookmark@...
+  //   2. plus-addr — reads inbox_addr for +intent suffix, tags accordingly.
+  //      Explicit intent wins over auto-detection.
+  //   3. rules — evaluates user-configured archive/bookmark/tag/drop/quarantine
+  //      rules against the (possibly-already-mutated) item. Tag-style rules
+  //      stack; terminal rules (drop/quarantine) short-circuit.
+  //
+  // postClassify hooks run AFTER the built-in classifier emits its labels,
+  // so sender-index upsert sees canonical tags.
+  const selfAddresses = parseSelfAddresses(env.SELF_ADDRESSES);
+  const forwardDetectHook = createForwardDetectHook({ selfAddresses });
+  const plusAddrHook = createPlusAddrHook({ baseLocal: 'mailroom' });
+  const rulesHook = createRulesHook({ rulesStore: mailroomRulesStore });
+
+  // Side-effect postClassify hook — updates sender-index on every ingest.
   const senderUpsertHook = async (item: InboxItem, _ctx: HookContext): Promise<HookVerdict> => {
     try {
       await mailroomSenderIndex.upsert(item);
     } catch (err) {
-      // Hook errors are caught by the pipeline; log but don't fail the item.
       console.log(`[sender-upsert] failed for ${item.id}:`, err instanceof Error ? err.message : err);
     }
     return 'accept';
@@ -168,6 +211,7 @@ function buildApp(env: Env): AppHandle {
   registry.registerSinks('mailroom', {
     inbox: mailroom,
     hooks: {
+      preIngest: [forwardDetectHook, plusAddrHook, rulesHook],
       postClassify: [senderUpsertHook],
     },
     config: mailroomConfig,
@@ -195,13 +239,15 @@ function buildApp(env: Env): AppHandle {
 
   // Messaging routes (mount before /api so wildcards stay disjoint).
   // `senderIndexFor` resolves the per-inbox sender index for the unsubscribe
-  // route (POST /inbox/:name/unsubscribe); returns null for inboxes without
-  // a registered index, which cleanly fails the route with 501.
+  // route (POST /inbox/:name/unsubscribe); `rulesStoreFor` unlocks the
+  // /rules CRUD + retroactive-apply endpoints per inbox. Both return null
+  // for inboxes without those resources, in which case the routes 501.
   registerMessagingRoutes(app, {
     registry,
     requireAuth,
     createInbox: buildInboxFromConfig,
     senderIndexFor: (name: string) => senderIndexes.get(name) ?? null,
+    rulesStoreFor: (name: string) => rulesStores.get(name) ?? null,
   });
 
   // Universal CRUD surface at /api/*
@@ -216,7 +262,7 @@ function buildApp(env: Env): AppHandle {
     log: (msg, extra) => console.log(`[email] ${msg}`, JSON.stringify(extra ?? {})),
   });
 
-  return { app, email, senderIndexes };
+  return { app, email, senderIndexes, rulesStores };
 }
 
 function ensureApp(env: Env): AppHandle {

@@ -35,6 +35,7 @@ import type { InboxConfig, InboxFilter } from './types.ts';
 import { listChannels, type InboxRegistry } from './registry.ts';
 import type { SenderIndex } from './sender-index.ts';
 import { unsubscribeSender } from './unsubscribe.ts';
+import type { MailroomRule, RuleAction, RulesStore } from './rules.ts';
 
 export type RequireAuth = (c: Context, next: Next) => Promise<Response | void> | Response | void;
 
@@ -53,13 +54,20 @@ export interface RegisterMessagingRoutesOptions {
    * carry a sender index (route will then 501).
    */
   senderIndexFor?: (name: string) => SenderIndex | null | undefined | Promise<SenderIndex | null | undefined>;
+  /**
+   * Optional per-inbox rules store resolver. When provided, enables the
+   * mailroom rules routes (`/inbox/:name/rules/...`). Return `null`/
+   * `undefined` if an inbox has no rules store wired (routes 501 in that
+   * case, matching the `senderIndexFor` pattern).
+   */
+  rulesStoreFor?: (name: string) => RulesStore | null | undefined | Promise<RulesStore | null | undefined>;
 }
 
 export function registerMessagingRoutes(
   app: Hono<any>,
   opts: RegisterMessagingRoutesOptions,
 ): void {
-  const { registry, requireAuth, createInbox, senderIndexFor } = opts;
+  const { registry, requireAuth, createInbox, senderIndexFor, rulesStoreFor } = opts;
 
   // --------------------------------------------------------------------------
   // Per-inbox surface
@@ -258,6 +266,128 @@ export function registerMessagingRoutes(
   });
 
   // --------------------------------------------------------------------------
+  // Mailroom rules surface
+  //
+  // CRUD + retroactive-apply for `MailroomRule`s (see `src/messaging/rules.ts`).
+  // All routes require `rulesStoreFor(name)` to return a store; otherwise 501.
+  // --------------------------------------------------------------------------
+
+  async function resolveRulesStore(
+    c: Context,
+    name: string,
+  ): Promise<{ inbox: import('./types.ts').Inbox; store: RulesStore } | Response> {
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+    if (!rulesStoreFor) {
+      return c.json(
+        { error: 'NotImplemented', message: 'rulesStoreFor not provided — rules routes unavailable' },
+        501,
+      );
+    }
+    const store = await rulesStoreFor(name);
+    if (!store) {
+      return c.json(
+        { error: 'NotImplemented', message: `no rules store wired for inbox "${name}"` },
+        501,
+      );
+    }
+    return { inbox, store };
+  }
+
+  app.get('/inbox/:name/rules', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const resolved = await resolveRulesStore(c, name);
+    if (resolved instanceof Response) return resolved;
+
+    const cursor = c.req.query('cursor');
+    const limit = parseLimit(c.req.query('limit'));
+
+    const result = await resolved.store.list({ cursor, limit });
+    return c.json({ inbox: name, rules: result.rules, next_cursor: result.next_cursor });
+  });
+
+  app.get('/inbox/:name/rules/:id', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const resolved = await resolveRulesStore(c, name);
+    if (resolved instanceof Response) return resolved;
+
+    const rule = await resolved.store.get(id);
+    if (!rule) return notFound(c, `rule "${id}" not in inbox "${name}"`);
+    return c.json({ inbox: name, rule });
+  });
+
+  app.post('/inbox/:name/rules', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const resolved = await resolveRulesStore(c, name);
+    if (resolved instanceof Response) return resolved;
+
+    const body = await readJson(c);
+    if (!body || typeof body !== 'object') {
+      return badRequest(c, 'body must be a MailroomRule object (match, action, [priority, ...])');
+    }
+    const validation = validateRuleInput(body);
+    if (validation) return badRequest(c, validation);
+
+    const rule = await resolved.store.create({
+      match: body.match,
+      action: body.action as RuleAction,
+      action_args: body.action_args,
+      priority: body.priority,
+      notes: body.notes,
+      disabled: body.disabled,
+    });
+
+    const applyRetroactive = c.req.query('apply_retroactive') === 'true';
+    if (applyRetroactive) {
+      const retro = await resolved.store.applyRetroactive(rule, resolved.inbox);
+      return c.json({ created: rule, retroactive: retro }, 201);
+    }
+    return c.json({ created: rule }, 201);
+  });
+
+  app.put('/inbox/:name/rules/:id', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const resolved = await resolveRulesStore(c, name);
+    if (resolved instanceof Response) return resolved;
+
+    const body = await readJson(c);
+    if (!body || typeof body !== 'object') {
+      return badRequest(c, 'body must be a partial MailroomRule patch');
+    }
+    // Ignore id/created_at if clients accidentally send them — the store
+    // already protects those via its update signature, but filter defensively.
+    const { id: _ignoreId, created_at: _ignoreCreated, ...patch } = body as Partial<MailroomRule>;
+    const updated = await resolved.store.update(id, patch);
+    if (!updated) return notFound(c, `rule "${id}" not in inbox "${name}"`);
+    return c.json({ inbox: name, updated });
+  });
+
+  app.delete('/inbox/:name/rules/:id', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const resolved = await resolveRulesStore(c, name);
+    if (resolved instanceof Response) return resolved;
+
+    const existed = await resolved.store.delete(id);
+    if (!existed) return notFound(c, `rule "${id}" not in inbox "${name}"`);
+    return c.json({ inbox: name, deleted: id });
+  });
+
+  app.post('/inbox/:name/rules/:id/apply-retroactive', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const resolved = await resolveRulesStore(c, name);
+    if (resolved instanceof Response) return resolved;
+
+    const rule = await resolved.store.get(id);
+    if (!rule) return notFound(c, `rule "${id}" not in inbox "${name}"`);
+    const result = await resolved.store.applyRetroactive(rule, resolved.inbox);
+    return c.json({ inbox: name, rule_id: id, ...result });
+  });
+
+  // --------------------------------------------------------------------------
   // Admin surface
   // --------------------------------------------------------------------------
 
@@ -334,6 +464,34 @@ function parseLimit(raw: string | number | undefined): number | undefined {
   const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
   if (!Number.isFinite(n) || n <= 0) return undefined;
   return Math.min(n, 500);
+}
+
+const VALID_RULE_ACTIONS: ReadonlySet<string> = new Set([
+  'archive',
+  'bookmark',
+  'tag',
+  'drop',
+  'quarantine',
+]);
+
+/** Validate a POST /rules body. Returns an error message on failure, null on success. */
+function validateRuleInput(body: any): string | null {
+  if (!body.match || typeof body.match !== 'object') {
+    return 'body.match (InboxFilter object) required';
+  }
+  if (typeof body.action !== 'string' || !VALID_RULE_ACTIONS.has(body.action)) {
+    return `body.action must be one of: archive, bookmark, tag, drop, quarantine`;
+  }
+  if (body.priority !== undefined && (typeof body.priority !== 'number' || !Number.isFinite(body.priority))) {
+    return 'body.priority must be a finite number when provided';
+  }
+  if (body.action_args !== undefined && (body.action_args === null || typeof body.action_args !== 'object')) {
+    return 'body.action_args must be an object when provided';
+  }
+  if (body.action === 'tag' && body.action_args?.tag !== undefined && typeof body.action_args.tag !== 'string') {
+    return 'body.action_args.tag must be a string when provided';
+  }
+  return null;
 }
 
 function serializeRegistration(name: string, reg: import('./registry.ts').InboxRegistration) {
