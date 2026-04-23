@@ -4,7 +4,7 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ## Current
 
-*(Clean slate — 2026-04-24 mailroom sprint + 2026-04-25 curation sprint both shipped; see `TASKS.done.md` + sprint briefs. Messaging + curation are live at `smallstore.labspace.ai`. Next up: peer registry below (`.brief/peer-registry.md`) is the most interesting new direction — design done, implementation ~1 day.)*
+*(Clean slate — four sprints shipped over 2026-04-24 / 2026-04-25: mailroom pipeline, curation, peer registry, MCP reorg + tool families. All live at `smallstore.labspace.ai`. Canonical `skills/smallstore/SKILL.md` synced through mcp-hub to `~/.claude/skills/` + `~/.cursor/skills/` + `~/.codex/skills/` + `~/.agents/skills/`. 33 MCP tools across 3 families (core/inbox/peers). 1203/1203 tests green. See `TASKS.done.md` + `.brief/2026-04-*-sprint.md` for full narratives. All remaining work is deferred polish in `## Later` below.)*
 
 ## Later
 
