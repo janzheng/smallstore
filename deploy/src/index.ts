@@ -109,6 +109,13 @@ function buildApp(env: Env): AppHandle {
   // See `.brief/peer-registry.md`.
   const peersD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'peers' });
 
+  // Per-inbox D1 adapters. Each inbox needs its OWN table because the
+  // Inbox class uses hardcoded keys ('_index', 'items/<id>') that would
+  // collide if multiple inboxes shared one adapter. Until the planned
+  // `keyPrefix` option lands on Inbox, register one adapter per inbox here.
+  // See `.brief/rss-as-mailbox.md` § correction.
+  const biorxivD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'biorxiv_items' });
+
   // Smallstore — D1 as default (objects), R2 mounted at blobs/*
   const smallstore = createSmallstore({
     adapters: {
@@ -148,6 +155,7 @@ function buildApp(env: Env): AppHandle {
   const adapterByName: Record<string, any> = {
     mailroom_d1: d1,
     mailroom_r2: r2,
+    biorxiv_d1: biorxivD1,  // dedicated table to avoid index collision with mailroom
     memory,
   };
 

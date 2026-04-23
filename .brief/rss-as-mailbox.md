@@ -179,14 +179,14 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
   -d '{
     "name": "biorxiv",
     "channel": "rss",
-    "storage": { "items": "mailroom_d1", "blobs": "mailroom_r2" }
+    "storage": { "items": "biorxiv_d1", "blobs": "mailroom_r2" }
   }' \
   https://smallstore.labspace.ai/admin/inboxes
 ```
 
-Storage reuses the existing `mailroom_d1` + `mailroom_r2` adapters — no new D1 table or R2 bucket needed. Smallstore uses a separate `_index` key per inbox, so they coexist.
+**⚠️ Isolation note:** each inbox needs its OWN `items` adapter because `Inbox` uses hardcoded keys (`_index`, `items/<id>`) that collide when multiple inboxes share one adapter. The `biorxiv_d1` adapter is pre-registered in `deploy/src/index.ts` (points at `MAILROOM_D1` binding, dedicated `biorxiv_items` table). R2 is shareable (blob keys are content-addressed sha256).
 
-Alternatively register multiple: `biorxiv-neuroscience`, `biorxiv-bioinformatics`, each with the same storage.
+For additional category inboxes (`biorxiv-neuroscience`, `biorxiv-bioinformatics`, etc.), add a matching `biorxiv_neuro_d1` / `biorxiv_bio_d1` adapter in the deploy + redeploy first. Tracked as tech debt: `#inbox-keyprefix-isolation` — the proper fix is a `keyPrefix` option on `Inbox` so runtime-created inboxes auto-isolate without deploy changes.
 
 ### 2. Valtown poller (sketch)
 
