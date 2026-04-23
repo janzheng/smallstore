@@ -1,0 +1,15 @@
+From: Bob Replier <bob@example.com>
+To: Alice Sender <alice@example.com>
+Cc: Inbox <inbox@labspace.ai>
+Subject: Re: Hello there
+Message-ID: <reply-007@example.com>
+In-Reply-To: <plain-001@example.com>
+References: <plain-001@example.com>
+Date: Wed, 22 Apr 2026 19:00:00 +0000
+Authentication-Results: mx.labspace.ai; spf=pass smtp.mailfrom=bob@example.com; dkim=pass header.d=example.com; dmarc=pass
+Content-Type: text/plain; charset=utf-8
+
+Thanks for the message Alice — I'll take a look.
+
+> On Wed, Apr 22, 2026 at 12:00 PM, Alice wrote:
+> This is a plain text email body.

@@ -139,16 +139,13 @@ export class CloudflareD1Adapter implements StorageAdapter {
   
   private async ensureTable(): Promise<void> {
     if (this.mode === 'native' && this.binding) {
-      const sql = `
-        CREATE TABLE IF NOT EXISTS ${this.table} (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL,
-          metadata TEXT,
-          created_at INTEGER DEFAULT (strftime('%s', 'now')),
-          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-        )
-      `;
-      await this.binding.exec(sql);
+      // D1 `binding.exec()` splits on newlines and requires each line to be a
+      // complete statement. Use prepare()/run() for multi-statement DDL, OR
+      // collapse to a single line. Single-line is simpler and works with both
+      // exec and prepare. (Bug fixed 2026-04-23: previous multi-line template
+      // tripped `Error in line 1: CREATE TABLE ... incomplete input`.)
+      const sql = `CREATE TABLE IF NOT EXISTS ${this.table} (key TEXT PRIMARY KEY, value TEXT NOT NULL, metadata TEXT, created_at INTEGER DEFAULT (strftime('%s', 'now')), updated_at INTEGER DEFAULT (strftime('%s', 'now')))`;
+      await this.binding.prepare(sql).run();
     } else {
       // HTTP mode - table creation is handled by the API
       await this.httpRequest('/d1/table/create', {

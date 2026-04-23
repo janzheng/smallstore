@@ -4,7 +4,11 @@
  * Automatically loads environment variables for Cloudflare adapters.
  */
 
-import "jsr:@std/dotenv@^0.225/load"; // needed for deno run; not req for smallweb or valtown
+// NOTE: dotenv loading is the app's responsibility, not the library's.
+// CLI/server entry points should `import "jsr:@std/dotenv@^0.225/load"`
+// themselves before calling these helpers. Keeping it here forced the
+// load at module init time, which broke the Cloudflare Workers bundle
+// (Workers ESM has no `Deno` global; the dotenv module references it).
 import { resolveCloudflareWorkersEnv } from '../../../config.ts';
 
 /**

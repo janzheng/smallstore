@@ -1,6 +1,6 @@
 {
   "name": "@yawnxyz/smallstore",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Universal storage layer — one API, 17+ backends. Memory, SQLite, Upstash, Airtable, Notion, Cloudflare KV/D1/DO/R2, Google Sheets, and more.",
   "license": "MIT",
   "exports": {
@@ -30,6 +30,8 @@
     "./blob-middleware": "./src/blob-middleware/mod.ts",
     "./views": "./src/views/mod.ts",
     "./materializers": "./src/materializers/mod.ts",
+    "./messaging": "./src/messaging/mod.ts",
+    "./messaging/types": "./src/messaging/types.ts",
     "./http": "./src/http/mod.ts",
     "./sync": "./src/sync.ts",
     "./vfs": "./apps/cli/vfs.ts",

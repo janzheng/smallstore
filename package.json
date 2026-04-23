@@ -1,6 +1,6 @@
 {
   "name": "smallstore",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Universal storage layer — one API, 17+ backends. Memory, SQLite, Upstash, Airtable, Notion, Cloudflare KV/D1/DO/R2, and more.",
   "type": "module",
   "module": "./dist/esm/mod.js",

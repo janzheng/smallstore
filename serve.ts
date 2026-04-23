@@ -33,11 +33,17 @@ import type { Context, Next } from 'hono';
 import { cors } from 'hono/cors';
 import { createSmallstore } from './mod.ts';
 import { createHonoRoutes } from './src/http/integrations/hono.ts';
-import { loadConfig, buildAdapters, type SmallstoreServerConfig } from './config.ts';
+import { loadConfig, buildAdapters, resolveInboxStorage, type SmallstoreServerConfig, type InboxConfigEntry } from './config.ts';
 import { resolvePreset } from './presets.ts';
 import { syncAdapters, type SyncAdapterOptions } from './src/sync.ts';
 import type { StorageAdapter } from './src/adapters/adapter.ts';
 import { createJobLog, generateJobId, listJobs, summarizeJob, tailJobLog } from './src/utils/job-log.ts';
+import { createInbox as createMessagingInbox } from './src/messaging/inbox.ts';
+import { InboxRegistry, registerChannel } from './src/messaging/registry.ts';
+import { registerMessagingRoutes } from './src/messaging/http-routes.ts';
+import { cloudflareEmailChannel } from './src/messaging/channels/cf-email.ts';
+import { createEmailHandler } from './src/messaging/email-handler.ts';
+import type { InboxConfig } from './src/messaging/types.ts';
 
 // ============================================================================
 // Build Routing Config from Mounts
@@ -294,6 +300,59 @@ app.get('/_sync/jobs/:id', requireAuth, async (c) => {
   const summary = await summarizeJob(path);
   return c.json({ jobId, path, ...summary, events });
 });
+
+// ============================================================================
+// Messaging plugin — Inbox + Channel + (later) Outbox
+// ============================================================================
+// Routes mount at root (/inbox/*, /admin/*) before /api/* so the surfaces
+// stay disjoint. Inboxes are constructed from config at boot and registered
+// into an in-memory registry; the /admin/inboxes API can add more at runtime.
+
+const messagingRegistry = new InboxRegistry();
+
+// Register built-in channels. Adding a new channel = import + register here.
+try {
+  registerChannel(cloudflareEmailChannel);
+} catch {
+  // Idempotent for Deno --watch reloads
+}
+
+async function buildInboxFromConfig(name: string, cfg: InboxConfig): Promise<ReturnType<typeof createMessagingInbox>> {
+  const storage = resolveInboxStorage(cfg.storage, rawAdapters);
+  return createMessagingInbox({
+    name,
+    channel: cfg.channel,
+    storage,
+  });
+}
+
+if (config.inboxes) {
+  for (const [name, entry] of Object.entries(config.inboxes)) {
+    try {
+      const cfg = entry as InboxConfig;
+      const inbox = await buildInboxFromConfig(name, cfg);
+      messagingRegistry.register(name, inbox, cfg, 'boot');
+      console.log(`[Smallstore] Registered inbox "${name}" (channel: ${cfg.channel})`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[Smallstore] Failed to register inbox "${name}": ${msg}`);
+    }
+  }
+}
+
+registerMessagingRoutes(app, {
+  registry: messagingRegistry,
+  requireAuth,
+  createInbox: buildInboxFromConfig,
+});
+
+/**
+ * CF Workers email() handler. Bound to the local registry; consumed by
+ * `deploy/worker.ts` (Phase 1 — `export { email } from '../serve.ts'`).
+ * Doesn't fire under local `Deno.serve`; CF Email Routing only triggers
+ * on the deployed Worker.
+ */
+export const email = createEmailHandler({ registry: messagingRegistry });
 
 // Mount smallstore routes at /api
 createHonoRoutes(app, smallstore, '/api');

@@ -389,6 +389,40 @@ Features that extend smallstore for AI/agent workflows. All build on the existin
 
 ---
 
+## Phase 9: Messaging — Inbox + Channel + Outbox -> 2026-Q2
+
+New plugin family for **flows in** (Channel → Inbox) and later **flows out** (Outbox → Channel). Sibling to materializers/search/retrievers/views — composes existing adapters, doesn't replace them. Brief: `.brief/messaging-plugins.md`. Full backlog: [TASKS-MESSAGING.md](./TASKS-MESSAGING.md).
+
+### Lane A: Foundation (sequential)
+
+- [ ] Deploy `serve.ts` to Cloudflare Workers as the smallstore host #deploy-host
+- [ ] `Channel` + `Inbox` interfaces + reference impl in `src/messaging/` #messaging-iface #needs:deploy-host
+- [ ] Inbox HTTP routes + admin runtime-config API in `src/http/` #messaging-http #needs:messaging-iface
+- [ ] CF Email channel (`cf-email`) + `email()` export on `serve.ts` #channel-cf-email #needs:messaging-http
+- [ ] Wire mailroom — Email Routing → deployed Worker → mailroom collection consumer scripts #mailroom-wired #needs:channel-cf-email
+- [ ] MCP tools — `sm_inbox_*` + admin tools #messaging-mcp #needs:messaging-http
+
+### Lane B: More channels (parallel, ship as needed)
+
+- [ ] `webhook` channel — generic HTTP receiver with optional HMAC #channel-webhook #needs:messaging-http
+- [ ] `rss` pull channel + shared pull runner via Worker `scheduled()` cron #channel-rss #needs:messaging-http
+- [ ] `voice` push channel for `@cloudflare/voice` transcript streams #channel-voice #needs:messaging-http
+
+### Lane C: Outbox (deferred until first send use case)
+
+- [?] Spike: D1-table-as-queue vs CF Queues + DO alarms #outbox-spike #needs:mailroom-wired
+- [ ] `Outbox` plugin + `cf-email-out` channel (CF Email Sending public beta) #outbox-cf-email #needs:outbox-spike
+- [ ] Outbox HTTP routes + MCP tools #outbox-http #needs:outbox-cf-email
+
+### Lane D: Polish (after foundation)
+
+- [ ] `docs/design/messaging-pattern.md` — public contract documentation #messaging-docs #needs:mailroom-wired
+- [ ] `examples/cf-email-inbox/` — documentation-grade walkthrough #messaging-example #needs:mailroom-wired
+- [ ] Federated query across inboxes #federated-query #needs:messaging-http
+- [ ] Workflows V2 trigger from `inbox.watch` #workflows-trigger #needs:messaging-http
+
+---
+
 ## Test Coverage Summary
 
 Full details in [TASKS-TESTS.md](./TASKS-TESTS.md). **537 offline tests passing across 28 files.**

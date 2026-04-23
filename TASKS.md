@@ -1,10 +1,10 @@
 # Smallstore
 
-Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN.md`, `TASKS-AUDIT.md`, `TASKS-TESTS.md` for area backlogs.
+Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN.md`, `TASKS-AUDIT.md`, `TASKS-TESTS.md`, `TASKS-MESSAGING.md` for area backlogs.
 
 ## Current
 
-_All clear. See archive for shipped work._
+- [!] Messaging plugin family (Inbox + Channel + later Outbox) — design done, ready to build `-> .brief/messaging-plugins.md` `-> TASKS-MESSAGING.md` #messaging #area
 
 ## Later
 

@@ -1,0 +1,45 @@
+name = "smallstore"
+main = "src/index.ts"
+compatibility_date = "2026-04-21"
+compatibility_flags = ["nodejs_compat"]
+
+account_id = "cceae190abc777c64fb8d7a98be577a3"
+
+# Worker owns smallstore.labspace.ai. The DNS record must exist in the
+# labspace.ai zone (orange-cloud / Proxied) before the first deploy — its
+# CNAME target is a fallback only; when the Worker is active, requests are
+# handled here.
+routes = [
+  { pattern = "smallstore.labspace.ai/*", zone_name = "labspace.ai" }
+]
+
+# ============================================================================
+# Bindings — fill in after creating the resources via `wrangler d1 create`
+# and `wrangler r2 bucket create`. See deploy/README.md for the recipe.
+# ============================================================================
+
+# D1 database for the mailroom inbox's structured rows (InboxItem JSON, _index).
+# Smallstore's cloudflare-d1 adapter is `kv_store`-shaped — one table per
+# adapter — so the schema is created on first write.
+[[d1_databases]]
+binding = "MAILROOM_D1"
+database_name = "mailroom"
+database_id = "b4d71d61-a96f-4f27-9d06-c08215cd1ccc"
+
+# R2 bucket for the mailroom inbox's blobs (raw .eml, html bodies, attachments).
+[[r2_buckets]]
+binding = "MAILROOM_R2"
+bucket_name = "mailroom"
+
+# ============================================================================
+# Secrets (set via `wrangler secret put`, NOT committed here)
+# ============================================================================
+#
+#   wrangler secret put SMALLSTORE_TOKEN
+#
+# When set, all /api, /inbox, /admin routes require:
+#   Authorization: Bearer <SMALLSTORE_TOKEN>
+# Unset → routes are open (NOT recommended for the deployed Worker).
+
+[observability]
+enabled = true

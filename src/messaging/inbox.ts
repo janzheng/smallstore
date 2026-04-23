@@ -1,0 +1,228 @@
+/**
+ * Reference Inbox implementation.
+ *
+ * Composes a `StorageAdapter` (items) + optional second adapter (blobs)
+ * + content-addressed dedup + opaque cursor.
+ *
+ * Storage layout (under the items adapter):
+ * - `items/<id>`  → InboxItem JSON
+ * - `_index`      → JSON `{ entries: [{at, id}, ...], version: 1 }`
+ *                   sorted newest-first; rebuilt on every ingest
+ *
+ * Concurrency: ingest does a read-modify-write on `_index`. In Worker
+ * contexts where a single email handler runs at a time per request this
+ * is fine; for high-concurrency push channels swap in a DO-backed Inbox
+ * variant (future work).
+ */
+
+import type { StorageAdapter } from '../adapters/adapter.ts';
+import { decodeCursor, encodeCursor } from './cursor.ts';
+import { evaluateFilter } from './filter.ts';
+import type {
+  IngestOptions,
+  Inbox as InboxInterface,
+  InboxFilter,
+  InboxItem,
+  InboxItemFull,
+  InboxStorage,
+  ListOptions,
+  ListResult,
+  QueryOptions,
+  ReadOptions,
+} from './types.ts';
+
+interface IndexEntry {
+  at: string;
+  id: string;
+}
+
+interface IndexFile {
+  entries: IndexEntry[];
+  version: number;
+}
+
+const INDEX_KEY = '_index';
+const ITEM_PREFIX = 'items/';
+const INDEX_VERSION = 1;
+
+export interface InboxOptions {
+  /** Logical name. */
+  name: string;
+  /** Channel name backing this inbox. */
+  channel: string;
+  /** Storage handle (items + optional blobs). */
+  storage: InboxStorage;
+}
+
+export class Inbox implements InboxInterface {
+  readonly name: string;
+  readonly channel: string;
+  private readonly storage: InboxStorage;
+
+  constructor(opts: InboxOptions) {
+    this.name = opts.name;
+    this.channel = opts.channel;
+    this.storage = opts.storage;
+  }
+
+  // --------------------------------------------------------------------------
+  // Public surface
+  // --------------------------------------------------------------------------
+
+  async list(options: ListOptions = {}): Promise<ListResult> {
+    const index = await this.loadIndex();
+    return this.paginateAndHydrate(index.entries, options);
+  }
+
+  async read(id: string, options: ReadOptions = {}): Promise<InboxItemFull | null> {
+    const item = await this.storage.items.get(itemKey(id)) as InboxItem | null;
+    if (!item) return null;
+    if (!options.full) return item as InboxItemFull;
+
+    const full: InboxItemFull = { ...item };
+
+    if (item.body_ref && this.storage.blobs) {
+      const inflated = await this.storage.blobs.get(item.body_ref).catch(() => null);
+      if (typeof inflated === 'string') full.body_inflated = inflated;
+    }
+
+    return full;
+  }
+
+  async query(filter: InboxFilter, options: QueryOptions = {}): Promise<ListResult> {
+    const index = await this.loadIndex();
+    const matching: IndexEntry[] = [];
+    const limit = options.limit ?? 50;
+    const startIdx = startIndex(index.entries, decodeCursor(options.cursor));
+
+    for (let i = startIdx; i < index.entries.length; i++) {
+      const entry = index.entries[i];
+      const item = await this.storage.items.get(itemKey(entry.id)) as InboxItem | null;
+      if (!item) continue;
+      if (!evaluateFilter(filter, item)) continue;
+      matching.push(entry);
+      if (matching.length >= limit + 1) break; // +1 to know if there's more
+    }
+
+    const hasMore = matching.length > limit;
+    const page = hasMore ? matching.slice(0, limit) : matching;
+    const items = await Promise.all(
+      page.map(async e => (await this.storage.items.get(itemKey(e.id))) as InboxItem),
+    );
+
+    return {
+      items,
+      next_cursor: hasMore ? encodeCursor(page[page.length - 1]) : undefined,
+    };
+  }
+
+  async cursor(): Promise<string> {
+    const index = await this.loadIndex();
+    if (index.entries.length === 0) return encodeCursor({ at: new Date(0).toISOString(), id: '' });
+    const head = index.entries[0];
+    return encodeCursor(head);
+  }
+
+  async _ingest(item: InboxItem, options: IngestOptions = {}): Promise<InboxItem> {
+    const finalItem = applyRefs(item, options.refs);
+
+    if (!options.force) {
+      const existing = await this.storage.items.get(itemKey(finalItem.id));
+      if (existing) return existing as InboxItem;
+    }
+
+    if (options.blobs && Object.keys(options.blobs).length > 0) {
+      if (!this.storage.blobs) {
+        throw new Error(`Inbox "${this.name}" has no blobs adapter configured but blobs were supplied`);
+      }
+      for (const [key, payload] of Object.entries(options.blobs)) {
+        await this.storage.blobs.set(key, payload.content);
+      }
+    }
+
+    await this.storage.items.set(itemKey(finalItem.id), finalItem);
+    await this.appendIndex({ at: finalItem.received_at, id: finalItem.id });
+    return finalItem;
+  }
+
+  // --------------------------------------------------------------------------
+  // Internals
+  // --------------------------------------------------------------------------
+
+  private async loadIndex(): Promise<IndexFile> {
+    const raw = await this.storage.items.get(INDEX_KEY) as IndexFile | null;
+    if (!raw || !Array.isArray(raw.entries)) {
+      return { entries: [], version: INDEX_VERSION };
+    }
+    return raw;
+  }
+
+  private async appendIndex(entry: IndexEntry): Promise<void> {
+    const index = await this.loadIndex();
+    if (index.entries.some(e => e.id === entry.id)) return; // already indexed
+    index.entries.push(entry);
+    index.entries.sort(compareNewestFirst);
+    await this.storage.items.set(INDEX_KEY, index);
+  }
+
+  private async paginateAndHydrate(
+    entries: IndexEntry[],
+    options: ListOptions,
+  ): Promise<ListResult> {
+    const order = options.order ?? 'newest';
+    const ordered = order === 'newest' ? entries : [...entries].reverse();
+    const limit = options.limit ?? 50;
+    const startIdx = startIndex(ordered, decodeCursor(options.cursor));
+    const slice = ordered.slice(startIdx, startIdx + limit + 1);
+    const hasMore = slice.length > limit;
+    const page = hasMore ? slice.slice(0, limit) : slice;
+
+    const items = await Promise.all(
+      page.map(async e => (await this.storage.items.get(itemKey(e.id))) as InboxItem),
+    );
+
+    return {
+      items: items.filter(Boolean),
+      next_cursor: hasMore ? encodeCursor(page[page.length - 1]) : undefined,
+      total: ordered.length,
+    };
+  }
+}
+
+// ============================================================================
+// Factory
+// ============================================================================
+
+export function createInbox(opts: InboxOptions): Inbox {
+  return new Inbox(opts);
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function itemKey(id: string): string {
+  return `${ITEM_PREFIX}${id}`;
+}
+
+function compareNewestFirst(a: IndexEntry, b: IndexEntry): number {
+  if (a.at !== b.at) return a.at < b.at ? 1 : -1;
+  return a.id < b.id ? 1 : -1;
+}
+
+/** Find the index of the first entry strictly AFTER the cursor position (cursor is exclusive). */
+function startIndex(entries: IndexEntry[], cursor: { at: string; id: string } | null): number {
+  if (!cursor) return 0;
+  for (let i = 0; i < entries.length; i++) {
+    if (entries[i].at === cursor.at && entries[i].id === cursor.id) return i + 1;
+  }
+  return 0;
+}
+
+function applyRefs(item: InboxItem, refs?: IngestOptions['refs']): InboxItem {
+  if (!refs) return item;
+  const out: InboxItem = { ...item };
+  if (refs.raw_ref) out.raw_ref = refs.raw_ref;
+  if (refs.body_ref) out.body_ref = refs.body_ref;
+  return out;
+}

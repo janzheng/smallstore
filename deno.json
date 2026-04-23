@@ -1,6 +1,6 @@
 {
   "name": "@yawnxyz/smallstore",
-  "version": "0.1.11",
+  "version": "0.2.0",
   "exports": {
     ".": "./mod.ts",
     "./adapters/memory": "./src/adapters/memory.ts",
@@ -29,6 +29,8 @@
     "./blob-middleware": "./src/blob-middleware/mod.ts",
     "./views": "./src/views/mod.ts",
     "./materializers": "./src/materializers/mod.ts",
+    "./messaging": "./src/messaging/mod.ts",
+    "./messaging/types": "./src/messaging/types.ts",
     "./http": "./src/http/mod.ts",
     "./sync": "./src/sync.ts",
     "./vfs": "./apps/cli/vfs.ts",
@@ -94,6 +96,7 @@
   },
   "imports": {
     "hono": "npm:hono@^4.10.3",
+    "postal-mime": "npm:postal-mime@^2.4.4",
     "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@^1.29.0",
     "@modelcontextprotocol/sdk/": "npm:/@modelcontextprotocol/sdk@^1.29.0/",
     "@notionhq/client": "npm:@notionhq/client@^5.16.0",

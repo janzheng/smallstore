@@ -29,6 +29,7 @@ await build({
     // Main entry
     { name: ".", path: "./mod.ts" },
     // Subpath exports
+    { name: "./factory-slim", path: "./src/factory-slim.ts" },
     { name: "./presets", path: "./presets.ts" },
     { name: "./config", path: "./config.ts" },
     { name: "./search", path: "./src/search/mod.ts" },
@@ -38,18 +39,31 @@ await build({
     { name: "./blob-middleware", path: "./src/blob-middleware/mod.ts" },
     { name: "./views", path: "./src/views/mod.ts" },
     { name: "./materializers", path: "./src/materializers/mod.ts" },
+    { name: "./messaging", path: "./src/messaging/mod.ts" },
+    { name: "./messaging/types", path: "./src/messaging/types.ts" },
     { name: "./http", path: "./src/http/mod.ts" },
     { name: "./sync", path: "./src/sync.ts" },
+    // CF adapters as standalone subpaths so Worker code can `import { ... } from 'smallstore/adapters/cloudflare-d1'`
+    { name: "./adapters/memory", path: "./src/adapters/memory.ts" },
+    { name: "./adapters/cloudflare-d1", path: "./src/adapters/cloudflare-d1.ts" },
+    { name: "./adapters/cloudflare-r2", path: "./src/adapters/cloudflare-r2.ts" },
+    { name: "./adapters/cloudflare-kv", path: "./src/adapters/cloudflare-kv.ts" },
+    { name: "./adapters/cloudflare-do", path: "./src/adapters/cloudflare-do.ts" },
   ],
   outDir,
   // ESM only — CJS not supported due to top-level await in dependencies (e.g., @db/sqlite)
   scriptModule: false,
+  // Deno shim disabled: it uses `__dirname` which breaks in Cloudflare Workers
+  // ESM bundles. Source code that calls `Deno.*` (e.g., middleware cleanup
+  // timers, env reads) will fail at runtime in Node — guard with `typeof Deno`
+  // checks if you need cross-runtime support. The Worker entry only loads
+  // adapters + messaging that don't touch Deno APIs, so this is safe.
   shims: {
-    deno: true,
+    deno: false,
   },
   package: {
-    name: "smallstore",
-    version: "0.1.0",
+    name: "@yawnxyz/smallstore",
+    version: "0.2.0",
     description: "Universal storage layer — one API, 17+ backends.",
     license: "MIT",
     author: "Jan Zheng",
@@ -65,6 +79,7 @@ await build({
       "@aws-sdk/client-s3": "^3.0.0",
       "@aws-sdk/s3-request-presigner": "^3.0.0",
       "unstorage": "^1.17.0",
+      "postal-mime": "^2.4.4",
     },
     peerDependencies: {
       "hono": ">=4.0.0",
@@ -81,26 +96,32 @@ await build({
   // any direct npm: specifiers used in source files
   importMap: "./deno.json",
   mappings: {
-    // Direct npm: specifiers used in source files
-    "npm:hono@^4": {
+    // Specifier strings MUST exactly match the values in deno.json's "imports".
+    // dnt resolves bare specifiers via the import map, then applies these
+    // mappings to rewrite the result to npm package refs.
+    "npm:hono@^4.10.3": {
       name: "hono",
       version: "^4.0.0",
     },
-    "npm:@notionhq/client@^5": {
+    "npm:@notionhq/client@^5.16.0": {
       name: "@notionhq/client",
       version: "^5.16.0",
     },
-    "npm:@aws-sdk/client-s3@3": {
+    "npm:@aws-sdk/client-s3@^3.0.0": {
       name: "@aws-sdk/client-s3",
       version: "^3.0.0",
     },
-    "npm:@aws-sdk/s3-request-presigner@3": {
+    "npm:@aws-sdk/s3-request-presigner@^3.0.0": {
       name: "@aws-sdk/s3-request-presigner",
       version: "^3.0.0",
     },
-    "npm:unstorage@^1": {
+    "npm:unstorage@^1.17.0": {
       name: "unstorage",
       version: "^1.17.0",
+    },
+    "npm:postal-mime@^2.4.4": {
+      name: "postal-mime",
+      version: "^2.4.4",
     },
   },
   // Don't run tests during build

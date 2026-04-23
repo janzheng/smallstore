@@ -1,0 +1,23 @@
+{
+  "name": "smallstore-deploy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predeploy": "cd .. && deno task build:npm",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --local",
+    "tail": "wrangler tail",
+    "secret:set": "wrangler secret put SMALLSTORE_TOKEN",
+    "d1:create": "wrangler d1 create mailroom",
+    "r2:create": "wrangler r2 bucket create mailroom"
+  },
+  "dependencies": {
+    "@yawnxyz/smallstore": "file:../dist",
+    "hono": "^4.10.3",
+    "postal-mime": "^2.4.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "wrangler": "^4.84.1"
+  }
+}

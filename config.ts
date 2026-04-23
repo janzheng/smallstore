@@ -49,6 +49,49 @@ export interface SmallstoreServerConfig {
     object?: string;
     kv?: string;
   };
+
+  /**
+   * Inbox configurations (messaging plugin family).
+   *
+   * Each entry references a registered channel (by name) and one or two
+   * registered adapters (by name) for storage. Resolved at boot by
+   * `buildInboxes()` into actual `Inbox` instances and registered into
+   * the in-memory `InboxRegistry`.
+   *
+   * @example
+   * ```json
+   * {
+   *   "inboxes": {
+   *     "mailroom": {
+   *       "channel": "cf-email",
+   *       "storage": { "items": "mailroom_d1", "blobs": "mailroom_r2" }
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  inboxes?: Record<string, InboxConfigEntry>;
+}
+
+/**
+ * Inbox config entry — what lives under `inboxes.<name>` in `.smallstore.json`.
+ *
+ * Mirrors `InboxConfig` from `src/messaging/types.ts`, re-declared here so
+ * `config.ts` doesn't have to import the messaging module just for the type.
+ */
+export interface InboxConfigEntry {
+  /** Channel name (must be a registered channel — see src/messaging/registry.ts). */
+  channel: string;
+  /** Storage adapter ref (single name) OR `{ items, blobs }` for split storage. */
+  storage: string | { items: string; blobs?: string };
+  /** Channel-specific config (HMAC secret, feed url, schedule cron, etc). */
+  channel_config?: Record<string, any>;
+  /** URL slug; defaults to inbox name. */
+  slug?: string;
+  /** Pull cron schedule (only meaningful for pull channels). */
+  schedule?: string;
+  /** TTL in seconds — only honored for runtime-created inboxes. */
+  ttl?: number;
 }
 
 export type AdapterConfig =
@@ -385,9 +428,40 @@ export async function loadConfig(
       ?? (hasPreset ? 'memory' : getEnvOrDefault('SM_DEFAULT_ADAPTER', 'memory')),
     mounts: fileConfig.mounts,
     typeRouting: fileConfig.typeRouting,
+    inboxes: fileConfig.inboxes,
   };
 
   return config;
+}
+
+// ============================================================================
+// Inbox Construction
+// ============================================================================
+
+/**
+ * Resolve a storage ref (string or `{items, blobs}`) into an `InboxStorage`
+ * handle backed by registered adapters.
+ *
+ * Throws if any referenced adapter name isn't in `adapters`.
+ */
+export function resolveInboxStorage(
+  ref: string | { items: string; blobs?: string },
+  adapters: Record<string, StorageAdapter>,
+): { items: StorageAdapter; blobs?: StorageAdapter } {
+  if (typeof ref === 'string') {
+    const a = adapters[ref];
+    if (!a) throw new Error(`Inbox storage references unknown adapter "${ref}"`);
+    return { items: a };
+  }
+  const items = adapters[ref.items];
+  if (!items) throw new Error(`Inbox storage.items references unknown adapter "${ref.items}"`);
+  const out: { items: StorageAdapter; blobs?: StorageAdapter } = { items };
+  if (ref.blobs) {
+    const b = adapters[ref.blobs];
+    if (!b) throw new Error(`Inbox storage.blobs references unknown adapter "${ref.blobs}"`);
+    out.blobs = b;
+  }
+  return out;
 }
 
 /**

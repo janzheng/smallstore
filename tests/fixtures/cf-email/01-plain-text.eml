@@ -1,0 +1,10 @@
+From: Alice Sender <alice@example.com>
+To: Inbox <inbox@labspace.ai>
+Subject: Hello there
+Message-ID: <plain-001@example.com>
+Date: Wed, 22 Apr 2026 12:00:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+This is a plain text email body.
+
+Multiple paragraphs are fine.

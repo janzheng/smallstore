@@ -1,0 +1,20 @@
+From: Sender <sender@example.com>
+To: Inbox <inbox@labspace.ai>
+Subject: Invoice attached
+Message-ID: <invoice-003@example.com>
+Date: Wed, 22 Apr 2026 15:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed789"
+
+--mixed789
+Content-Type: text/plain; charset=utf-8
+
+Please find the invoice attached.
+
+--mixed789
+Content-Type: text/plain; name="invoice.txt"
+Content-Disposition: attachment; filename="invoice.txt"
+Content-Transfer-Encoding: base64
+
+VGhpcyBpcyB0aGUgaW52b2ljZSBjb250ZW50LgpUb3RhbDogJDQyLjAw
+--mixed789--

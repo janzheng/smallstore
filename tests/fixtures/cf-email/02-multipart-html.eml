@@ -1,0 +1,19 @@
+From: Newsletter <newsletter@stratechery.com>
+To: Inbox <inbox@labspace.ai>
+Subject: Stratechery Weekly Update
+Message-ID: <newsletter-002@stratechery.com>
+Date: Wed, 22 Apr 2026 14:30:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary123"
+
+--boundary123
+Content-Type: text/plain; charset=utf-8
+
+This is the plain text version of the newsletter.
+
+Read more at https://stratechery.com
+--boundary123
+Content-Type: text/html; charset=utf-8
+
+<html><body><h1>Newsletter</h1><p>This is the <b>HTML</b> version.</p></body></html>
+--boundary123--
