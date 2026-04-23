@@ -188,6 +188,55 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 
 For additional category inboxes (`biorxiv-neuroscience`, `biorxiv-bioinformatics`, etc.), add a matching `biorxiv_neuro_d1` / `biorxiv_bio_d1` adapter in the deploy + redeploy first. Tracked as tech debt: `#inbox-keyprefix-isolation` — the proper fix is a `keyPrefix` option on `Inbox` so runtime-created inboxes auto-isolate without deploy changes.
 
+### 1b. Register each feed as a peer (feed registry)
+
+Each RSS feed gets registered as a `type: 'rss'` peer. `GET /peers?type=rss` is the poller's feed list — one HTTP call, runtime-editable, no deploy needed to add a feed.
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "name": "biorxiv-neuro",
+    "type": "rss",
+    "url": "https://www.biorxiv.org/rss/subject/neuroscience.xml",
+    "description": "bioRxiv neuroscience daily preprints",
+    "auth": { "kind": "none" },
+    "tags": ["feed", "academic", "biorxiv"],
+    "metadata": {
+      "feed_config": {
+        "target_inbox": "biorxiv",
+        "schedule": "*/30 * * * *",
+        "default_labels": ["neuroscience"],
+        "media_policy": "refs-only"
+      }
+    }
+  }' \
+  https://smallstore.labspace.ai/peers
+```
+
+**`metadata.feed_config` convention** — smallstore doesn't interpret this; the poller does. Fields:
+
+- `target_inbox` — where parsed items POST to (`/inbox/<target_inbox>/items`)
+- `schedule` — cron expression for polling cadence (poller's concern — valtown uses its own cron)
+- `default_labels` — labels every item gets at ingest time (`["neuroscience"]` → `item.labels: ["neuroscience"]`)
+- `media_policy` — for podcasts (see below): `"refs-only"` (URL only) or `"fetch-to-r2"` (download enclosure to R2)
+
+Other type-specific metadata namespaces can exist under `metadata.<other_key>` — see `src/peers/types.ts` Peer.metadata JSDoc for conventions.
+
+Valtown iterates:
+
+```ts
+const peers = await fetch(`${SMALLSTORE_URL}/peers?type=rss`, {
+  headers: { Authorization: `Bearer ${TOKEN}` }
+}).then(r => r.json());
+
+for (const peer of peers.peers) {
+  const cfg = peer.metadata?.feed_config ?? {};
+  if (peer.disabled) continue;
+  // Poll peer.url on cfg.schedule cadence, parse, apply cfg.default_labels,
+  // POST to /inbox/${cfg.target_inbox}/items
+}
+```
+
 ### 2. Valtown poller (sketch)
 
 ```ts
@@ -301,6 +350,46 @@ Queued in `TASKS-MESSAGING.md § More channels`. Includes:
 - [?] **Webhook channel** (`src/messaging/channels/webhook.ts`) — generic POST receiver with optional HMAC validation. Already queued in `TASKS-MESSAGING.md`. Would give valtown a more structured target than `POST /inbox/:name/items` — webhook channel validates body shape + applies channel-level transforms before ingest. Useful but not blocking. #channel-webhook
 - [?] **Path-scoped auth** — issue a valtown-only token that can only POST to `/inbox/biorxiv/*`. Queued loosely; promote when the master token's blast radius becomes a real concern #path-auth
 - [?] **RSS-aware classifier** — tag items based on content (academic paper? blog post? press release?). Low priority; rules engine handles the common cases already #rss-classifier
+
+## Podcasts (same pattern, different field mapping)
+
+Podcast feeds are RSS with `<enclosure>` tags pointing at audio files. Same `type: 'rss'` peer, same InboxItem ingest; just a different field mapping on the poller side:
+
+```ts
+fields: {
+  // standard RSS fields (title, link, guid, pubDate, authors, categories) ...
+  audio_url: enclosure.url,
+  audio_type: enclosure.type,           // "audio/mpeg", "audio/x-m4a"
+  audio_length_bytes: Number(enclosure.length),
+  duration_seconds: parseInt(itunesDuration) || undefined,
+  // iTunes + podcast-index extensions:
+  episode_number: itunes?.episode,
+  season: itunes?.season,
+  explicit: itunes?.explicit === 'true',
+  transcript_url: podcastIndex?.transcript?.url,   // if feed provides it
+}
+```
+
+`metadata.feed_config.media_policy` controls what the poller does with the audio:
+
+- `"refs-only"` (default) — store the URL in `fields.audio_url`, consumer fetches on demand. Cheap, slow to play offline.
+- `"fetch-to-r2"` — poller downloads the audio, uploads as a blob via smallstore, sets `fields.audio_ref = "audio/<id>.mp3"`. Pricier but playable without external deps. Use for podcasts you actually listen to; skip for "maybe someday" feeds.
+
+Transcription is deliberately separate — AssemblyAI / Whisper on-demand, not at ingest. Query whatever's ingested, transcribe only the episodes you'll actually listen to.
+
+## Scope boundary: smallstore funnels + stores, collections enriches
+
+Explicit division of labor confirmed 2026-04-25:
+
+- **Smallstore's job:** receive `InboxItem`s, dedup, classify (email-only), apply rules, store, expose via query/export/MCP. Pull-agnostic — doesn't poll, doesn't enrich.
+- **Collections' job (valtown + signalkit + agent-style feeders):** poll sources, enrich (Jina / Firecrawl / Unpaywall for articles; readability for blog posts; DOI → abstract lookups for preprints), build full-body InboxItems, POST to smallstore.
+
+Why this split:
+- Enrichment is expensive + source-specific (bioRxiv's DOI-to-abstract lookup is different from blog-readability). Keeping it in the poller means one source = one config.
+- Smallstore stays thin. Workers CPU budget per `email()` / HTTP request is small; offloading enrichment to outside Workers preserves that budget for storage + rules.
+- `phagepapersCollector.getContent()` already does exactly this in the existing valtown trio. Reuse the muscle.
+
+**If smallstore ever grows a processor/plugin layer** — post-ingest hooks that enrich inline — it'd live in the existing hook pipeline (`preIngest` / `postClassify` / `postStore`). Not today. Tracked loosely as `#smallstore-enrichment-processors` (no task queued; promote when concrete use case appears).
 
 ## Out of scope for this brief
 

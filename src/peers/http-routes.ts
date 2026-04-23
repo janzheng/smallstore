@@ -226,6 +226,7 @@ const VALID_PEER_TYPES: ReadonlySet<string> = new Set([
   'smallstore',
   'tigerflare',
   'sheetlog',
+  'rss',
   'http-json',
   'webdav',
   'generic',
@@ -290,6 +291,14 @@ function validatePeerInput(body: unknown): { error?: string } {
 
   if (b.disabled !== undefined && typeof b.disabled !== 'boolean') {
     return { error: 'disabled must be a boolean' };
+  }
+
+  if (b.metadata !== undefined) {
+    if (!b.metadata || typeof b.metadata !== 'object' || Array.isArray(b.metadata)) {
+      return { error: 'metadata must be a plain object (or omitted)' };
+    }
+    // Don't validate nested fields — metadata is a free-form convention
+    // surface (see Peer.metadata JSDoc). Reject only obvious shape mistakes.
   }
 
   return {};

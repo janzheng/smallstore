@@ -36,6 +36,11 @@ export type PeerType =
   | 'smallstore'
   | 'tigerflare'
   | 'sheetlog'
+  | 'rss'        // RSS / Atom feed. Peer-as-feed pattern: external pollers
+                 // (valtown etc.) read `GET /peers?type=rss`, poll each on
+                 // their own schedule, POST parsed items to the inbox named
+                 // in `metadata.feed_config.target_inbox`. Smallstore stays
+                 // pull-agnostic; the type is a label + future-resolver hint.
   | 'http-json'
   | 'webdav'
   | 'generic';
@@ -141,6 +146,27 @@ export interface Peer {
    * `/inbox/mailroom/foo`.
    */
   path_mapping?: Record<string, string>;
+
+  /**
+   * Free-form per-peer metadata. Smallstore doesn't interpret this — it's a
+   * convention surface for callers to attach their own config to a peer row
+   * without needing a smallstore code change for every new field shape.
+   *
+   * Conventions in use today:
+   *
+   * - For `type: 'rss'` peers — `metadata.feed_config = { target_inbox,
+   *   schedule, default_labels?, media_policy? }`. The poller (valtown,
+   *   future in-Worker pull-runner) reads this to know where to POST
+   *   parsed items + how often to poll. Smallstore itself doesn't poll,
+   *   just stores the config so pollers have one source of truth.
+   *
+   * - Other peer types can claim their own `metadata.<key>` namespaces as
+   *   needed. Document conventions in `.brief/peer-registry.md`.
+   *
+   * Validated as a plain object (no nested type checks); store anything
+   * JSON-serializable.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 // ============================================================================

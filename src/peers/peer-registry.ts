@@ -174,6 +174,7 @@ export function createPeerStore(
         disabled: input.disabled ?? false,
         created_at: new Date().toISOString(),
         path_mapping: input.path_mapping,
+        metadata: input.metadata,
       };
 
       // Primary record + id-alias. Alias is a plain string pointing at the
