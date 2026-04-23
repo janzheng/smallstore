@@ -265,6 +265,64 @@ export function registerMessagingRoutes(
     return c.json({ inbox: name, result });
   });
 
+  /**
+   * Manual label edit — add or remove labels on an already-stored item.
+   *
+   * POST /inbox/:name/items/:id/tag
+   * Body: { add?: string[], remove?: string[] }
+   *
+   * Use cases:
+   *   - Upgrade a `manual` forward to `bookmark` after the fact
+   *   - Remove an `archived` label that got applied by an overzealous rule
+   *   - Add `read-later` / `star` / custom taxonomy labels from a UI
+   *
+   * Labels are Set-merged: adding a duplicate is a no-op, removing an absent
+   * label is a no-op. Returns the updated item or 404 if id not found.
+   * Persists via `inbox._ingest({ force: true })` so the content-hash dedup
+   * doesn't swallow the mutation.
+   */
+  app.post('/inbox/:name/items/:id/tag', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const body = await readJson(c);
+    if (!body || typeof body !== 'object') {
+      return badRequest(c, 'body must be { add?: string[], remove?: string[] }');
+    }
+    const add = (body as { add?: unknown }).add;
+    const remove = (body as { remove?: unknown }).remove;
+    const validArray = (v: unknown): v is string[] =>
+      Array.isArray(v) && v.every((s) => typeof s === 'string' && s.length > 0);
+    if (add !== undefined && !validArray(add)) {
+      return badRequest(c, 'add must be an array of non-empty strings');
+    }
+    if (remove !== undefined && !validArray(remove)) {
+      return badRequest(c, 'remove must be an array of non-empty strings');
+    }
+    if (!add?.length && !remove?.length) {
+      return badRequest(c, 'at least one of add[] or remove[] must be non-empty');
+    }
+
+    const existing = await inbox.read(id);
+    if (!existing) return notFound(c, `item "${id}" not in inbox "${name}"`);
+
+    const current = new Set(existing.labels ?? []);
+    for (const label of add ?? []) current.add(label);
+    for (const label of remove ?? []) current.delete(label);
+    const nextLabels = Array.from(current);
+
+    const updated: typeof existing = {
+      ...existing,
+      labels: nextLabels.length > 0 ? nextLabels : undefined,
+    };
+
+    // force: true bypasses content-hash dedup so the label mutation persists.
+    const saved = await inbox._ingest(updated, { force: true });
+    return c.json({ inbox: name, item: saved });
+  });
+
   // --------------------------------------------------------------------------
   // Mailroom rules surface
   //

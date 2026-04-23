@@ -169,7 +169,7 @@ Design: `.brief/mailroom-curation.md` (2026-04-25). Reframes mailroom from "spam
 - [x] [done 2026-04-25: deploy/src/index.ts wires forwardDetect + plusAddr + rulesHook as preIngest hooks in that order (forward-detect first for auto-detection, plus-addr second for explicit-intent-wins, rules-hook last for user-configured actions). senderUpsertHook stays as postClassify. New rulesD1 adapter (table mailroom_rules) + rulesStores Map. rulesStoreFor resolver passed to registerMessagingRoutes. SELF_ADDRESSES env var threaded through parseSelfAddresses. Bundle: 583 → 605 KiB (+22 KiB for curation modules). Dry-run clean] Deploy hook wiring #curation-deploy-wire
 
 **Polish (optional, same-sprint if time):**
-- [?] Manual-tag surface — `POST /inbox/:name/items/:id/tag` with `{ add?, remove? }` for after-the-fact labeling. Upgrade `manual` to `bookmark` when forward-detection fires but intent wasn't specified. Works for the "I received a newsletter already and decided it's worth bookmarking" case too, not just forwards #curation-manual-tag
+- [x] [done 2026-04-25: `POST /inbox/:name/items/:id/tag` body `{ add?, remove? }`. Set-merge on add, Set-delete on remove, dedup safe. force:true re-ingest so mutation persists past content-hash dedup. Used live to undo an overzealous archive rule on the Sidebar item] Manual-tag surface #curation-manual-tag
 - [?] Main-view filter helper — `mainViewFilter(extra?)` returning `{ exclude_labels: ['archived', 'quarantined'] }` merged with caller's filter. Prevents "forgot to hide archived" footgun #curation-main-view-helper
 
 **Live verification (at end):**
