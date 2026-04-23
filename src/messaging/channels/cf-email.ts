@@ -39,8 +39,27 @@
  * to the same id; Inbox dedupes on `_ingest`.
  */
 
-import PostalMime from 'postal-mime';
 import type { Channel, ParseResult, InboxItem } from '../types.ts';
+
+// Lazy-load postal-mime so consumers who don't use the cf-email channel
+// don't pay for the dep. Dynamic import is cached by the module system
+// after the first call, so there's no per-parse cost beyond the first one.
+let _PostalMime: any | undefined;
+async function loadPostalMime() {
+  if (_PostalMime) return _PostalMime;
+  try {
+    const mod = await import('postal-mime');
+    _PostalMime = mod.default ?? mod;
+    return _PostalMime;
+  } catch (err) {
+    throw new Error(
+      "The cf-email channel requires 'postal-mime'. Install it:\n" +
+      "  npm install postal-mime\n" +
+      "  (or add to deno.json imports: \"postal-mime\": \"npm:postal-mime@^2.4.4\")\n" +
+      `Original error: ${(err as Error)?.message ?? err}`,
+    );
+  }
+}
 
 // ============================================================================
 // Constants
@@ -84,6 +103,7 @@ export class CloudflareEmailChannel implements Channel<EmailInput> {
   readonly source = 'email/v1';
 
   async parse(input: EmailInput): Promise<ParseResult | null> {
+    const PostalMime = await loadPostalMime();
     const parsed = await PostalMime.parse(input.raw);
 
     const id = await contentAddressedId(parsed.messageId, input.raw);

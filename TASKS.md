@@ -4,7 +4,27 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ## Current
 
-- [!] Messaging plugin family (Inbox + Channel + later Outbox) — design done, ready to build `-> .brief/messaging-plugins.md` `-> TASKS-MESSAGING.md` #messaging #area
+### Plugin discipline audit — reshape before adding more plugins (2026-04-24, blocks mailroom EOD)
+
+Motivation: user wants to add more plugin families (obsidian adapter+channel, rss channel, webhook channel for agentic feeders dumping data, possibly tigerflare). Before shipping any, tighten the existing plugin pattern so each new one follows a documented recipe, not tribal knowledge. Aspirational shape: pi-mono's simple core + opt-in extensions. Full brief: `.brief/plugin-discipline-audit.md`.
+
+The 4 invariants (a plugin is genuinely a plugin when): (1) core never imports it, (2) heavy deps are optional peers, (3) sub-entry points are self-contained, (4) it's deletable.
+
+- [x] [done 2026-04-24: postal-mime moved to optional peer + lazy-loaded in cf-email.ts; 18/18 tests green] Messaging family audit — 3.5/4 invariants passed; one leak fixed same day #plugin-discipline #audit-messaging
+- [!] Audit other plugin families (`search`, `graph`, `episodic`, `blob-middleware`, `disclosure`, `views`, `materializers`, `http`, `sync`) against the 4 invariants — mechanical grep + core-dep scan. Output: either clean bill or concrete fix list #plugin-discipline #audit-all-families
+- [!] Audit root `package.json` dependencies line-by-line — each entry: "which plugin uses this?" If only one, belongs in that plugin's optional peers. Bets: `@notionhq/client`, `@aws-sdk/*` are single-plugin leaks #plugin-discipline #audit-root-deps
+- [!] Write `docs/plugin-authoring.md` — one-page: 4 invariants + lazy-load recipe + sub-entry-point convention + deletion test. Canonical example: the postal-mime lazy-load. Makes plugin-authoring self-serve #plugin-discipline #docs-plugin-authoring
+- [!] Write role decision tree (adapter/channel/sink/processor) — short table + worked examples (Obsidian all-roles, Tigerflare adapter+sink, Email channel+sink, RSS channel). Lives in `docs/plugin-authoring.md` or adjacent. Answers "where does this backend go?" in 30s #plugin-discipline #docs-roles
+
+**Parked as motivating examples (NOT in this pass):** obsidian adapter + channel, rss channel, webhook channel, tigerflare adapter. These are what the reshape supports — we don't ship them here. Tigerflare specifically: currently being used the *other* direction (tigerflare → smallstore via bridge); adapter direction is theoretically valid but backwards-facing. Re-evaluate when a real consumer appears.
+
+### Mailroom pipeline implementation (EOD 2026-04-24)
+
+- [!] Build mailroom per `.brief/mailroom-pipeline.md` once plugin discipline audit is clean — Sink abstraction as task #0, then FTS5, sender index, classifier, hooks, regex operator, rules, unsubscribe, spam layers, quarantine `-> TASKS-MESSAGING.md § Mailroom pipeline` #mailroom #area #needs:plugin-discipline
+
+### Legacy umbrella (keep for tracking)
+
+- [*] Messaging plugin family (Inbox + Channel + later Outbox) — design shipped, Phase 1 + Phase 5 deployed at `smallstore.labspace.ai` 2026-04-23 `-> .brief/messaging-plugins.md` `-> TASKS-MESSAGING.md` #messaging #area
 
 ## Later
 

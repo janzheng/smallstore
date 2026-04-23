@@ -23,6 +23,14 @@ Area backlog for the new `messaging` plugin family — `Channel` + `Inbox` + (la
 - [x] [fixed: deploy/src/index.ts imports from `@yawnxyz/smallstore/factory-slim`] Root `mod.ts` re-exports ALL adapters, including SQLite which loads `@db/sqlite` (Deno FFI) at module init. factory-slim.ts is purpose-built for "create the router without pulling adapter barrels" — exactly what Workers need. Added as a build-npm subpath
 - [*] **dist/ refresh trap** — yarn's `file:` link uses checksum on package.json; rebuilding dist with same package.json (different code) → yarn says "Already up-to-date" and keeps the OLD link. Workaround: `rm -rf deploy/node_modules/@yawnxyz && yarn install --force`. The `predeploy` hook in deploy/package.json triggers a fresh dist build but doesn't auto-prune; document for future contributors
 
+## Plugin discipline (2026-04-24)
+
+Audit ran against the "messaging should be a removable plugin" invariants. 3.5/4 passed out of the box. One real leak fixed same day:
+
+- [x] [fixed 2026-04-24: `postal-mime` lazy-loaded in cf-email.ts + moved to optional peerDependencies] `postal-mime` was in core `dependencies`, meaning every npm consumer of `@yawnxyz/smallstore` pulled it even if they never used messaging. Fix: top-level `import PostalMime from 'postal-mime'` → lazy `loadPostalMime()` helper with clear error if missing. `build-npm.ts` moves it to `peerDependencies` + `peerDependenciesMeta: { optional: true }`, mirroring the `hono` pattern. Verified: 18/18 cf-email tests still green; deploy/ still installs postal-mime directly (as it should — it uses the channel) #plugin-discipline #postal-mime-lazy
+- [ ] Apply same 4-invariant audit to the other plugin families (`search`, `graph`, `episodic`, `blob-middleware`, `disclosure`, `views`, `materializers`, `http`, `sync`) — look for heavy deps in core `dependencies` that only one plugin uses. Mechanical; catches sprawl before it calcifies. #plugin-discipline #audit-all-families
+- [ ] Write `docs/plugin-authoring.md` — one-page: the 4 invariants, sub-entry-point convention, lazy-load pattern for heavy deps, example. Makes plugin-authoring self-serve for agents/contributors instead of tribal knowledge #plugin-discipline #docs
+
 ## Risks
 
 - [!] **CF Email Routing free-tier inbound limits** (~few hundred/day historically) — fine for personal mailroom, may bottleneck if mailroom ever ingests high volume. Watch for; paid plan is the escape valve

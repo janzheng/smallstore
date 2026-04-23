@@ -79,13 +79,14 @@ await build({
       "@aws-sdk/client-s3": "^3.0.0",
       "@aws-sdk/s3-request-presigner": "^3.0.0",
       "unstorage": "^1.17.0",
-      "postal-mime": "^2.4.4",
     },
     peerDependencies: {
       "hono": ">=4.0.0",
+      "postal-mime": ">=2.0.0",
     },
     peerDependenciesMeta: {
       "hono": { optional: true },
+      "postal-mime": { optional: true },
     },
     optionalDependencies: {
       "@zvec/zvec": "^0.2.1",
@@ -157,6 +158,9 @@ await build({
 
     // Remove hono from dependencies (it's a peer dep)
     delete pkg.dependencies?.["hono"];
+
+    // Remove postal-mime from dependencies (it's an optional peer — only needed by cf-email channel)
+    delete pkg.dependencies?.["postal-mime"];
 
     // Remove @zvec/zvec from dependencies, keep in optionalDependencies
     delete pkg.dependencies?.["@zvec/zvec"];
