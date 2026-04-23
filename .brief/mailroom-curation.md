@@ -4,22 +4,37 @@
 **Parent:** `.brief/mailroom-pipeline.md` (pipeline + hooks already shipped)
 **From:** 2026-04-25 morning conversation after the mailroom EOD sprint
 
-## Reframe: what mailroom is actually for
+## Framing: one use case among many
 
-Mailroom is **not a spam filter**. The pipeline has spam-shaped capabilities (classifier, sender-index, quarantine, filter) but the user's actual first use case is **personal email curation**:
+Mailroom is a **product that supports many email-handling use cases**. The existing pipeline already has spam-shaped capabilities (classifier, sender-index, quarantine, filter DSL, hook stages) — those are real, intentional, and used by other use cases. This brief covers ONE specific use case the user wants right now: **personal email curation as a knowledge base.**
+
+Other use cases the same primitives serve, NOT replaced by this brief:
+
+- **Spam filtering / threat detection** — Wave 3 spam layers task; uses the same hook pipeline + sender-index + quarantine, just with security rules rather than curation rules
+- **Newsletter triage / read-later** — exists today via classifier + filter DSL + export endpoint
+- **Agent fan-out** — items POSTed to external services via httpSink (tigerflare bridge, Slack webhooks)
+- **Per-address routing** — multiple addresses → different inboxes once envelope_to routing ships
+- **Auto-respond / templated replies** — when outbox lands
+
+The curation use case below is **additive**: it composes existing primitives + adds three new pieces (forward-detection hook, plus-addressing intent, runtime-editable rules). Nothing existing changes; no other use case is precluded.
+
+### What this brief covers
+
+The user's immediate workflow:
 
 1. *"I found a cool newsletter email, I want it saved as a bookmark in smallstore."*
 2. *"I don't read this newsletter anymore, auto-archive everything from them going forward."*
 3. *"Show me my bookmarked emails."*
 
-That's a knowledge-base curation workflow, not a threat model. It reshapes several design decisions:
+That's a knowledge-base curation workflow. It reshapes several design decisions for these features specifically:
 
-- **Manual forwards are first-class**, not edge cases to discard
-- **Rules are curation tools** (whitelist → bookmark, blocklist → archive), not safety rails
-- **Labels are taxonomy** (`bookmark`, `archived`, `read-later`), not threat tags (though `spam`, `quarantine` can still coexist)
-- **Retroactive application matters** — adding a rule should optionally tag existing items, not just future ones
+- **Manual forwards are first-class** for this use case (other use cases may treat them differently)
+- **`bookmark` / `archived` / `read-later`** are curation labels (coexisting alongside `spam` / `quarantine` from other use cases — labels don't conflict, they stack)
+- **Retroactive application matters** — adding an archive rule should optionally tag existing items
+- **`SELF_ADDRESSES` env var** scopes "what counts as forwarded by me" — orthogonal to other senders' identity
 
-The existing pipeline primitives (Sink abstraction, hook stages, sender-index, filter DSL) all compose cleanly. What's missing is:
+The existing pipeline primitives (Sink abstraction, hook stages, sender-index, filter DSL) all compose cleanly. What's missing for this use case:
+
 - A way to ingest *forwarded* mail with its original-sender metadata intact
 - A way to express intent at receive-time (this is a bookmark, not a normal inbox item)
 - A runtime-editable rules surface for auto-tag-on-sender
@@ -163,10 +178,14 @@ Ordered by dependency. Each is small; total is ~1 day of work.
 
 ## Out of scope for this brief
 
-- **True spam filtering** (regex blocklists, sender reputation thresholds, content hash dedup). That's the Wave 3 spam layers task, different use case. Could compose on top of this rules engine later if needed.
-- **LLM-based classification** ("is this interesting?"). Layer 5 thing; defer until the explicit-rules surface feels insufficient.
-- **Multi-user isolation** — single-tenant assumed. If mailroom ever hosts multiple users, rules scope by user.
-- **Search over bookmarks** — FTS5 already works on the items table via `?fts=...`. That covers it. "Search my bookmarks" = `?filter={"labels":["bookmark"]}&fts=keyword`.
+These are real other use cases / features that the same primitives could support — **not deprecated by this brief, just not addressed by it.** Each has its own follow-up task (or already exists):
+
+- **True spam filtering** (regex blocklists, sender reputation thresholds, content hash dedup) — Wave 3 spam layers, separate task, composes on the same rules engine
+- **LLM-based classification** ("is this interesting?") — layer 5; defer until the explicit-rules surface feels insufficient. Worth adding when the set of bookmark-worthy senders is too dynamic to maintain manually
+- **Multi-user isolation** — single-tenant assumed. If mailroom ever hosts multiple users, rules scope by user (small change to the rules-store key prefix)
+- **Search over bookmarks** — already works: FTS5 + `?filter={"labels":["bookmark"]}&fts=keyword`
+- **Per-address routing to different inboxes** — `mailroom@labspace.ai` → mailroom inbox vs `support@labspace.ai` → support inbox; that's the existing envelope_to routing task. Plus-addressing in this brief is intent-tagging on the *same* inbox, not routing to a different inbox
+- **Outbox / auto-respond** — separate plugin family
 
 ## Success criteria
 

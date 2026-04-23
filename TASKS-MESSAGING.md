@@ -169,8 +169,11 @@ Design: `.brief/mailroom-curation.md` (2026-04-25). Reframes mailroom from "spam
 - [ ] deploy/src/index.ts updates — instantiate rulesStore + forwardDetect + plusAddrHook; wire as preIngest hooks; pass `SELF_ADDRESSES` env var; expose `rulesStoreFor` + `senderIndexFor` resolvers in registerMessagingRoutes. ~30 min #curation-deploy-wire
 
 **Polish (optional, same-sprint if time):**
-- [?] Manual-tag surface — `POST /inbox/:name/items/:id/tag` with `{ add?, remove? }` for after-the-fact labeling. Upgrade `manual` to `bookmark` when forward-detection fires but intent wasn't specified #curation-manual-tag
+- [?] Manual-tag surface — `POST /inbox/:name/items/:id/tag` with `{ add?, remove? }` for after-the-fact labeling. Upgrade `manual` to `bookmark` when forward-detection fires but intent wasn't specified. Works for the "I received a newsletter already and decided it's worth bookmarking" case too, not just forwards #curation-manual-tag
 - [?] Main-view filter helper — `mainViewFilter(extra?)` returning `{ exclude_labels: ['archived', 'quarantined'] }` merged with caller's filter. Prevents "forgot to hide archived" footgun #curation-main-view-helper
+
+**Live verification (at end):**
+- [ ] Verify against real forwarded mail — user registered at least one newsletter (2026-04-25). After curation ships, forward one issue to `mailroom+bookmark@labspace.ai` and confirm: (a) `bookmark` + `manual` labels applied, (b) `fields.original_from_email` extracted, (c) `?filter={"labels":["bookmark"]}` returns it, (d) adding an archive rule + retroactive apply correctly tags existing items from that sender #curation-live-verify #needs:curation-deploy-wire
 
 Success criteria: forward an email to `mailroom+bookmark@labspace.ai` → lands with `bookmark` label + original sender preserved; `POST /rules {match, action:'archive'}` + `?apply_retroactive=true` → existing matching items auto-tagged + future mail archived automatically.
 
