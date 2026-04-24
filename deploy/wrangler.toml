@@ -32,7 +32,7 @@ SENDER_ALIASES = "jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:
 # `needs-confirm` queue for manual click via POST /inbox/:name/confirm/:id.
 # Safety: only HTTPS + named-domain hosts auto-follow; unsubscribe URLs
 # are rejected even if the sender is allowlisted.
-AUTO_CONFIRM_SENDERS = "*@substack.com,*@substackmail.com,*@convertkit.com,*@beehiiv.com,*@mailerlite.com,*@emailoctopus.com,*@uxdesign.cc"
+AUTO_CONFIRM_SENDERS = "*@substack.com,*@substackmail.com,*@convertkit.com,*@beehiiv.com,*@mailerlite.com,*@emailoctopus.com,*@uxdesign.cc,*@every.to"
 
 # Worker owns smallstore.labspace.ai. The DNS record must exist in the
 # labspace.ai zone (orange-cloud / Proxied) before the first deploy — its
