@@ -398,6 +398,168 @@ export function registerMessagingRoutes(
   });
 
   /**
+   * Mark a single item read — removes the `unread` label.
+   *
+   * POST /inbox/:name/items/:id/read
+   *
+   * Idempotent: a no-op when the item already doesn't carry `unread`.
+   * Returns the updated item + `{ changed: boolean }` so callers can
+   * distinguish "did work" from "already read" without re-reading labels.
+   * 404 if id not found.
+   */
+  app.post('/inbox/:name/items/:id/read', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const existing = await inbox.read(id);
+    if (!existing) return notFound(c, `item "${id}" not in inbox "${name}"`);
+
+    const labels = existing.labels ?? [];
+    if (!labels.includes('unread')) {
+      return c.json({ inbox: name, item: existing, changed: false });
+    }
+    const nextLabels = labels.filter((l) => l !== 'unread');
+    const updated = {
+      ...existing,
+      labels: nextLabels.length > 0 ? nextLabels : undefined,
+    };
+    const saved = await inbox._ingest(updated, { force: true });
+    return c.json({ inbox: name, item: saved, changed: true });
+  });
+
+  /**
+   * Mark a single item unread — re-adds the `unread` label.
+   *
+   * POST /inbox/:name/items/:id/unread
+   *
+   * Idempotent: no-op if already unread. Returns `{ item, changed }`.
+   * 404 if id not found.
+   */
+  app.post('/inbox/:name/items/:id/unread', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const existing = await inbox.read(id);
+    if (!existing) return notFound(c, `item "${id}" not in inbox "${name}"`);
+
+    const labels = existing.labels ?? [];
+    if (labels.includes('unread')) {
+      return c.json({ inbox: name, item: existing, changed: false });
+    }
+    const updated = {
+      ...existing,
+      labels: [...labels, 'unread'],
+    };
+    const saved = await inbox._ingest(updated, { force: true });
+    return c.json({ inbox: name, item: saved, changed: true });
+  });
+
+  /**
+   * Bulk mark-read by id.
+   *
+   * POST /inbox/:name/read
+   * Body: { ids: string[] }
+   *
+   * Returns `{ total, changed, missing: string[] }` — total attempted,
+   * count that actually had `unread` stripped, and ids that didn't
+   * resolve to an item. Missing ids are reported, not fatal — the
+   * whole batch still commits for the ones that exist.
+   */
+  app.post('/inbox/:name/read', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const body = await readJson(c);
+    const ids = (body as { ids?: unknown } | null)?.ids;
+    if (!Array.isArray(ids) || ids.length === 0 || !ids.every((s) => typeof s === 'string' && s.length > 0)) {
+      return badRequest(c, 'body.ids must be a non-empty array of non-empty strings');
+    }
+
+    const missing: string[] = [];
+    let changed = 0;
+    for (const id of ids as string[]) {
+      const item = await inbox.read(id);
+      if (!item) {
+        missing.push(id);
+        continue;
+      }
+      const labels = item.labels ?? [];
+      if (!labels.includes('unread')) continue;
+      const nextLabels = labels.filter((l) => l !== 'unread');
+      await inbox._ingest(
+        { ...item, labels: nextLabels.length > 0 ? nextLabels : undefined },
+        { force: true },
+      );
+      changed++;
+    }
+
+    return c.json({ inbox: name, total: ids.length, changed, missing });
+  });
+
+  /**
+   * Bulk mark-read by filter.
+   *
+   * POST /inbox/:name/read-all
+   * Body: optional InboxFilter — e.g. `{ labels: ["sender:jessica"] }`
+   *       to mark-read every Jessica item. Empty body (or `{}`) marks
+   *       every currently-unread item read — scoped by default to items
+   *       actually carrying `unread` so this doesn't re-page through the
+   *       whole inbox.
+   *
+   * Returns `{ matched, changed }`. Internally always intersects the
+   * caller's filter with `{ labels: ["unread"] }` to avoid scanning
+   * already-read items. Safe cap at 10,000 items per call — callers
+   * wanting larger bulk should page manually via `sm_inbox_query` +
+   * `sm_inbox_mark_read_many` with explicit ids.
+   */
+  app.post('/inbox/:name/read-all', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const body = await readJson(c);
+    const userFilter: InboxFilter = (body && typeof body === 'object') ? (body as InboxFilter) : {};
+
+    // Always intersect with `labels: ["unread"]`. If the caller also
+    // passed labels, merge — every label must match.
+    const mergedLabels = Array.from(
+      new Set([...(userFilter.labels ?? []), 'unread']),
+    );
+    const filter: InboxFilter = { ...userFilter, labels: mergedLabels };
+
+    const HARD_CAP = 10_000;
+    const pageLimit = 500;
+    let cursor: string | undefined;
+    let matched = 0;
+    let changed = 0;
+
+    while (true) {
+      const page = await inbox.query(filter, { cursor, limit: pageLimit });
+      for (const item of page.items) {
+        if (matched >= HARD_CAP) break;
+        matched++;
+        const labels = item.labels ?? [];
+        if (!labels.includes('unread')) continue; // belt+braces
+        const nextLabels = labels.filter((l) => l !== 'unread');
+        await inbox._ingest(
+          { ...item, labels: nextLabels.length > 0 ? nextLabels : undefined },
+          { force: true },
+        );
+        changed++;
+      }
+      if (matched >= HARD_CAP || !page.next_cursor) break;
+      cursor = page.next_cursor;
+    }
+
+    return c.json({ inbox: name, matched, changed, capped: matched >= HARD_CAP });
+  });
+
+  /**
    * Click a double-opt-in confirmation link for a stored item.
    *
    * POST /inbox/:name/confirm/:id

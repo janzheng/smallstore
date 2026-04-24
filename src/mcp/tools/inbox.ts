@@ -54,7 +54,7 @@ export const INBOX_TOOLS: Tool[] = [
   {
     name: 'sm_inbox_query',
     description:
-      'Filter an inbox with an `InboxFilter` object (labels, senders, time windows, etc). Use this instead of `sm_inbox_list` when you need to scope by label (e.g. `{ labels: ["unread"] }`) or sender. Returns `{ inbox, items, next_cursor? }`.',
+      'Filter an inbox with an `InboxFilter` object (labels, senders, time windows, etc). Use this instead of `sm_inbox_list` when you need to scope by label (e.g. `{ labels: ["unread"] }` for what\'s new since last sweep — new items auto-stamp `unread` at ingest, cleared by `sm_inbox_mark_read`) or sender. Returns `{ inbox, items, next_cursor? }`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -62,7 +62,7 @@ export const INBOX_TOOLS: Tool[] = [
         filter: {
           type: 'object',
           description:
-            'InboxFilter object — e.g. `{ labels: ["unread"], senders: ["alice@example.com"], since: "2025-01-01" }`. See `src/messaging/filter-spec.ts` for the full shape.',
+            'InboxFilter object — e.g. `{ labels: ["unread"] }`, `{ labels: ["newsletter", "unread"] }`, `{ senders: ["alice@example.com"], since: "2026-04-01" }`. See `src/messaging/filter-spec.ts` for the full shape.',
         },
         cursor: { type: 'string', description: 'Opaque cursor from a prior page. Sent as a query-string param.' },
         limit: { type: 'number', description: 'Max items per page. Sent as a query-string param.' },
@@ -176,6 +176,54 @@ export const INBOX_TOOLS: Tool[] = [
         dry_run: { type: 'boolean', description: 'Return the URL without following it. Default: false.' },
       },
       required: ['inbox', 'id'],
+    },
+  },
+  {
+    name: 'sm_inbox_mark_read',
+    description:
+      'Mark a single item read — removes the `unread` label. Idempotent: returns `{ changed: false }` when the item was already read. Every newly-ingested item carries `unread` until a reader explicitly clears it. Pair with `sm_inbox_query({ labels: ["unread"] })` to find candidates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        id: { type: 'string', description: 'Item id to mark read.' },
+      },
+      required: ['inbox', 'id'],
+    },
+  },
+  {
+    name: 'sm_inbox_mark_unread',
+    description:
+      'Re-add the `unread` label to an item — the undo for `sm_inbox_mark_read`. Idempotent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        id: { type: 'string', description: 'Item id to mark unread.' },
+      },
+      required: ['inbox', 'id'],
+    },
+  },
+  {
+    name: 'sm_inbox_mark_read_many',
+    description:
+      'Bulk mark-read. Pass `ids: string[]` for an explicit list, OR `filter: InboxFilter` to mark-read everything matching (server intersects with `labels:["unread"]` so already-read items are skipped; empty filter `{}` marks-read every unread item). Exactly one of `ids` / `filter` must be provided. With `ids`, returns `{ total, changed, missing }`. With `filter`, returns `{ matched, changed, capped }` — `capped: true` means the 10k safety cap was hit; page via `sm_inbox_query` + explicit ids for larger batches.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Explicit item ids to mark read. Mutually exclusive with `filter`.',
+        },
+        filter: {
+          type: 'object',
+          description:
+            'InboxFilter to mark-read in bulk — e.g. `{ labels: ["sender:jessica"] }` marks every Jessica item read. Mutually exclusive with `ids`.',
+        },
+      },
+      required: ['inbox'],
     },
   },
   {
@@ -448,6 +496,47 @@ export async function handleInboxTool(
       const dryRun = args.dry_run === true ? 'true' : undefined;
       const r = await http('POST', `/inbox/${encName(inbox)}/confirm/${encId(id)}${qs({ 'dry-run': dryRun })}`);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_confirm failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_mark_read': {
+      const inbox = requireString(args, 'inbox');
+      const id = requireString(args, 'id');
+      const r = await http('POST', `/inbox/${encName(inbox)}/items/${encId(id)}/read`);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_mark_read failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_mark_unread': {
+      const inbox = requireString(args, 'inbox');
+      const id = requireString(args, 'id');
+      const r = await http('POST', `/inbox/${encName(inbox)}/items/${encId(id)}/unread`);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_mark_unread failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_mark_read_many': {
+      const inbox = requireString(args, 'inbox');
+      const ids = args.ids;
+      const filter = args.filter;
+      const hasIds = ids !== undefined;
+      const hasFilter = filter !== undefined;
+      if (hasIds === hasFilter) {
+        throw new Error('sm_inbox_mark_read_many: pass exactly one of `ids` or `filter`');
+      }
+      if (hasIds) {
+        if (!isNonEmptyStringArray(ids)) {
+          throw new Error('sm_inbox_mark_read_many: `ids` must be a non-empty array of non-empty strings');
+        }
+        const r = await http('POST', `/inbox/${encName(inbox)}/read`, { ids });
+        if (!r.ok) throw new Error(formatHttpError('sm_inbox_mark_read_many failed', r));
+        return r.body;
+      }
+      if (typeof filter !== 'object' || filter === null || Array.isArray(filter)) {
+        throw new Error('sm_inbox_mark_read_many: `filter` must be an InboxFilter object');
+      }
+      const r = await http('POST', `/inbox/${encName(inbox)}/read-all`, filter);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_mark_read_many failed', r));
       return r.body;
     }
 

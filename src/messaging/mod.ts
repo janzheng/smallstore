@@ -137,6 +137,12 @@ export {
   type AutoConfirmOptions,
 } from './auto-confirm.ts';
 export {
+  createStampUnreadHook,
+  shouldStampUnread,
+  UNREAD_LABEL,
+  type UnreadHookOptions,
+} from './unread.ts';
+export {
   createRulesStore,
   deriveRuleLabel,
   isTagStyleAction,

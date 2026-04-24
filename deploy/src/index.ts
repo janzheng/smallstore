@@ -44,6 +44,7 @@ import {
   createRulesStore,
   createRulesHook,
   createRssPullRunner,
+  createStampUnreadHook,
   parseSelfAddresses,
   parseSenderAliases,
   registerChannel,
@@ -272,7 +273,10 @@ function buildApp(env: Env): AppHandle {
   //      GETs the extracted confirm_url at ingest time; on success swaps
   //      `needs-confirm` → `auto-confirmed`. Non-allowlisted senders fall
   //      through to manual confirmation via POST /inbox/:name/confirm/:id.
-  //   4. sender-index upsert — final, so the upsert sees every label above.
+  //   4. stamp-unread — adds `unread` to new items so `{labels:["unread"]}`
+  //      queries work. Idempotent + skips terminal labels (archived,
+  //      quarantined) so re-ingests from /tag or /confirm don't resurrect it.
+  //   5. sender-index upsert — final, so the upsert sees every label above.
   const selfAddresses = parseSelfAddresses(env.SELF_ADDRESSES);
   const senderAliases = parseSenderAliases(env.SENDER_ALIASES);
   const forwardDetectHook = createForwardDetectHook({ selfAddresses });
@@ -287,6 +291,7 @@ function buildApp(env: Env): AppHandle {
   const autoConfirmHook = createAutoConfirmHook({
     allowedSenders: env.AUTO_CONFIRM_SENDERS,
   });
+  const stampUnreadHook = createStampUnreadHook();
 
   // Side-effect postClassify hook — updates sender-index on every ingest.
   const senderUpsertHook = async (item: InboxItem, _ctx: HookContext): Promise<HookVerdict> => {
@@ -302,7 +307,7 @@ function buildApp(env: Env): AppHandle {
     inbox: mailroom,
     hooks: {
       preIngest: [forwardDetectHook, senderAliasHook, plusAddrHook, rulesHook],
-      postClassify: [newsletterNameHook, confirmDetectHook, autoConfirmHook, senderUpsertHook],
+      postClassify: [newsletterNameHook, confirmDetectHook, autoConfirmHook, stampUnreadHook, senderUpsertHook],
     },
     config: mailroomConfig,
     origin: 'boot',
@@ -324,6 +329,9 @@ function buildApp(env: Env): AppHandle {
     storage: { items: biorxivD1 },
   });
   registry.register('biorxiv', biorxivInbox, biorxivConfig, 'boot');
+  // RSS items get the same unread stamp as emails — lets `{labels:["unread"]}`
+  // queries work across mailroom + rss inboxes uniformly.
+  registry.addHook('biorxiv', 'postClassify', stampUnreadHook);
 
   // Boot-time RSS inbox: podcasts. Same shape as biorxiv — dedicated D1
   // table (`podcasts_items`) to keep the `_index` + `items/` keyspace
@@ -339,6 +347,7 @@ function buildApp(env: Env): AppHandle {
     storage: { items: podcastsD1 },
   });
   registry.register('podcasts', podcastsInbox, podcastsConfig, 'boot');
+  registry.addHook('podcasts', 'postClassify', stampUnreadHook);
 
   // Hono app
   const app = new Hono();
