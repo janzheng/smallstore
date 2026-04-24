@@ -143,7 +143,7 @@ Call mcp__smallstore__sm_sync_jobs
 
 ### `sm_append` (non-destructive append — sheetlog-style adapters)
 
-Append items to a log-shaped collection without wiping what's there. `sm_write` on sheetlog is destructive (overwrites the whole tab); `sm_append` is the safe path for adding rows.
+Append items to a log-shaped collection without wiping what's there. `sm_write` on sheetlog **throws** (it used to silently wipe the whole tab because the `key` arg was ignored); `sm_append` is the safe path for adding rows.
 
 ```
 Call mcp__smallstore__sm_append with collection: "sheets/Sheet1", items: [
@@ -267,7 +267,7 @@ They can be combined: use TigerFlare to stage drafts, then `sm_write` to publish
 - **Adapter listed but calls fail with auth errors** — env vars missing when the server started. Check `.env` at the server's working directory matches `docs/user-guide/env-vars.md` (e.g. `SM_NOTION_SECRET`, `SM_NOTION_DATABASE_ID`, `SM_SHEET_URL`, `SM_AIRTABLE_API_KEY`). Restart the server after updating `.env`.
 - **Write succeeded but nothing in Notion/Airtable** — check `sm_adapters` mounts: the collection probably routed to the default adapter, not the external one. Add a mount like `"docs/*": "notion"`.
 - **Port mismatch** — `SMALLSTORE_URL` in the MCP server env must match the port in `.smallstore.json` or `SM_PORT`. Repo default: `9998`. Bare default: `9999`.
-- **Sheetlog `sm_write` wiped the sheet** — the sheetlog adapter implements `set()` as a destructive replace (bulk-delete + insert). Use `sm_append` instead for row-by-row logging. Key-per-row with `sm_write` does NOT append — the key is ignored and the whole tab is still rewritten.
+- **Sheetlog `sm_write` now throws** — the adapter's `set()` used to silently wipe the whole tab (key ignored, bulk-delete every row, then insert). Now it errors with guidance pointing at `sm_append`. For row-by-row logging use `sm_append`; for keyed updates use the Sheetlog client's `upsert(idField, items)` via direct adapter access; for an intentional full-sheet reseed use `adapter.replace(items)`.
 
 ## Gotchas
 

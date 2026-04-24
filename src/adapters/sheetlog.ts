@@ -119,23 +119,40 @@ export class SheetlogAdapter implements StorageAdapter {
   }
   
   /**
-   * Set value by key
-   * 
-   * Overwrites entire sheet with array.
-   * Uses DYNAMIC_POST for automatic column creation.
-   * 
-   * @param key - Storage key (ignored)
-   * @param value - Array of objects to store
-   * @param ttl - TTL not supported
+   * Refuses to run — `set()` on sheetlog used to silently wipe the
+   * entire sheet (bulkDelete every row, then insert). Callers hitting
+   * this via `sm_write("sheet/Tab", key, data)` lost every existing row
+   * on the tab. The `key` arg was ignored, so per-row scoping was a
+   * fiction.
+   *
+   * Three right answers, depending on intent:
+   *   - Appending a new row (the 99% case) → `append(items)` / `sm_append`
+   *   - Upserting by a stable id column      → `upsert(data, { idField })`
+   *   - Genuinely wiping + reseeding the tab → `replace(items)` (explicit)
+   *
+   * We throw instead of silently choosing one so existing code surfaces
+   * the intent before data loss. To migrate: `sm_write` → `sm_append`.
    */
-  async set(key: string, value: any, ttl?: number): Promise<void> {
-    if (ttl) {
-      console.warn('[SheetlogAdapter] TTL not supported, ignoring');
-    }
-    
-    // Clear existing data first (bulk delete all rows)
+  async set(_key: string, _value: any, _ttl?: number): Promise<void> {
+    throw new Error(
+      '[SheetlogAdapter] set() is disabled because it wipes the entire sheet. ' +
+        'Use append(items) / sm_append to add rows, upsert() for keyed updates, ' +
+        'or replace(items) for an explicit wipe-and-reseed.',
+    );
+  }
+
+  /**
+   * Explicit wipe-and-reseed — the old `set()` semantics, renamed so the
+   * destructive behavior is visible at the call site. Deletes every row
+   * on the tab via `bulkDelete`, then inserts the given items.
+   *
+   * Only reach for this when you really mean "replace the whole sheet's
+   * contents" — e.g. a full refresh from a source of truth. For adding
+   * rows, use `append()`.
+   */
+  async replace(value: any): Promise<void> {
     try {
-      const existing = await this.get(key);
+      const existing = await this.get('');
       if (existing && Array.isArray(existing)) {
         const ids = existing.map((row: any) => row._id).filter(Boolean);
         if (ids.length > 0) {
@@ -145,15 +162,9 @@ export class SheetlogAdapter implements StorageAdapter {
     } catch (error) {
       console.warn('[SheetlogAdapter] Failed to clear existing data:', error);
     }
-    
-    // Ensure value is an array
+
     const items = Array.isArray(value) ? value : [value];
-    
-    if (items.length === 0) {
-      return; // Nothing to insert
-    }
-    
-    // Use dynamic post to create columns as needed
+    if (items.length === 0) return;
     await this.client.dynamicPost(items);
   }
 
@@ -178,25 +189,22 @@ export class SheetlogAdapter implements StorageAdapter {
   }
 
   /**
-   * Delete value by key
+   * Refuses to run — `delete(key)` on sheetlog used to silently wipe the
+   * entire sheet (the `key` arg was ignored, same bug as `set()`). This
+   * was especially dangerous via `sm_delete`: callers expected per-key
+   * deletion, got a whole-sheet wipe.
    *
-   * Clears entire sheet.
-   * 
-   * @param key - Storage key (ignored)
+   * For per-row delete, delete by `_id` through the Sheetlog client
+   * directly (`adapter.client.bulkDelete([id])`). For full-sheet wipe,
+   * call `clear()` — the name is loud enough that the destructive
+   * intent is visible at the call site.
    */
-  async delete(key: string): Promise<void> {
-    try {
-      const existing = await this.get(key);
-      if (existing && Array.isArray(existing)) {
-        const ids = existing.map((row: any) => row._id).filter(Boolean);
-        if (ids.length > 0) {
-          await this.client.bulkDelete(ids);
-        }
-      }
-    } catch (error) {
-      console.error('[SheetlogAdapter] Error deleting data:', error);
-      throw error;
-    }
+  async delete(_key: string): Promise<void> {
+    throw new Error(
+      '[SheetlogAdapter] delete(key) is disabled because it wipes the entire sheet. ' +
+        'Use clear() for an explicit whole-sheet wipe, or delete by _id through the ' +
+        'Sheetlog client (adapter.client.bulkDelete([id])) for per-row removal.',
+    );
   }
   
   /**
@@ -224,12 +232,23 @@ export class SheetlogAdapter implements StorageAdapter {
   }
   
   /**
-   * Clear all data (for testing)
-   * 
-   * @param prefix - Optional prefix (ignored)
+   * Wipe the whole sheet — the explicit destructive-intent surface.
+   * `prefix` is ignored; a sheetlog tab is one collection, there are
+   * no prefixes to scope to.
    */
-  async clear(prefix?: string): Promise<void> {
-    await this.delete('');
+  async clear(_prefix?: string): Promise<void> {
+    try {
+      const existing = await this.get('');
+      if (existing && Array.isArray(existing)) {
+        const ids = existing.map((row: any) => row._id).filter(Boolean);
+        if (ids.length > 0) {
+          await this.client.bulkDelete(ids);
+        }
+      }
+    } catch (error) {
+      console.error('[SheetlogAdapter] Error wiping sheet:', error);
+      throw error;
+    }
   }
   
   // ============================================================================

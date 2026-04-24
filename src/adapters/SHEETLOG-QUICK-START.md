@@ -2,6 +2,14 @@
 
 Turn Google Sheets into a database in 5 minutes!
 
+> **Heads up — `storage.set()` / `adapter.set()` is disabled on sheetlog.** It
+> used to silently wipe the entire tab because the `key` arg was ignored.
+> Use `adapter.append(items)` for adding rows, `adapter.upsert(items, { idField })`
+> for keyed updates, and `adapter.replace(items)` if you really mean "replace
+> the whole tab." The examples below that show `storage.set('...', [...])`
+> predate the fix — replace them with `adapter.append` or `adapter.replace`
+> on newer deploys.
+
 ## Setup
 
 ### 1. Deploy Sheetlog Apps Script

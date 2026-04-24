@@ -388,18 +388,19 @@ Deno.test({
       source: "live-adapter-test"
     };
 
-    // SET (Append row)
-    console.log("  SET (append row)...");
-    await adapter.set(key, testData);
-    console.log("  ✓ SET completed");
+    // APPEND row (sheetlog's non-destructive write path;
+    // set() now throws because it used to silently wipe the whole sheet).
+    console.log("  APPEND row...");
+    await adapter.append(testData);
+    console.log("  ✓ APPEND completed");
 
-    // GET
+    // GET — returns the whole tab as an array (sheet-as-collection)
     console.log("  GET...");
     const retrieved = await adapter.get(key);
-    if (retrieved) {
-      console.log("  ✓ GET returned data");
+    if (Array.isArray(retrieved) && retrieved.length > 0) {
+      console.log(`  ✓ GET returned ${retrieved.length} rows`);
     } else {
-      console.log("  ⚠️ GET returned null (expected for sheetlog - it's append-only)");
+      console.log("  ⚠️ GET returned empty — sheet may be newly cleared");
     }
 
     // KEYS

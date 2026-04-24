@@ -300,12 +300,11 @@ const adapter = createSheetlogAdapter({
   sheet: "Movies",  // Sheet tab name
 });
 
-// Store array (default pattern)
-const movies = [
+// Append rows (the non-destructive, recommended write path)
+await adapter.append([
   { title: 'Inception', year: 2010, rating: 8.8 },
   { title: 'Interstellar', year: 2014, rating: 8.6 },
-];
-await adapter.set('movies', movies);
+]);
 
 // Retrieve entire sheet
 const all = await adapter.get('movies');
@@ -314,6 +313,10 @@ const all = await adapter.get('movies');
 await adapter.upsert([
   { title: 'Inception', year: 2010, rating: 8.9 },  // Updates
 ], { idField: 'title' });
+
+// `adapter.set(key, value)` THROWS — it used to silently wipe the
+// whole tab because `key` was ignored. For an intentional whole-sheet
+// reseed, use `adapter.replace(items)`; to wipe, use `adapter.clear()`.
 ```
 
 ### Setup Instructions
