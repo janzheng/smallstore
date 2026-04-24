@@ -25,9 +25,11 @@ curl -sS -H "Authorization: Bearer $SMALLSTORE_TOKEN" \
   | jq '{pending: (.items | length), items: [.items[] | {id, from: .fields.from_email, subject: .fields.subject, confirm_url: .fields.confirm_url}]}'
 ```
 
-If any items come back, surface them as a separate callout (not buried in the general list). Offer to batch-confirm via the endpoint or the `sm_inbox_confirm` MCP tool. Never click confirm URLs silently — each one should be shown before firing so the user stays in the loop.
+If any items come back, surface them as a separate callout (not buried in the general list). Offer to batch-confirm via the endpoint or the `sm_inbox_confirm` MCP tool. For manual clicks: show the URL first so the user stays in the loop.
 
-Single-item confirm click (mutates): `POST /inbox/mailroom/confirm/:id`. Add `?dry-run=true` to preview the URL.
+**Auto-confirm is active for allowlisted senders.** `AUTO_CONFIRM_SENDERS` in `wrangler.toml` (currently `*@substack.com`, `*@substackmail.com`, `*@convertkit.com`, `*@beehiiv.com`, `*@mailerlite.com`, `*@emailoctopus.com`, `*@uxdesign.cc`) triggers auto-click at ingest — those items carry `auto-confirmed` (not `needs-confirm`). To see what was auto-confirmed recently, query `labels: ["auto-confirmed"]`. Adding a new platform to the allowlist requires editing `wrangler.toml` + redeploy.
+
+Single-item manual confirm (mutates): `POST /inbox/mailroom/confirm/:id`. Add `?dry-run=true` to preview the URL.
 
 ## MCP tools (`sm_inbox_*`, `sm_peers_*`, `sm_*`)
 

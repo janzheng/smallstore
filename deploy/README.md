@@ -115,6 +115,17 @@ SENDER_ALIASES = "jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:
 
 Comma-separated `pattern:name` entries. Each pattern is a glob (supports `*`) matched case-insensitively against the sender address (`original_from_email` when the mail was forwarded; otherwise `from_email`). First match wins. The hook writes `fields.sender_name = "Jessica"` and merges a `sender:jessica` label onto every hit, so `labels: ['sender:jessica']` queries collapse multiple address variants under one person. Omit to disable.
 
+**Optional — auto-confirm allowlist (for double-opt-in subscriptions):**
+
+Add to `wrangler.toml` under `[vars]`:
+
+```toml
+[vars]
+AUTO_CONFIRM_SENDERS = "*@substack.com,*@convertkit.com,*@beehiiv.com,*@mailerlite.com,*@emailoctopus.com"
+```
+
+Comma-separated sender-address globs (same `*` semantics as `SENDER_ALIASES`). When a confirmation email from a matching sender arrives, the worker automatically GETs the extracted `fields.confirm_url` at ingest time and swaps the `needs-confirm` label for `auto-confirmed`. Non-allowlisted senders still land in the `needs-confirm` queue for manual click via `POST /inbox/:name/confirm/:id` (or the `sm_inbox_confirm` MCP tool). Safeguards: HTTPS-only, named-domain hosts only (no raw IPs), URLs containing `unsubscribe` / `opt-out` are rejected even if the sender is allowlisted. Omit to disable (all confirmations become manual).
+
 **Optional — peer-auth secrets (per peer registered):**
 
 Each peer that needs auth references an env var by name (never stores the secret). For example, a tigerflare peer registered with `auth: { kind: 'bearer', token_env: 'TF_TOKEN' }` needs:

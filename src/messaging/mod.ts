@@ -130,6 +130,13 @@ export {
   type ConfirmDetectResult,
 } from './confirm-detect.ts';
 export {
+  createAutoConfirmHook,
+  isSafeUrl,
+  isSenderAllowed,
+  parseAllowedSenders,
+  type AutoConfirmOptions,
+} from './auto-confirm.ts';
+export {
   createRulesStore,
   deriveRuleLabel,
   isTagStyleAction,

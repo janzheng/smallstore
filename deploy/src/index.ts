@@ -34,6 +34,7 @@ import {
   createInbox,
   createEmailHandler,
   cloudflareEmailChannel,
+  createAutoConfirmHook,
   createConfirmDetectHook,
   createNewsletterNameHook,
   createSenderAliasHook,
@@ -94,6 +95,25 @@ export interface Env {
    * Optional — unset disables the hook.
    */
   SENDER_ALIASES?: string;
+  /**
+   * Comma-separated sender-address globs that opt into auto-confirmation
+   * of double-opt-in subscription links. When a confirmation email from
+   * one of these senders arrives, the worker GETs the extracted
+   * `fields.confirm_url` automatically and swaps the `needs-confirm`
+   * label for `auto-confirmed`.
+   *
+   * Safety: only HTTPS URLs with named-domain hosts (no raw IPs); paths
+   * containing `unsubscribe` / `opt-out` are rejected even if the sender
+   * is allowlisted. Non-allowlisted senders still land in the
+   * `needs-confirm` queue for manual click via the confirm endpoint.
+   *
+   * Example (common newsletter platforms):
+   *   `*@substack.com,*@convertkit.com,*@beehiiv.com,*@mailerlite.com,*@emailoctopus.com`
+   *
+   * Optional — unset disables auto-confirmation (all confirmations
+   * become manual).
+   */
+  AUTO_CONFIRM_SENDERS?: string;
 }
 
 // ============================================================================
@@ -248,7 +268,11 @@ function buildApp(env: Env): AppHandle {
   //      `needs-confirm` + writes `fields.confirm_url` for double-opt-in
   //      confirmation mail. Gated on `newsletter` label to avoid false
   //      positives from password-reset / account-verification flows.
-  //   3. sender-index upsert — final, so the upsert sees every label above.
+  //   3. auto-confirm — for senders matching AUTO_CONFIRM_SENDERS globs,
+  //      GETs the extracted confirm_url at ingest time; on success swaps
+  //      `needs-confirm` → `auto-confirmed`. Non-allowlisted senders fall
+  //      through to manual confirmation via POST /inbox/:name/confirm/:id.
+  //   4. sender-index upsert — final, so the upsert sees every label above.
   const selfAddresses = parseSelfAddresses(env.SELF_ADDRESSES);
   const senderAliases = parseSenderAliases(env.SENDER_ALIASES);
   const forwardDetectHook = createForwardDetectHook({ selfAddresses });
@@ -260,6 +284,9 @@ function buildApp(env: Env): AppHandle {
   // can key off `newsletter` (classifier-applied) without ordering pain.
   const newsletterNameHook = createNewsletterNameHook();
   const confirmDetectHook = createConfirmDetectHook();
+  const autoConfirmHook = createAutoConfirmHook({
+    allowedSenders: env.AUTO_CONFIRM_SENDERS,
+  });
 
   // Side-effect postClassify hook — updates sender-index on every ingest.
   const senderUpsertHook = async (item: InboxItem, _ctx: HookContext): Promise<HookVerdict> => {
@@ -275,7 +302,7 @@ function buildApp(env: Env): AppHandle {
     inbox: mailroom,
     hooks: {
       preIngest: [forwardDetectHook, senderAliasHook, plusAddrHook, rulesHook],
-      postClassify: [newsletterNameHook, confirmDetectHook, senderUpsertHook],
+      postClassify: [newsletterNameHook, confirmDetectHook, autoConfirmHook, senderUpsertHook],
     },
     config: mailroomConfig,
     origin: 'boot',

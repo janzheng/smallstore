@@ -25,6 +25,15 @@ SELF_ADDRESSES = "hello@janzheng.com,jan@phage.directory,janeazy@gmail.com,jessi
 # variants under one handle. Unset → hook disabled.
 SENDER_ALIASES = "jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:Jan,janeazy@*:Jan,hello@janzheng.com:Jan"
 
+# Sender-address globs that opt into auto-confirming double-opt-in links.
+# When a `needs-confirm` item's from_email matches one of these patterns,
+# the worker GETs the extracted confirm_url at ingest and swaps the label
+# for `auto-confirmed`. Non-allowlisted senders still land in the
+# `needs-confirm` queue for manual click via POST /inbox/:name/confirm/:id.
+# Safety: only HTTPS + named-domain hosts auto-follow; unsubscribe URLs
+# are rejected even if the sender is allowlisted.
+AUTO_CONFIRM_SENDERS = "*@substack.com,*@substackmail.com,*@convertkit.com,*@beehiiv.com,*@mailerlite.com,*@emailoctopus.com,*@uxdesign.cc"
+
 # Worker owns smallstore.labspace.ai. The DNS record must exist in the
 # labspace.ai zone (orange-cloud / Proxied) before the first deploy — its
 # CNAME target is a fallback only; when the Worker is active, requests are
