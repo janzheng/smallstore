@@ -6,13 +6,12 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 *(Five sprints shipped over 2026-04-23 / 2026-04-24 / 2026-04-25: mailroom pipeline, curation, peer registry, MCP reorg + tool families, in-Worker RSS pull-runner. All live at `smallstore.labspace.ai`. Canonical `skills/smallstore/SKILL.md` synced through mcp-hub to `~/.claude/skills/` + `~/.cursor/skills/` + `~/.codex/skills/` + `~/.agents/skills/`. 33 MCP tools across 3 families (core/inbox/peers). See `TASKS.done.md` + `.brief/2026-04-*-sprint.md` for full narratives.)*
 
-### Mailroom — annotation layer — CODE-COMPLETE 2026-04-26 (awaits deploy)
+### Mailroom — annotation layer — SHIPPED 2026-04-24
 
-Two annotation-layer features, built + tested locally. Full detail in `TASKS-MESSAGING.md § Mailroom pipeline — remaining after curation sprint`.
+Two annotation-layer features, live at `smallstore.labspace.ai` version `180701cc-5e31-4f07-a9dd-39ff3125d986`. Full detail in `TASKS-MESSAGING.md § Mailroom pipeline — remaining after curation sprint`.
 
 - [*] **Forward-notes capture** — `extractForwardNote()` in `src/messaging/forward-detect.ts` pulls user-typed commentary above the forward delimiter into `fields.forward_note`. Strips trailing `On <date>, <Sender> wrote:` quote headers. 13 new tests cover Gmail/Outlook/Apple Mail separators + CRLF + empty/whitespace edge cases #messaging #mailroom-forward-notes
-- [*] **Sender-name aliases** — new `src/messaging/sender-aliases.ts` — glob-pattern alias map, `createSenderAliasHook` wired into deploy preIngest chain. Prefers `original_from_email` so forwarded mail still tags with the original person. Writes `fields.sender_name` + `sender:<slug>` label. 31 new tests covering parse/glob/slug/apply/hook. Config: `SENDER_ALIASES="jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:Jan"` in `wrangler.toml [vars]` #messaging #mailroom-sender-aliases
-- [ ] Deploy + set `SENDER_ALIASES` var — rebuild dist (`deno task build:npm`), `cd deploy && yarn deploy`. Add the alias map under `[vars]` in `deploy/wrangler.toml` first
+- [*] **Sender-name aliases** — new `src/messaging/sender-aliases.ts` — glob-pattern alias map, `createSenderAliasHook` wired into deploy preIngest chain. Prefers `original_from_email` so forwarded mail still tags with the original person. Writes `fields.sender_name` + `sender:<slug>` label. 31 new tests covering parse/glob/slug/apply/hook. Live config in `wrangler.toml [vars]`: `jessica.c.sacher@*:Jessica`, `jan@phage.directory:Jan`, `janzheng@*:Jan`, `janeazy@*:Jan`, `hello@janzheng.com:Jan` #messaging #mailroom-sender-aliases
 
 ### RSS pull-runner — SHIPPED 2026-04-23
 
