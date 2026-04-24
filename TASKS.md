@@ -80,7 +80,7 @@ Audit findings from 2026-04-24 surfaced adapter-level sprawl in root `dependenci
 
 ### Mailroom — Wave 3 (not shipped in the EOD sprint)
 
-See `TASKS-MESSAGING.md` § Later for the full deferred list (rules table, spam layers, MCP `sm_inbox_*` tool family, raw/attachments export inlining, 14 Wave 1/2 #discovered follow-ups).
+See `TASKS-MESSAGING.md` § Later for the full deferred list (read/unread state, rules table, spam layers, MCP `sm_inbox_*` tool family, raw/attachments export inlining, 14 Wave 1/2 #discovered follow-ups).
 
 ### Publishing + infra
 
