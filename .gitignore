@@ -19,6 +19,10 @@ apps/*/data/
 # Deno
 .deno/
 
+# Stray deno.lock inside deploy/ (created if `deno test` runs from that
+# directory — the real lock lives at the repo root).
+deploy/deno.lock
+
 # npm build output
 dist/
 node_modules/

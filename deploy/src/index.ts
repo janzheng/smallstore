@@ -34,6 +34,8 @@ import {
   createInbox,
   createEmailHandler,
   cloudflareEmailChannel,
+  createConfirmDetectHook,
+  createNewsletterNameHook,
   createSenderAliasHook,
   createSenderIndex,
   createForwardDetectHook,
@@ -238,14 +240,26 @@ function buildApp(env: Env): AppHandle {
   //      rules against the (possibly-already-mutated) item. Tag-style rules
   //      stack; terminal rules (drop/quarantine) short-circuit.
   //
-  // postClassify hooks run AFTER the built-in classifier emits its labels,
-  // so sender-index upsert sees canonical tags.
+  // postClassify order:
+  //   1. newsletter-name — if the classifier tagged `newsletter` and there's
+  //      no manual `sender:*` label, derive `newsletter:<slug>` from the
+  //      From display name (e.g. `"Sidebar.io" <...>` → `newsletter:sidebar-io`).
+  //   2. confirm-detect — subject heuristic + URL extraction. Tags
+  //      `needs-confirm` + writes `fields.confirm_url` for double-opt-in
+  //      confirmation mail. Gated on `newsletter` label to avoid false
+  //      positives from password-reset / account-verification flows.
+  //   3. sender-index upsert — final, so the upsert sees every label above.
   const selfAddresses = parseSelfAddresses(env.SELF_ADDRESSES);
   const senderAliases = parseSenderAliases(env.SENDER_ALIASES);
   const forwardDetectHook = createForwardDetectHook({ selfAddresses });
   const senderAliasHook = createSenderAliasHook({ aliases: senderAliases });
   const plusAddrHook = createPlusAddrHook({ baseLocal: 'mailroom' });
   const rulesHook = createRulesHook({ rulesStore: mailroomRulesStore });
+
+  // postClassify hooks — run AFTER the classifier emits labels, so these
+  // can key off `newsletter` (classifier-applied) without ordering pain.
+  const newsletterNameHook = createNewsletterNameHook();
+  const confirmDetectHook = createConfirmDetectHook();
 
   // Side-effect postClassify hook — updates sender-index on every ingest.
   const senderUpsertHook = async (item: InboxItem, _ctx: HookContext): Promise<HookVerdict> => {
@@ -261,7 +275,7 @@ function buildApp(env: Env): AppHandle {
     inbox: mailroom,
     hooks: {
       preIngest: [forwardDetectHook, senderAliasHook, plusAddrHook, rulesHook],
-      postClassify: [senderUpsertHook],
+      postClassify: [newsletterNameHook, confirmDetectHook, senderUpsertHook],
     },
     config: mailroomConfig,
     origin: 'boot',

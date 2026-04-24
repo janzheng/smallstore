@@ -8,10 +8,12 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ### Mailroom — annotation layer — SHIPPED 2026-04-24
 
-Two annotation-layer features, live at `smallstore.labspace.ai` version `180701cc-5e31-4f07-a9dd-39ff3125d986`. Full detail in `TASKS-MESSAGING.md § Mailroom pipeline — remaining after curation sprint`.
+Four annotation-layer features live at `smallstore.labspace.ai`. Full detail in `TASKS-MESSAGING.md § Mailroom pipeline — remaining after curation sprint`.
 
 - [*] **Forward-notes capture** — `extractForwardNote()` in `src/messaging/forward-detect.ts` pulls user-typed commentary above the forward delimiter into `fields.forward_note`. Strips trailing `On <date>, <Sender> wrote:` quote headers. 13 new tests cover Gmail/Outlook/Apple Mail separators + CRLF + empty/whitespace edge cases #messaging #mailroom-forward-notes
-- [*] **Sender-name aliases** — new `src/messaging/sender-aliases.ts` — glob-pattern alias map, `createSenderAliasHook` wired into deploy preIngest chain. Prefers `original_from_email` so forwarded mail still tags with the original person. Writes `fields.sender_name` + `sender:<slug>` label. 31 new tests covering parse/glob/slug/apply/hook. Live config in `wrangler.toml [vars]`: `jessica.c.sacher@*:Jessica`, `jan@phage.directory:Jan`, `janzheng@*:Jan`, `janeazy@*:Jan`, `hello@janzheng.com:Jan` #messaging #mailroom-sender-aliases
+- [*] **Sender-name aliases** — new `src/messaging/sender-aliases.ts` — glob-pattern alias map, `createSenderAliasHook` wired into deploy preIngest chain. Prefers `original_from_email` so forwarded mail still tags with the original person. Writes `fields.sender_name` + `sender:<slug>` label. 31 new tests. Live config: `jessica.c.sacher@*:Jessica`, `jan@phage.directory:Jan`, `janzheng@*:Jan`, `janeazy@*:Jan`, `hello@janzheng.com:Jan` #messaging #mailroom-sender-aliases
+- [*] **Newsletter auto-name** — `src/messaging/newsletter-name.ts` postClassify hook. When classifier tags `newsletter`, pulls display name from `fields.from_addr` (`"Sidebar.io" <hello@uxdesign.cc>` → `newsletter:sidebar-io`). Defers to manual `sender:*` when present. 17 tests #messaging #mailroom-newsletter-auto-name
+- [*] **Double-opt-in detector + auto-click** — `src/messaging/confirm-detect.ts` postClassify hook: subject heuristic + body URL extraction (prefers anchor-line URLs, then path-hint URLs like `/subscribe/confirm`, avoids `unsubscribe` paths). Writes `fields.confirm_url` + `needs-confirm` label. Auto-click surface: `POST /inbox/:name/confirm/:id` (gated on `needs-confirm` so the endpoint isn't an arbitrary URL fetcher) + `sm_inbox_confirm` MCP tool. 33 tests. CLAUDE.md now instructs future sessions to always sweep `needs-confirm` before summarizing the mailroom #messaging #mailroom-confirm-detect
 
 ### RSS pull-runner — SHIPPED 2026-04-23
 

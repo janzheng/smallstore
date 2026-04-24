@@ -397,6 +397,116 @@ export function registerMessagingRoutes(
     return c.json({ inbox: name, item: saved });
   });
 
+  /**
+   * Click a double-opt-in confirmation link for a stored item.
+   *
+   * POST /inbox/:name/confirm/:id
+   * Optional query: ?dry-run=true — return the URL without clicking.
+   *
+   * The item must carry the `needs-confirm` label (set by the confirm-
+   * detect hook at ingest time); this guards against the endpoint
+   * being used to fetch arbitrary URLs. `fields.confirm_url` must also
+   * be present.
+   *
+   * On successful GET (2xx/3xx): removes `needs-confirm`, adds
+   * `confirmed`, writes `fields.confirmed_at` (ISO timestamp) + the
+   * upstream status code at `fields.confirm_status`. Returns the
+   * updated item + a `result` block with status + excerpt.
+   *
+   * On upstream failure (4xx/5xx from the provider or network error):
+   * does NOT mutate labels — leaves `needs-confirm` so the user can
+   * retry. Returns the upstream status under 502 with details.
+   */
+  app.post('/inbox/:name/confirm/:id', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const existing = await inbox.read(id);
+    if (!existing) return notFound(c, `item "${id}" not in inbox "${name}"`);
+
+    const labels = existing.labels ?? [];
+    if (!labels.includes('needs-confirm')) {
+      return badRequest(
+        c,
+        `item "${id}" is not tagged "needs-confirm" — refusing to auto-click`,
+      );
+    }
+
+    const url = (existing.fields as Record<string, unknown> | undefined)?.confirm_url;
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+      return badRequest(
+        c,
+        `item "${id}" has no fields.confirm_url — cannot auto-click`,
+      );
+    }
+
+    if (c.req.query('dry-run') === 'true') {
+      return c.json({ inbox: name, item: existing, dry_run: true, confirm_url: url });
+    }
+
+    // Follow redirects, 15s ceiling. Provider confirm endpoints are fast;
+    // anything longer almost certainly means upstream is down.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    let status: number;
+    let excerpt: string;
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: { 'user-agent': 'smallstore-confirm/1.0' },
+      });
+      status = res.status;
+      // Read enough to confirm success but don't store the whole page.
+      const text = await res.text();
+      excerpt = text.slice(0, 500);
+      if (status >= 400) {
+        return c.json(
+          {
+            error: 'UpstreamError',
+            message: `confirm URL returned HTTP ${status}`,
+            status,
+            excerpt,
+          },
+          502,
+        );
+      }
+    } catch (err) {
+      return c.json(
+        {
+          error: 'FetchFailed',
+          message: err instanceof Error ? err.message : String(err),
+          url,
+        },
+        502,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const nextLabels = Array.from(
+      new Set([...labels.filter((l) => l !== 'needs-confirm'), 'confirmed']),
+    );
+    const updated = {
+      ...existing,
+      labels: nextLabels,
+      fields: {
+        ...(existing.fields ?? {}),
+        confirmed_at: new Date().toISOString(),
+        confirm_status: status,
+      },
+    };
+    const saved = await inbox._ingest(updated, { force: true });
+    return c.json({
+      inbox: name,
+      item: saved,
+      result: { status, excerpt, confirm_url: url },
+    });
+  });
+
   // --------------------------------------------------------------------------
   // Mailroom rules surface
   //

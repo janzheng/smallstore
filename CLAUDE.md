@@ -13,6 +13,22 @@ curl -sS -H "Authorization: Bearer $SMALLSTORE_TOKEN" "https://smallstore.labspa
 
 Routes behind auth: `/api/*`, `/inbox/*`, `/admin/*`, `/peers/*`. `/health` and `/` are open.
 
+## Mailroom triage — always surface `needs-confirm` first
+
+When asked "what's in the mailroom" / "did anything land" / "check my inbox", **always run a `needs-confirm` sweep before summarizing**. Double-opt-in confirmations get buried and block future newsletter delivery — the user needs to see them as their own line.
+
+```sh
+curl -sS -H "Authorization: Bearer $SMALLSTORE_TOKEN" \
+  -X POST "https://smallstore.labspace.ai/inbox/mailroom/query" \
+  -H "Content-Type: application/json" \
+  -d '{"filter":{"labels":["needs-confirm"]},"limit":50}' \
+  | jq '{pending: (.items | length), items: [.items[] | {id, from: .fields.from_email, subject: .fields.subject, confirm_url: .fields.confirm_url}]}'
+```
+
+If any items come back, surface them as a separate callout (not buried in the general list). Offer to batch-confirm via the endpoint or the `sm_inbox_confirm` MCP tool. Never click confirm URLs silently — each one should be shown before firing so the user stays in the loop.
+
+Single-item confirm click (mutates): `POST /inbox/mailroom/confirm/:id`. Add `?dry-run=true` to preview the URL.
+
 ## MCP tools (`sm_inbox_*`, `sm_peers_*`, `sm_*`)
 
 Registered against prod as of 2026-04-24 — `claude mcp get smallstore` should show `SMALLSTORE_URL=https://smallstore.labspace.ai`. If MCP tool calls return 404, the config has drifted back to localhost; re-register with:

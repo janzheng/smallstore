@@ -115,6 +115,21 @@ export {
   type SenderAliasRule,
 } from './sender-aliases.ts';
 export {
+  applyNewsletterName,
+  createNewsletterNameHook,
+  extractDisplayName,
+  type NewsletterNameOptions,
+  type NewsletterNameResult,
+} from './newsletter-name.ts';
+export {
+  createConfirmDetectHook,
+  detectConfirmation,
+  extractConfirmUrl,
+  isConfirmationSubject,
+  type ConfirmDetectOptions,
+  type ConfirmDetectResult,
+} from './confirm-detect.ts';
+export {
   createRulesStore,
   deriveRuleLabel,
   isTagStyleAction,

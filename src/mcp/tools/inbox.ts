@@ -165,6 +165,20 @@ export const INBOX_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'sm_inbox_confirm',
+    description:
+      'Click a double-opt-in subscription confirmation link for an inbox item. Only works on items already tagged `needs-confirm` (set by the confirm-detect hook at ingest time) with a `fields.confirm_url` present — this prevents the tool from being used as an arbitrary URL fetcher. On success: removes `needs-confirm`, adds `confirmed`, writes `fields.confirmed_at`. On upstream failure: labels unchanged so you can retry. Use `dry_run: true` to see the URL without clicking. To list pending confirmations first, call `sm_inbox_query` with `{ labels: ["needs-confirm"] }`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        id: { type: 'string', description: 'Item id carrying the `needs-confirm` label.' },
+        dry_run: { type: 'boolean', description: 'Return the URL without following it. Default: false.' },
+      },
+      required: ['inbox', 'id'],
+    },
+  },
+  {
     name: 'sm_inbox_rules_list',
     description:
       'List mailroom rules for an inbox with cursor/limit pagination. Returns `{ inbox, rules, next_cursor? }`. Returns 501 if no rules store is wired for this inbox.',
@@ -425,6 +439,15 @@ export async function handleInboxTool(
       const label = typeof args.label === 'string' ? args.label : undefined;
       const r = await http('POST', `/inbox/${encName(inbox)}/restore/${encId(id)}${qs({ label })}`);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_restore failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_confirm': {
+      const inbox = requireString(args, 'inbox');
+      const id = requireString(args, 'id');
+      const dryRun = args.dry_run === true ? 'true' : undefined;
+      const r = await http('POST', `/inbox/${encName(inbox)}/confirm/${encId(id)}${qs({ 'dry-run': dryRun })}`);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_confirm failed', r));
       return r.body;
     }
 
