@@ -1,8 +1,24 @@
 # RSS as mailbox — feed ingestion into smallstore inboxes
 
-**Status:** shaping (not started — fast path is actionable today)
-**From:** 2026-04-25 conversation — user wants bioRxiv RSS feeds funneled into smallstore since the bioRxiv APIs are flaky. Existing valtown infrastructure available for polling.
-**Pairs with:** existing messaging plugin family; extends without modifying
+**Status:** SHIPPED 2026-04-23 — both paths now live. Path B (in-Worker pull-runner) is the active production path; Path A (valtown) remains documented as the fallback / no-Worker-change option and is the hand-off target for `__resources/collections` enrichment work (see `__resources/collections/.brief/smallstore-as-feeder-target.md`).
+**Live at:** `smallstore.labspace.ai`, cron `*/30 * * * *`, bioRxiv neuroscience + bioinformatics ingested into `biorxiv` inbox (60 preprints verified end-to-end 2026-04-23).
+**From:** 2026-04-25 conversation — user wants bioRxiv RSS feeds funneled into smallstore since the bioRxiv APIs are flaky.
+**Pairs with:** existing messaging plugin family; extended without modifying
+
+## What actually shipped (path B — in-Worker)
+
+- `src/messaging/channels/rss.ts` — RSS 2.0 + Atom 1.0 + RSS 1.0 (RDF) parser via `fast-xml-parser` (lazy-loaded). Content-addressed `id = sha256(feed_url + ':' + guid).slice(0, 32)`. Podcast fields (itunes:* + enclosure). Malformed entries skipped silently, whole-feed malformed XML throws. 32 tests. **Parser surface details + real-world quirks live in `.brief/rss-channel.md`.**
+- `src/messaging/pull-runner.ts` — iterates `peerStore.list({ type: 'rss', include_disabled: false })`, fetches each, calls `rssChannel.parseMany`, dispatches per item through the shared `dispatchItem()` pipeline into the inbox named in `metadata.feed_config.target_inbox`. Never throws — per-feed errors captured in the summary. 14 tests.
+- `src/messaging/dispatch.ts` — shared preIngest → classify → postClassify → sinks → postStore pipeline. Refactored out of `email-handler.ts`; both push (email) and pull (rss) now share it. 79 messaging tests green (no regression).
+- `deploy/src/index.ts` — registers rssChannel, boot-registers `biorxiv` + `podcasts` inboxes (each with its own dedicated D1 adapter to keep the `_index` / `items/` keyspaces isolated), wires `scheduled()` handler + manual `POST /admin/rss/poll[/:peer]` triggers.
+- `deploy/wrangler.toml` — `[triggers] crons = ["*/30 * * * *"]`.
+
+Path A (valtown) still works — collections-side enrichment uses the same `POST /inbox/:name/items` ingestion endpoint. No either/or; both paths land on the same inbox.
+
+## Live state (2026-04-23 evening)
+
+- **`biorxiv` inbox** — 60 items from bioRxiv neuroscience + bioinformatics. Both peers currently `disabled: true` (paused; toggle via `PUT /peers/:name` with `{disabled: false}` to resume).
+- **`podcasts` inbox** — 1565 items across 4 active feeds: My First Million (857), Startup Ideas (333), Dumb Money Live (306), How I AI (69). Cross-checked against each feed's `<item>` count — every episode in every feed accounted for. Podcast feeds publish their full history in a single XML doc, so first-poll captured the entire back catalog without needing a "since" watermark.
 
 ## The idea in one line
 

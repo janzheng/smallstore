@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>The Example Podcast</title>
+    <link>https://podcast.example.com/</link>
+    <description>Long-form conversations about software.</description>
+    <language>en-us</language>
+    <itunes:author>Example Media</itunes:author>
+    <itunes:explicit>false</itunes:explicit>
+
+    <item>
+      <title>Ep 42: Durable workflows and agent runtimes</title>
+      <link>https://podcast.example.com/episodes/42</link>
+      <guid isPermaLink="false">episode-42-2026</guid>
+      <pubDate>Tue, 22 Apr 2026 07:00:00 +0000</pubDate>
+      <author>host@podcast.example.com (Podcast Host)</author>
+      <description>We talk durable execution with Alice.</description>
+      <content:encoded><![CDATA[<p>Show notes with <a href="https://example.com">links</a>.</p>]]></content:encoded>
+      <enclosure url="https://cdn.podcast.example.com/ep42.mp3" length="58392104" type="audio/mpeg"/>
+      <itunes:duration>00:58:23</itunes:duration>
+      <itunes:episode>42</itunes:episode>
+      <itunes:season>3</itunes:season>
+      <itunes:explicit>false</itunes:explicit>
+    </item>
+
+    <item>
+      <title>Ep 41: Vector search in small teams</title>
+      <link>https://podcast.example.com/episodes/41</link>
+      <guid isPermaLink="false">episode-41-2026</guid>
+      <pubDate>Tue, 15 Apr 2026 07:00:00 +0000</pubDate>
+      <author>host@podcast.example.com (Podcast Host)</author>
+      <description>How to approach RAG without a big team.</description>
+      <enclosure url="https://cdn.podcast.example.com/ep41.mp3" length="51234567" type="audio/mpeg"/>
+      <itunes:duration>52:10</itunes:duration>
+      <itunes:episode>41</itunes:episode>
+      <itunes:season>3</itunes:season>
+      <itunes:explicit>yes</itunes:explicit>
+    </item>
+  </channel>
+</rss>

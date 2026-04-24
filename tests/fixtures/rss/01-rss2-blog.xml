@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Example Engineering Blog</title>
+    <link>https://blog.example.com/</link>
+    <description>Posts from the Example engineering team</description>
+    <language>en-us</language>
+    <pubDate>Mon, 21 Apr 2026 10:00:00 +0000</pubDate>
+    <atom:link href="https://blog.example.com/feed.xml" rel="self" type="application/rss+xml"/>
+
+    <item>
+      <title>Writing a durable execution layer from scratch</title>
+      <link>https://blog.example.com/2026/04/durable-execution</link>
+      <guid isPermaLink="true">https://blog.example.com/2026/04/durable-execution</guid>
+      <pubDate>Mon, 21 Apr 2026 10:00:00 +0000</pubDate>
+      <author>alice@example.com (Alice Jordan)</author>
+      <category>engineering</category>
+      <category>workflows</category>
+      <description>A quick summary of what we learned.</description>
+      <content:encoded><![CDATA[<p>The full post body goes here, with <strong>HTML</strong> formatting and all the usual things blog posts have. Spans multiple paragraphs in the real thing.</p>]]></content:encoded>
+    </item>
+
+    <item>
+      <title>Type inference for structured logs</title>
+      <link>https://blog.example.com/2026/04/type-inference</link>
+      <guid isPermaLink="false">blog-post-2026-042</guid>
+      <pubDate>Fri, 18 Apr 2026 09:30:00 +0000</pubDate>
+      <dc:creator>Rahul Mehta</dc:creator>
+      <category>typescript</category>
+      <description><![CDATA[Short description with <em>inline html</em>.]]></description>
+    </item>
+
+    <item>
+      <title>Notes on SQLite FTS5 tokenizers</title>
+      <link>https://blog.example.com/2026/04/fts5-tokenizers</link>
+      <guid>blog-post-2026-041</guid>
+      <pubDate>Wed, 16 Apr 2026 14:15:00 +0000</pubDate>
+      <author>sam@example.com (Sam Rivers)</author>
+      <category>sqlite</category>
+      <category>search</category>
+    </item>
+  </channel>
+</rss>

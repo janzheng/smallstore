@@ -4,7 +4,36 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ## Current
 
-*(Clean slate — four sprints shipped over 2026-04-24 / 2026-04-25: mailroom pipeline, curation, peer registry, MCP reorg + tool families. All live at `smallstore.labspace.ai`. Canonical `skills/smallstore/SKILL.md` synced through mcp-hub to `~/.claude/skills/` + `~/.cursor/skills/` + `~/.codex/skills/` + `~/.agents/skills/`. 33 MCP tools across 3 families (core/inbox/peers). 1203/1203 tests green. See `TASKS.done.md` + `.brief/2026-04-*-sprint.md` for full narratives. All remaining work is deferred polish in `## Later` below.)*
+*(Five sprints shipped over 2026-04-23 / 2026-04-24 / 2026-04-25: mailroom pipeline, curation, peer registry, MCP reorg + tool families, in-Worker RSS pull-runner. All live at `smallstore.labspace.ai`. Canonical `skills/smallstore/SKILL.md` synced through mcp-hub to `~/.claude/skills/` + `~/.cursor/skills/` + `~/.codex/skills/` + `~/.agents/skills/`. 33 MCP tools across 3 families (core/inbox/peers). See `TASKS.done.md` + `.brief/2026-04-*-sprint.md` for full narratives.)*
+
+### Mailroom — annotation layer — CODE-COMPLETE 2026-04-26 (awaits deploy)
+
+Two annotation-layer features, built + tested locally. Full detail in `TASKS-MESSAGING.md § Mailroom pipeline — remaining after curation sprint`.
+
+- [*] **Forward-notes capture** — `extractForwardNote()` in `src/messaging/forward-detect.ts` pulls user-typed commentary above the forward delimiter into `fields.forward_note`. Strips trailing `On <date>, <Sender> wrote:` quote headers. 13 new tests cover Gmail/Outlook/Apple Mail separators + CRLF + empty/whitespace edge cases #messaging #mailroom-forward-notes
+- [*] **Sender-name aliases** — new `src/messaging/sender-aliases.ts` — glob-pattern alias map, `createSenderAliasHook` wired into deploy preIngest chain. Prefers `original_from_email` so forwarded mail still tags with the original person. Writes `fields.sender_name` + `sender:<slug>` label. 31 new tests covering parse/glob/slug/apply/hook. Config: `SENDER_ALIASES="jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:Jan"` in `wrangler.toml [vars]` #messaging #mailroom-sender-aliases
+- [ ] Deploy + set `SENDER_ALIASES` var — rebuild dist (`deno task build:npm`), `cd deploy && yarn deploy`. Add the alias map under `[vars]` in `deploy/wrangler.toml` first
+
+### RSS pull-runner — SHIPPED 2026-04-23
+
+In-Worker cron-driven poller for `type: 'rss'` peers. Live at `smallstore.labspace.ai` with `*/30 * * * *` trigger. Two boot-registered RSS inboxes: `biorxiv` + `podcasts`. Re-poll is idempotent (content-addressed ids). See `.brief/rss-channel.md` (parser surface + quirks) and `.brief/rss-as-mailbox.md` (ingestion story).
+
+- 32 rss channel tests, 14 pull-runner tests — all green; 94/94 messaging tests
+- RssChannel supports RSS 2.0, Atom 1.0, **RSS 1.0 (RDF)**
+- Shared `dispatchItem()` helper — email-handler + pull-runner now both use it
+- Boot-registered inboxes: `biorxiv` (preprints), `podcasts` (audio shows). Each has a dedicated D1 table to avoid `_index` / `items/` keyspace collisions
+- Manual trigger endpoints: `POST /admin/rss/poll` (all feeds), `POST /admin/rss/poll/:peer` (one feed)
+
+**Live state (as of 2026-04-23 evening):**
+
+- `biorxiv` inbox — 60 items from bioRxiv neuroscience + bioinformatics. Both peers currently `disabled: true` (paused; no longer polled). Items remain readable
+- `podcasts` inbox — 1565 items across 4 active feeds: Dumb Money Live (306), My First Million (857), Startup Ideas (333), How I AI (69). All four feeds publish their **entire episode history** in one XML doc, so the first poll captured the full back catalog
+
+**Real-world quirks discovered (captured in `.brief/rss-channel.md`):**
+
+- `www.biorxiv.org/rss/*` is behind Cloudflare's managed challenge — use `connect.biorxiv.org/biorxiv_xml.php?subject=...` (serves RDF, not RSS 2.0)
+- `fast-xml-parser`'s default `processEntities.maxTotalExpansions: 1000` blocks busy podcast feeds (anchor.fm + flightcast both tripped). Raised to 1M; still safe against true entity bombs (which need DOCTYPE-defined recursive entities)
+- Podcast feeds publish full history (not paginated), so capacity-plan accordingly: MFM's feed XML was 6MB, Startup Ideas 3.4MB
 
 ## Later
 
@@ -46,7 +75,7 @@ Audit findings from 2026-04-24 surfaced adapter-level sprawl in root `dependenci
 ### Motivating examples parked (not in the sprint; unblocked by discipline doc)
 
 - [?] Obsidian adapter + channel — ~100 LOC adapter (frontmatter-aware local-file); channel is a vault watcher
-- [?] RSS channel — pull-shape; needs the pull runner (queued in TASKS-MESSAGING)
+- [x] [done: RssChannel + pull-runner + boot-registered biorxiv inbox, 60 items ingested end-to-end 2026-04-23] RSS channel — pull-shape
 - [?] Webhook channel — push-shape; the "agentic feeders dump data somewhere" affordance
 - [?] Tigerflare adapter — parked + questioned; tigerflare is being used the OTHER direction today. Re-evaluate when a real consumer appears
 

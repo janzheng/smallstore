@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en-US">
+  <id>tag:github.com,2008:https://github.com/example/project/releases</id>
+  <link type="text/html" rel="alternate" href="https://github.com/example/project/releases"/>
+  <link type="application/atom+xml" rel="self" href="https://github.com/example/project/releases.atom"/>
+  <title>Release notes from project</title>
+  <updated>2026-04-22T12:00:00Z</updated>
+
+  <entry>
+    <id>tag:github.com,2008:Repository/123/v1.4.0</id>
+    <updated>2026-04-22T12:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/example/project/releases/tag/v1.4.0"/>
+    <title>v1.4.0</title>
+    <content type="html">&lt;h3&gt;What's changed&lt;/h3&gt;&lt;p&gt;Bugfixes and new flags.&lt;/p&gt;</content>
+    <author>
+      <name>example-bot</name>
+    </author>
+    <category term="release"/>
+  </entry>
+
+  <entry>
+    <id>tag:github.com,2008:Repository/123/v1.3.2</id>
+    <updated>2026-04-10T09:22:18Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/example/project/releases/tag/v1.3.2"/>
+    <title>v1.3.2</title>
+    <summary>Patch release with a small fix for macOS.</summary>
+    <author>
+      <name>maintainer-one</name>
+      <email>m1@example.com</email>
+    </author>
+    <author>
+      <name>maintainer-two</name>
+    </author>
+    <category term="release" label="Release"/>
+    <category term="patch"/>
+  </entry>
+</feed>

@@ -34,19 +34,24 @@ import {
   createInbox,
   createEmailHandler,
   cloudflareEmailChannel,
+  createSenderAliasHook,
   createSenderIndex,
   createForwardDetectHook,
   createPlusAddrHook,
   createRulesStore,
   createRulesHook,
+  createRssPullRunner,
   parseSelfAddresses,
+  parseSenderAliases,
   registerChannel,
   registerMessagingRoutes,
+  rssChannel,
   InboxRegistry,
   type HookContext,
   type HookVerdict,
   type InboxConfig,
   type InboxItem,
+  type PullRunner,
   type RulesStore,
   type SenderIndex,
 } from '@yawnxyz/smallstore/messaging';
@@ -75,6 +80,18 @@ export interface Env {
    * the hook falls back to header-only detection (X-Forwarded-For etc).
    */
   SELF_ADDRESSES?: string;
+  /**
+   * Comma-separated sender-name aliases — `pattern:name,pattern:name`.
+   * Each entry maps a sender-address glob (`*` wildcard) to a canonical
+   * display name. First-match-wins. The hook writes `fields.sender_name`
+   * and merges a `sender:<slug>` label onto every match.
+   *
+   * Example:
+   *   `jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:Jan`
+   *
+   * Optional — unset disables the hook.
+   */
+  SENDER_ALIASES?: string;
 }
 
 // ============================================================================
@@ -87,6 +104,7 @@ interface AppHandle {
   senderIndexes: Map<string, SenderIndex>;
   rulesStores: Map<string, RulesStore>;
   peerStore: PeerStore;
+  rssRunner: PullRunner;
 }
 
 let appHandle: AppHandle | null = null;
@@ -115,6 +133,7 @@ function buildApp(env: Env): AppHandle {
   // `keyPrefix` option lands on Inbox, register one adapter per inbox here.
   // See `.brief/rss-as-mailbox.md` § correction.
   const biorxivD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'biorxiv_items' });
+  const podcastsD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'podcasts_items' });
 
   // Smallstore — D1 as default (objects), R2 mounted at blobs/*
   const smallstore = createSmallstore({
@@ -143,8 +162,12 @@ function buildApp(env: Env): AppHandle {
     return next();
   };
 
-  // Channel registration (idempotent across isolates — already-registered throws is caught)
+  // Channel registration (idempotent across isolates — already-registered throws is caught).
+  // cf-email is the push channel; rss is the pull channel used by the scheduled()
+  // handler to iterate `type: 'rss'` peers and dispatch parsed items into the
+  // inbox named in each peer's `metadata.feed_config.target_inbox`.
   try { registerChannel(cloudflareEmailChannel); } catch { /* noop */ }
+  try { registerChannel(rssChannel); } catch { /* noop */ }
 
   // Messaging registry — boot-time inbox: mailroom (cf-email + d1 items + r2 blobs)
   const registry = new InboxRegistry();
@@ -156,6 +179,7 @@ function buildApp(env: Env): AppHandle {
     mailroom_d1: d1,
     mailroom_r2: r2,
     biorxiv_d1: biorxivD1,  // dedicated table to avoid index collision with mailroom
+    podcasts_d1: podcastsD1,  // same rationale — podcast feeds land here
     memory,
   };
 
@@ -200,19 +224,26 @@ function buildApp(env: Env): AppHandle {
   // preIngest order matters:
   //   1. forward-detect — detects mail the user forwarded from Gmail (via
   //      SELF_ADDRESSES match or X-Forwarded-* headers), tags 'forwarded' +
-  //      'manual', extracts original_from_* into fields. Runs first so plus-
-  //      addressing intent (next) can OVERRIDE the 'manual' label when the
-  //      user explicitly typed mailroom+bookmark@...
-  //   2. plus-addr — reads inbox_addr for +intent suffix, tags accordingly.
+  //      'manual', extracts original_from_* + forward_note into fields.
+  //      Runs first so plus-addressing intent (next) can OVERRIDE the
+  //      'manual' label when the user explicitly typed mailroom+bookmark@...
+  //      — and so sender-aliases can key off `original_from_email`.
+  //   2. sender-aliases — maps a sender-address glob (including the
+  //      extracted original sender on forwards) to a canonical display name,
+  //      writes `fields.sender_name` and a `sender:<slug>` label. Non-
+  //      destructive — existing from_email filters keep working.
+  //   3. plus-addr — reads inbox_addr for +intent suffix, tags accordingly.
   //      Explicit intent wins over auto-detection.
-  //   3. rules — evaluates user-configured archive/bookmark/tag/drop/quarantine
+  //   4. rules — evaluates user-configured archive/bookmark/tag/drop/quarantine
   //      rules against the (possibly-already-mutated) item. Tag-style rules
   //      stack; terminal rules (drop/quarantine) short-circuit.
   //
   // postClassify hooks run AFTER the built-in classifier emits its labels,
   // so sender-index upsert sees canonical tags.
   const selfAddresses = parseSelfAddresses(env.SELF_ADDRESSES);
+  const senderAliases = parseSenderAliases(env.SENDER_ALIASES);
   const forwardDetectHook = createForwardDetectHook({ selfAddresses });
+  const senderAliasHook = createSenderAliasHook({ aliases: senderAliases });
   const plusAddrHook = createPlusAddrHook({ baseLocal: 'mailroom' });
   const rulesHook = createRulesHook({ rulesStore: mailroomRulesStore });
 
@@ -229,12 +260,44 @@ function buildApp(env: Env): AppHandle {
   registry.registerSinks('mailroom', {
     inbox: mailroom,
     hooks: {
-      preIngest: [forwardDetectHook, plusAddrHook, rulesHook],
+      preIngest: [forwardDetectHook, senderAliasHook, plusAddrHook, rulesHook],
       postClassify: [senderUpsertHook],
     },
     config: mailroomConfig,
     origin: 'boot',
   });
+
+  // Boot-time RSS inbox: biorxiv. Has its own D1 table (`biorxiv_items`)
+  // because the Inbox class uses hardcoded `_index` + `items/` keys that
+  // would collide if it shared an adapter with mailroom. The pull-runner
+  // dispatches every `metadata.feed_config.target_inbox: 'biorxiv'` peer
+  // here on the cron tick. Promoted from runtime → boot so it survives
+  // Worker isolate restarts.
+  const biorxivConfig: InboxConfig = {
+    channel: 'rss',
+    storage: 'biorxiv_d1',
+  };
+  const biorxivInbox = createInbox({
+    name: 'biorxiv',
+    channel: 'rss',
+    storage: { items: biorxivD1 },
+  });
+  registry.register('biorxiv', biorxivInbox, biorxivConfig, 'boot');
+
+  // Boot-time RSS inbox: podcasts. Same shape as biorxiv — dedicated D1
+  // table (`podcasts_items`) to keep the `_index` + `items/` keyspace
+  // isolated. Every `metadata.feed_config.target_inbox: 'podcasts'`
+  // peer dispatches here.
+  const podcastsConfig: InboxConfig = {
+    channel: 'rss',
+    storage: 'podcasts_d1',
+  };
+  const podcastsInbox = createInbox({
+    name: 'podcasts',
+    channel: 'rss',
+    storage: { items: podcastsD1 },
+  });
+  registry.register('podcasts', podcastsInbox, podcastsConfig, 'boot');
 
   // Hono app
   const app = new Hono();
@@ -283,6 +346,36 @@ function buildApp(env: Env): AppHandle {
     env: env as unknown as Record<string, string | undefined>,
   });
 
+  // RSS pull-runner — the in-Worker feed poller. Iterates every peer with
+  // type='rss', fetches the feed, and dispatches parsed items through the
+  // inbox named in metadata.feed_config.target_inbox. Invoked by the
+  // scheduled() handler on the cron in wrangler.toml; also exposed at
+  // POST /admin/rss/poll[/:peer] for manual triggering.
+  const rssRunner = createRssPullRunner({
+    peerStore,
+    registry,
+    env: env as unknown as Record<string, string | undefined>,
+    log: (msg, extra) => console.log(`[rss-runner] ${msg}`, JSON.stringify(extra ?? {})),
+  });
+
+  // Manual triggers — handy for debugging without waiting for cron, and for
+  // ad-hoc "pull this one feed right now" flows (Shortcuts, MCP clients, etc).
+  app.post('/admin/rss/poll', requireAuth, async (c) => {
+    const summary = await rssRunner.pollAll();
+    return c.json(summary);
+  });
+  app.post('/admin/rss/poll/:peer', requireAuth, async (c) => {
+    const name = c.req.param('peer') ?? '';
+    if (!name) {
+      return c.json({ error: 'Bad Request', message: 'peer name required' }, 400);
+    }
+    const result = await rssRunner.pollOne(name);
+    if (!result) {
+      return c.json({ error: 'Not Found', message: `no rss peer named "${name}"` }, 404);
+    }
+    return c.json(result);
+  });
+
   // Universal CRUD surface at /api/*
   createHonoRoutes(app, smallstore, '/api');
 
@@ -295,7 +388,7 @@ function buildApp(env: Env): AppHandle {
     log: (msg, extra) => console.log(`[email] ${msg}`, JSON.stringify(extra ?? {})),
   });
 
-  return { app, email, senderIndexes, rulesStores, peerStore };
+  return { app, email, senderIndexes, rulesStores, peerStore, rssRunner };
 }
 
 function ensureApp(env: Env): AppHandle {
@@ -316,5 +409,31 @@ export default {
   async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
     const { email } = ensureApp(env);
     return email(message as any, env, ctx);
+  },
+
+  /**
+   * CF cron trigger. Fires on the schedule declared in wrangler.toml
+   * (`*\/30 * * * *` at time of writing). Iterates every `type: 'rss'` peer,
+   * fetches the feed, and dispatches parsed items into the inbox named in
+   * each peer's `metadata.feed_config.target_inbox`. Non-throwing — the
+   * runner captures per-feed errors in its summary, which we just log.
+   *
+   * `ctx.waitUntil` would allow long-running polls past the immediate
+   * completion window but cron invocations get their own CPU budget; we
+   * await directly for simpler error reporting.
+   */
+  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    const { rssRunner } = ensureApp(env);
+    const summary = await rssRunner.pollAll();
+    console.log('[scheduled] rss run complete', JSON.stringify({
+      cron: event.cron,
+      scheduled_time: new Date(event.scheduledTime).toISOString(),
+      feeds_seen: summary.feeds_seen,
+      feeds_polled: summary.feeds_polled,
+      feeds_errored: summary.feeds_errored,
+      items_stored: summary.items_stored,
+      items_dropped: summary.items_dropped,
+      duration_ms: summary.duration_ms,
+    }));
   },
 };

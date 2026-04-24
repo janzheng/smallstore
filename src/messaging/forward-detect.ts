@@ -67,6 +67,13 @@ export interface ForwardDetectResult {
   original_from_addr?: string;
   /** Best-effort original subject with leading Re:/Fwd: prefixes stripped. */
   original_subject?: string;
+  /**
+   * User-typed commentary above the forwarded block. Captured when a
+   * forward separator is present and the text above it is non-empty
+   * after trimming. Populated on forwards only. Absent when there's no
+   * separator or nothing was typed. See `.brief/mailroom-curation.md`.
+   */
+  forward_note?: string;
 }
 
 const DEFAULT_LABELS = ['forwarded', 'manual'];
@@ -183,12 +190,26 @@ export function detectForward(
     // Extraction is best-effort — never let a parse failure block tagging.
   }
 
+  // Forward-note extraction: whatever the user typed above the forwarded
+  // block. Only meaningful when there's a separator to split on; without one
+  // we can't distinguish commentary from the forwarded body itself.
+  let forward_note: string | undefined;
+  if (body) {
+    try {
+      const note = extractForwardNote(body);
+      if (note) forward_note = note;
+    } catch {
+      // never let note extraction block the verdict
+    }
+  }
+
   return {
     isForwarded: true,
     labels: labelsToApply,
     original_from_email,
     original_from_addr,
     original_subject,
+    forward_note,
   };
 }
 
@@ -228,6 +249,9 @@ export function createForwardDetectHook(opts: ForwardDetectOptions): PreIngestHo
     }
     if (result.original_subject !== undefined) {
       nextFields.original_subject = result.original_subject;
+    }
+    if (result.forward_note !== undefined) {
+      nextFields.forward_note = result.forward_note;
     }
 
     const nextItem: InboxItem = {
@@ -313,6 +337,57 @@ function hasForwardSeparator(body: string): boolean {
 }
 
 /**
+ * Find the earliest forward-separator match index (start of the separator
+ * text, NOT the end). Returns -1 if none present. Exported so the note
+ * extractor and the parser can share the same anchor.
+ */
+function findEarliestSeparatorStart(body: string): number {
+  let best = -1;
+  for (const re of FORWARD_SEPARATOR_PATTERNS) {
+    const m = re.exec(body);
+    if (m && m.index !== undefined) {
+      if (best === -1 || m.index < best) best = m.index;
+    }
+  }
+  return best;
+}
+
+/**
+ * Extract the user-typed note above the forwarded block.
+ *
+ * Anchors on the earliest forward-separator match. If no separator is
+ * present we return `undefined` — without the anchor, there's no reliable
+ * way to tell commentary from the forwarded body itself, and the
+ * `forward_note` contract is specifically "text the user typed above the
+ * forward marker."
+ *
+ * After slicing off the tail, common client quirks are cleaned up:
+ *   - Gmail's "On <date>, <Sender> wrote:" line that clients prepend
+ *     sometimes appears ABOVE the "--- Forwarded message ---" banner.
+ *     That's metadata, not commentary — drop it.
+ *   - Trailing blank lines and leading blank lines are trimmed.
+ *
+ * Returns `undefined` when the resulting note is empty after cleanup.
+ */
+export function extractForwardNote(body: string): string | undefined {
+  if (!body) return undefined;
+  const sepStart = findEarliestSeparatorStart(body);
+  if (sepStart <= 0) return undefined;
+
+  let head = body.slice(0, sepStart);
+
+  // Strip a trailing "On <date>, <Sender> wrote:" line — mail clients
+  // insert this as the quote header for the forwarded block. It's not
+  // something the user typed. Multiline tolerant since the date portion
+  // can wrap.
+  head = head.replace(/\n?\s*On\s[^\n]{0,160}?\s+wrote:\s*$/i, '');
+
+  // Collapse runs of blank lines and trim whitespace at both ends.
+  const trimmed = head.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
  * Parse a forwarded body for From:/Subject: lines following a recognized
  * separator. Returns partial results on best-effort basis. Never throws.
  */
@@ -324,20 +399,20 @@ export interface ParsedForwardBody {
 function parseForwardedBody(body: string): ParsedForwardBody | null {
   if (!body) return null;
 
-  // Find the earliest separator occurrence.
-  let sepIndex = -1;
-  for (const re of FORWARD_SEPARATOR_PATTERNS) {
-    const m = re.exec(body);
-    if (m && m.index !== undefined) {
-      const idx = m.index + m[0].length;
-      if (sepIndex === -1 || idx < sepIndex) sepIndex = idx;
+  // Find the earliest separator occurrence and skip past it to begin scanning
+  // for pseudo-headers (From:/Subject:). If no separator is found, scan from
+  // the top — some forwards (as-attachment, minimal clients) skip the banner.
+  const sepStart = findEarliestSeparatorStart(body);
+  let scanStart = 0;
+  if (sepStart !== -1) {
+    for (const re of FORWARD_SEPARATOR_PATTERNS) {
+      const m = re.exec(body);
+      if (m && m.index === sepStart) {
+        scanStart = sepStart + m[0].length;
+        break;
+      }
     }
   }
-
-  // If no separator found, still try to parse the first N lines looking
-  // for "From:" / "Subject:" headers — some forwards (forwarded-as-attachment
-  // or minimal clients) skip the decorative separator.
-  const scanStart = sepIndex === -1 ? 0 : sepIndex;
 
   // Only look at the first ~40 lines after the separator — forwards always
   // put the pseudo-headers near the top. Prevents false positives from a

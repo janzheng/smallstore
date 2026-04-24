@@ -99,6 +99,7 @@
   "imports": {
     "hono": "npm:hono@^4.10.3",
     "postal-mime": "npm:postal-mime@^2.4.4",
+    "fast-xml-parser": "npm:fast-xml-parser@^4.5.0",
     "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@^1.29.0",
     "@modelcontextprotocol/sdk/": "npm:/@modelcontextprotocol/sdk@^1.29.0/",
     "@notionhq/client": "npm:@notionhq/client@^5.16.0",

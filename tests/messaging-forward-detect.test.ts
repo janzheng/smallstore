@@ -10,6 +10,7 @@ import { assert, assertEquals, assertExists } from 'jsr:@std/assert';
 import {
   createForwardDetectHook,
   detectForward,
+  extractForwardNote,
   parseSelfAddresses,
 } from '../src/messaging/forward-detect.ts';
 import type { HookContext, InboxItem } from '../src/messaging/types.ts';
@@ -352,6 +353,150 @@ Deno.test('createForwardDetectHook — does not duplicate labels already present
   const verdict = await hook(item, CTX);
   if (typeof verdict === 'string') throw new Error('expected item verdict');
   assertEquals(verdict.labels, ['forwarded', 'keep', 'manual']);
+});
+
+// ============================================================================
+// Forward-note extraction
+// ============================================================================
+
+Deno.test('extractForwardNote — captures typed commentary above Gmail separator', () => {
+  const body = [
+    'Thought you\'d want to see this — the preprint looks relevant.',
+    '',
+    '---------- Forwarded message ----------',
+    'From: Jane Doe <jane@example.com>',
+    'Subject: bioRxiv preprint',
+    '',
+    'Original body.',
+  ].join('\n');
+  const note = extractForwardNote(body);
+  assertEquals(note, 'Thought you\'d want to see this — the preprint looks relevant.');
+});
+
+Deno.test('extractForwardNote — multi-paragraph note preserved (runs of blank lines collapsed)', () => {
+  const body = [
+    'First thought.',
+    '',
+    '',
+    '',
+    'Second thought.',
+    '',
+    '-----Original Message-----',
+    'From: x@y.com',
+  ].join('\n');
+  const note = extractForwardNote(body);
+  assertEquals(note, 'First thought.\n\nSecond thought.');
+});
+
+Deno.test('extractForwardNote — strips trailing "On <date>, <Sender> wrote:" quote header', () => {
+  const body = [
+    'Take a look at this.',
+    '',
+    'On Mon, Apr 22, 2026 at 10:00 AM, Jane <jane@example.com> wrote:',
+    'Begin forwarded message:',
+    'From: Jane <jane@example.com>',
+    'Subject: Topic',
+  ].join('\n');
+  const note = extractForwardNote(body);
+  assertEquals(note, 'Take a look at this.');
+});
+
+Deno.test('extractForwardNote — Apple Mail "Begin forwarded message:" anchor', () => {
+  const body = [
+    'FYI',
+    '',
+    'Begin forwarded message:',
+    '',
+    'From: dave@apple-sender.test',
+  ].join('\n');
+  assertEquals(extractForwardNote(body), 'FYI');
+});
+
+Deno.test('extractForwardNote — no separator → undefined (cannot anchor)', () => {
+  const body = 'Just a message with no forward marker at all.';
+  assertEquals(extractForwardNote(body), undefined);
+});
+
+Deno.test('extractForwardNote — empty text above separator → undefined', () => {
+  const body = '\n\n---------- Forwarded message ----------\nFrom: x@y.com';
+  assertEquals(extractForwardNote(body), undefined);
+});
+
+Deno.test('extractForwardNote — whitespace-only above separator → undefined', () => {
+  const body = '   \n\t\n  ---------- Forwarded message ----------';
+  assertEquals(extractForwardNote(body), undefined);
+});
+
+Deno.test('extractForwardNote — CRLF line endings normalized', () => {
+  const body = 'Hi Jan\r\n\r\n---------- Forwarded message ----------\r\nFrom: x@y.com';
+  assertEquals(extractForwardNote(body), 'Hi Jan');
+});
+
+Deno.test('extractForwardNote — empty body → undefined', () => {
+  assertEquals(extractForwardNote(''), undefined);
+});
+
+// ============================================================================
+// detectForward + hook: forward_note plumbing
+// ============================================================================
+
+Deno.test('detectForward — populates forward_note when commentary present', () => {
+  const body = [
+    'Heads up — this bug bit us last quarter.',
+    '',
+    '---------- Forwarded message ----------',
+    'From: Ops <ops@example.com>',
+    'Subject: Postmortem',
+    '',
+    'Body of postmortem.',
+  ].join('\n');
+  const item = makeItem({}, {
+    from_email: 'me@example.com',
+    subject: 'Fwd: Postmortem',
+  }, body);
+  const r = detectForward(item, { selfAddresses: SELF });
+  assertEquals(r.isForwarded, true);
+  assertEquals(r.forward_note, 'Heads up — this bug bit us last quarter.');
+});
+
+Deno.test('detectForward — forward_note absent when there is no separator', () => {
+  const item = makeItem({}, {
+    from_email: 'me@example.com',
+    subject: 'Fwd: bare forward',
+  }, 'Just sharing without any separator.');
+  const r = detectForward(item, { selfAddresses: SELF });
+  assertEquals(r.isForwarded, true);
+  assertEquals(r.forward_note, undefined);
+});
+
+Deno.test('createForwardDetectHook — writes fields.forward_note when present', async () => {
+  const hook = createForwardDetectHook({ selfAddresses: SELF });
+  const body = [
+    'Jessica sent this — worth reading.',
+    '',
+    '---------- Forwarded message ----------',
+    'From: Jessica <jessica.c.sacher@example.com>',
+    'Subject: Phage digest',
+  ].join('\n');
+  const item = makeItem({}, {
+    from_email: 'me@example.com',
+    subject: 'Fwd: Phage digest',
+  }, body);
+  const verdict = await hook(item, CTX);
+  if (typeof verdict === 'string') throw new Error('expected item verdict');
+  assertEquals(verdict.fields.forward_note, 'Jessica sent this — worth reading.');
+});
+
+Deno.test('createForwardDetectHook — no forward_note written when empty above separator', async () => {
+  const hook = createForwardDetectHook({ selfAddresses: SELF });
+  const body = '---------- Forwarded message ----------\nFrom: x@y.com';
+  const item = makeItem({}, {
+    from_email: 'me@example.com',
+    subject: 'Fwd: bare',
+  }, body);
+  const verdict = await hook(item, CTX);
+  if (typeof verdict === 'string') throw new Error('expected item verdict');
+  assertEquals(verdict.fields.forward_note, undefined);
 });
 
 // ============================================================================

@@ -56,7 +56,16 @@ export { classify, classifyAndMerge } from './classifier.ts';
 export { inboxSink, httpSink, functionSink, type HttpSinkOptions } from './sinks.ts';
 export { registerMessagingRoutes, type RegisterMessagingRoutesOptions, type RequireAuth } from './http-routes.ts';
 export { CloudflareEmailChannel, cloudflareEmailChannel, type EmailInput } from './channels/cf-email.ts';
+export { RssChannel, rssChannel, type RssInput, type RssConfig } from './channels/rss.ts';
 export { createEmailHandler, type CreateEmailHandlerOptions, type ForwardableEmailMessage } from './email-handler.ts';
+export { dispatchItem, type DispatchOptions, type DispatchResult } from './dispatch.ts';
+export {
+  createRssPullRunner,
+  type CreatePullRunnerOptions,
+  type FeedResult,
+  type PullRunner,
+  type PullRunSummary,
+} from './pull-runner.ts';
 export {
   createSenderIndex,
   parseListUnsubscribe,
@@ -83,6 +92,7 @@ export {
 export {
   createForwardDetectHook,
   detectForward,
+  extractForwardNote,
   parseSelfAddresses,
   type ForwardDetectOptions,
   type ForwardDetectResult,
@@ -94,6 +104,16 @@ export {
   type PlusAddressingOptions,
   type PlusAddressingResult,
 } from './plus-addr.ts';
+export {
+  applySenderAlias,
+  createSenderAliasHook,
+  matchSenderAlias,
+  parseSenderAliases,
+  slugifySenderName,
+  type SenderAliasesOptions,
+  type SenderAliasResult,
+  type SenderAliasRule,
+} from './sender-aliases.ts';
 export {
   createRulesStore,
   deriveRuleLabel,

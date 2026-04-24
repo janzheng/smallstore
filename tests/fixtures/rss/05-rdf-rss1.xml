@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rdf:RDF xmlns:admin="http://webns.net/mvcb/" xmlns="http://purl.org/rss/1.0/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:prism="http://purl.org/rss/1.0/modules/prism/" xmlns:taxo="http://purl.org/rss/1.0/modules/taxonomy/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:syn="http://purl.org/rss/1.0/modules/syndication/">
+<channel rdf:about="https://biorxiv.org">
+<admin:errorReportsTo rdf:resource="mailto:biorxiv@cshlpress.edu"/>
+<title>bioRxiv Subject Collection: Neuroscience</title>
+<link>https://biorxiv.org</link>
+<description>
+This feed contains articles for bioRxiv Subject Collection "Neuroscience"
+</description>
+
+<items>
+<rdf:Seq>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.719818v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720230v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720279v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.719933v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720107v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.23.720306v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720243v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.23.720330v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720120v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.719805v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.719944v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.720009v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.716817v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.719824v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.719582v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720282v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.23.720320v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.719789v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.20.719688v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.718685v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.719935v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720260v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720093v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720126v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720180v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720220v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.22.720048v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.719669v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.21.719938v1?rss=1"/>
+<rdf:li rdf:resource="https://www.biorxiv.org/content/10.64898/2026.04.20.719573v1?rss=1"/>
+</rdf:Seq>
+</items>
+<prism:eIssn/>
+<prism:publicationName>bioRxiv</prism:publicationName>
+<prism:issn/>
+
+<image rdf:resource=""/>
+</channel>
+<image rdf:about="">
+<title>bioRxiv</title>
+<url>https://www.biorxiv.org/sites/default/files/bioRxiv_article.jpg</url>
+<link>https://www.biorxiv.org</link>
+</image>
+<item rdf:about="https://www.biorxiv.org/content/10.64898/2026.04.21.719818v1?rss=1">
+<title>
+<![CDATA[
+Pupil and Neural Dynamics Reveal Belief-Dependent Decision Making Under Ambiguity 
+]]>
+</title>
+<link>
+https://www.biorxiv.org/content/10.64898/2026.04.21.719818v1?rss=1
+</link>
+<description><![CDATA[
+Humans make thousands of decisions under ambiguity every day, where most times the probabilities of getting beneficial outcomes are not fully known. Although ambiguity aversion is well characterized at the aggregate level, it remains unclear how individuals internally represent ambiguous outcomes and how these representations shape behavior and physiology. To address these questions, we investigate value-based decision-making under risk and ambiguity using a multimodal approach that combines behavioral, pupillometric, and electroencephalographic (EEG) data. We show that individuals adopt distinct decision strategies that reflect different internal beliefs about unknown outcomes. These belief differences are expressed not only in choice but also in pupil-linked arousal during decision formation. Crucially, physiological differences across strategies persist under an objective valuation rule for ambiguous options but disappear when valuation is computed using each individuals subjective beliefs, indicating that arousal tracks subjective belief rather than objective task structure. Together, our findings show that ambiguity aversion is not a uniform bias but reflects heterogeneous internal belief models, and that multimodal physiology provides a window into the mechanisms through which these beliefs guide value-based choice.
+]]></description>
+<dc:creator><![CDATA[ Qin, Y., Rungratsameetaweemana, N., Lauharatanahirun, N., Sajda, P. ]]></dc:creator>
+<dc:date>2026-04-23</dc:date>
+<dc:identifier>doi:10.64898/2026.04.21.719818</dc:identifier>
+<dc:title><![CDATA[Pupil and Neural Dynamics Reveal Belief-Dependent Decision Making Under Ambiguity]]></dc:title>
+<dc:publisher>Cold Spring Harbor Laboratory</dc:publisher>
+<prism:publicationDate>2026-04-23</prism:publicationDate>
+<prism:section></prism:section>
+</item>
+<item rdf:about="https://www.biorxiv.org/content/10.64898/2026.04.22.720230v1?rss=1">
+<title>
+<![CDATA[
+Multiscale regulation of experience-dependent plasticity by a Pannexin1 homolog in a developing vertebrate brain 
+]]>
+</title>
+<link>
+https://www.biorxiv.org/content/10.64898/2026.04.22.720230v1?rss=1
+</link>
+<description><![CDATA[
+Experience-dependent plasticity enables the developing brain to adapt to repeated sensory input while maintaining stability. However, how such plasticity is coordinated across behavior, transcription, and network dynamics remains unclear. Here, using larval zebrafish, we identify the pannexin channel homolog, Panx1a as a regulator of multiscale adaptations during visual habituation. Panx1a loss selectively impairs long-term habituation without affecting baseline sensorimotor responses. This behavioral deficit is accompanied by disrupted activity-dependent transcription across distributed brain regions and altered excitation-inhibition balance. At the network level, Panx1a deficiency attenuates experience-dependent modulation of gamma activity, cross-frequency coupling, and inter-regional coherence. We further show that sharp wave-ripple-like events are present in vivo at an early developmental stage and exhibit selective refinement of their sharp-wave component following experience, while ripple features remain largely unchanged. This refinement is reduced in panx1a mutants, indicating a role for Panx1a in shaping network dynamics rather than event generation. Together, these findings identify Panx1a as a mediator linking extracellular signaling to coordinated behavioral, molecular, and circuit-level plasticity during early brain development.
+]]></description>
+<dc:creator><![CDATA[ Nakhuda, F., Zoidl, G. S. O., Bahl, A., Zoidl, G. R. ]]></dc:creator>
+<dc:date>2026-04-23</dc:date>
+<dc:identifier>doi:10.64898/2026.04.22.720230</dc:identifier>
+<dc:title><![CDATA[Multiscale regulation of experience-dependent plasticity by a Pannexin1 homolog in a developing vertebrate brain]]></dc:title>
+<dc:publisher>Cold Spring Harbor Laboratory</dc:publisher>
+<prism:publicationDate>2026-04-23</prism:publicationDate>
+<prism:section></prism:section>
+</item>
+<item rdf:about="https://www.biorxiv.org/content/10.64898/2026.04.22.720279v1?rss=1">
+<title>
+<![CDATA[
+Food preference is associated with distinct large-scale cortical functional connectivity patterns during food-image observation 
+]]>
+</title>
+<link>
+https://www.biorxiv.org/content/10.64898/2026.04.22.720279v1?rss=1
+</link>
+<description><![CDATA[
+Food preference influences behavior toward food-related stimuli, yet the large-scale neural mechanisms underlying this process remain unclear. This study investigated whether preferred and nonpreferred food cues are associated with distinct patterns of cortical functional connectivity during the observation of food images. Data from 25 of the 40 recruited healthy adults were included in the final analysis after excluding individuals with highly unbalanced response tendencies. Participants viewed 150 food images and rated each image on a four-point preference scale. Trials were classified as favorite food (FF) or disliked food (DF). High-density electroencephalography (EEG) was recorded during the task, and source-level ROI-to-ROI functional connectivity was analyzed using amplitude envelope correlation in the alpha (8-13 Hz) and beta (13-25 Hz) frequency bands over the 1000-ms period after food-picture onset. Response time did not differ significantly between FF and DF trials. However, distinct functional connectivity patterns were observed between conditions in both frequency bands. In the alpha band, FF trials involved a network including the cuneus, parietal regions, cingulate regions, and lateral occipital cortex, whereas DF trials involved the isthmus cingulate, caudal middle frontal gyrus, inferior temporal cortex, superior parietal lobule, and lateral occipital cortex. In the beta band, FF trials involved the isthmus cingulate, precuneus, parietal regions, and pericalcarine cortex, whereas DF trials additionally involved frontal regions, including the superior frontal gyrus and pars triangularis. These findings indicate that food preference is associated with distinct large-scale cortical functional connectivity patterns during food image observation, suggesting differential neural processing of preferred and nonpreferred food cues.
+]]></description>
+<dc:creator><![CDATA[ Sugata, H., Kim, S., Ikeda, T., Hara, M. ]]></dc:creator>
+<dc:date>2026-04-23</dc:date>
+<dc:identifier>doi:10.64898/2026.04.22.720279</dc:identifier>
+<dc:title><![CDATA[Food preference is associated with distinct large-scale cortical functional connectivity patterns during food-image observation]]></dc:title>
+<dc:publisher>Cold Spring Harbor Laboratory</dc:publisher>
+<prism:publicationDate>2026-04-23</prism:publicationDate>
+<prism:section></prism:section>
+</item>
+</rdf:RDF>

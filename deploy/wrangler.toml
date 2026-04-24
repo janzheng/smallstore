@@ -17,6 +17,14 @@ account_id = "cceae190abc777c64fb8d7a98be577a3"
 # included here so their forwards also trigger detection.
 SELF_ADDRESSES = "hello@janzheng.com,jan@phage.directory,janeazy@gmail.com,jessica.c.sacher@gmail.com"
 
+# Sender-name aliases — `pattern:name,pattern:name`. Each pattern is a glob
+# (`*` wildcard) matched case-insensitively against the sender address
+# (`original_from_email` on forwards, `from_email` otherwise). First match
+# wins. The hook writes `fields.sender_name` + a `sender:<slug>` label, so
+# `labels: ['sender:jessica']` queries collapse all of a person's address
+# variants under one handle. Unset → hook disabled.
+SENDER_ALIASES = "jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:Jan,janeazy@*:Jan,hello@janzheng.com:Jan"
+
 # Worker owns smallstore.labspace.ai. The DNS record must exist in the
 # labspace.ai zone (orange-cloud / Proxied) before the first deploy — its
 # CNAME target is a fallback only; when the Worker is active, requests are
@@ -52,6 +60,23 @@ bucket_name = "mailroom"
 # When set, all /api, /inbox, /admin routes require:
 #   Authorization: Bearer <SMALLSTORE_TOKEN>
 # Unset → routes are open (NOT recommended for the deployed Worker).
+
+# ============================================================================
+# Cron triggers — RSS pull-runner
+# ============================================================================
+#
+# Fires the Worker's `scheduled()` handler which iterates every peer
+# registered with `type: 'rss'`, fetches the feed, and dispatches parsed
+# items into the target inbox named in `metadata.feed_config.target_inbox`.
+# See `src/messaging/pull-runner.ts`.
+#
+# Every 30 minutes — a middle ground between "most publishers hate being
+# polled more than hourly" and "I want to see biorxiv preprints promptly".
+# Adjust per-feed rate limiting when we have it; for now this is the whole
+# fleet's cadence.
+
+[triggers]
+crons = ["*/30 * * * *"]
 
 [observability]
 enabled = true

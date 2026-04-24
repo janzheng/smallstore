@@ -102,7 +102,18 @@ Add to `wrangler.toml` under `[vars]`:
 SELF_ADDRESSES = "you@gmail.com,trusted-curator@gmail.com"
 ```
 
-Comma-separated addresses the forward-detection hook treats as "user / trusted forwarder." When mail from these addresses hits `mailroom@labspace.ai`, it gets tagged `forwarded` + `manual` and the original sender is extracted from the forwarded body. Omit for header-only forward detection.
+Comma-separated addresses the forward-detection hook treats as "user / trusted forwarder." When mail from these addresses hits `mailroom@labspace.ai`, it gets tagged `forwarded` + `manual` and the original sender (plus any typed commentary above the forward delimiter — captured as `fields.forward_note`) is extracted from the forwarded body. Omit for header-only forward detection.
+
+**Optional — sender-name aliases (for `sender:<name>` filtering):**
+
+Add to `wrangler.toml` under `[vars]`:
+
+```toml
+[vars]
+SENDER_ALIASES = "jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:Jan"
+```
+
+Comma-separated `pattern:name` entries. Each pattern is a glob (supports `*`) matched case-insensitively against the sender address (`original_from_email` when the mail was forwarded; otherwise `from_email`). First match wins. The hook writes `fields.sender_name = "Jessica"` and merges a `sender:jessica` label onto every hit, so `labels: ['sender:jessica']` queries collapse multiple address variants under one person. Omit to disable.
 
 **Optional — peer-auth secrets (per peer registered):**
 

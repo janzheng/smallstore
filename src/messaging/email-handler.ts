@@ -29,27 +29,8 @@
  */
 
 import type { InboxRegistry } from './registry.ts';
-import type {
-  HookContext,
-  HookVerdict,
-  InboxItem,
-  PostClassifyHook,
-  PostStoreHook,
-  PreIngestHook,
-  SinkContext,
-  SinkResult,
-} from './types.ts';
+import { dispatchItem } from './dispatch.ts';
 import { CloudflareEmailChannel } from './channels/cf-email.ts';
-import { classifyAndMerge } from './classifier.ts';
-
-/**
- * What a preIngest / postClassify hook returned, in pipeline terms.
- * Used internally by the dispatcher to decide next action.
- */
-type HookOutcome =
-  | { action: 'continue'; item: InboxItem }
-  | { action: 'drop'; reason?: string }
-  | { action: 'quarantine'; item: InboxItem };
 
 /**
  * The fields of CF's `ForwardableEmailMessage` we actually use.
@@ -125,167 +106,27 @@ export function createEmailHandler(opts: CreateEmailHandlerOptions) {
       return;
     }
 
-    // Per-registration pipeline: preIngest hooks → classify → postClassify
-    // hooks → sink fan-out → postStore hooks. Each stage can mutate, drop,
-    // or quarantine the item independently per registration.
+    // Per-registration pipeline — delegated to the shared dispatcher so the
+    // pull-runner (RSS) uses the same five-stage flow (preIngest → classify
+    // → postClassify → sinks → postStore). We wrap the dispatcher's log so
+    // every line carries the email envelope (from/to) without the dispatcher
+    // needing to know about it.
     for (const reg of registrations) {
       const regName = findRegistrationName(opts.registry, reg);
-      const ctx: HookContext = { channel: channelName, registration: regName };
-
-      // Start pipeline state
-      let item: InboxItem = parsed.item;
-
-      // ── Stage 1: preIngest hooks ─────────────────────────────────
-      const preOutcome = await runHookChain(reg.hooks.preIngest, item, ctx, log, regName, 'preIngest');
-      if (preOutcome.action === 'drop') {
-        log('dropped by preIngest', { registration: regName, reason: preOutcome.reason });
-        continue;
-      }
-      item = preOutcome.item;
-      let isQuarantined = preOutcome.action === 'quarantine';
-
-      // ── Stage 2: built-in classify ───────────────────────────────
-      if (shouldClassify) {
-        try {
-          item = classifyAndMerge(item);
-        } catch (err) {
-          // Classifier is pure and shouldn't throw, but be safe.
-          log('classify threw (bug in classifier)', {
-            registration: regName,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      // ── Stage 3: postClassify hooks ──────────────────────────────
-      const postOutcome = await runHookChain(
-        reg.hooks.postClassify,
-        item,
-        ctx,
-        log,
-        regName,
-        'postClassify',
-      );
-      if (postOutcome.action === 'drop') {
-        log('dropped by postClassify', { registration: regName, reason: postOutcome.reason });
-        continue;
-      }
-      item = postOutcome.item;
-      if (postOutcome.action === 'quarantine') isQuarantined = true;
-
-      // ── Quarantine tagging (persist-but-label for recovery) ──────
-      if (isQuarantined) {
-        item = {
-          ...item,
-          labels: Array.from(new Set([...(item.labels ?? []), quarantineLabel])),
-        };
-      }
-
-      // ── Stage 4: sink fan-out ─────────────────────────────────────
-      const sinkCtx: SinkContext = {
-        blobs: parsed.blobs,
+      const envelopeLog = (m: string, extra?: Record<string, unknown>) =>
+        log(m, { ...(extra ?? {}), from: msg.from, to: msg.to });
+      const result = await dispatchItem(reg, regName, parsed.item, {
         channel: channelName,
-        registration: regName,
-      };
-      const results: SinkResult[] = [];
-      for (let i = 0; i < reg.sinks.length; i++) {
-        const sink = reg.sinks[i];
-        let result: SinkResult;
-        try {
-          result = await sink(item, sinkCtx);
-        } catch (err) {
-          // A throwing sink is a bug (they should return {stored:false, error})
-          // but keep going with the remaining sinks.
-          result = {
-            stored: false,
-            error: err instanceof Error ? err.message : String(err),
-          };
-          log('sink threw (bug in sink)', {
-            registration: regName,
-            sink_idx: i,
-            error: result.error,
-          });
-        }
-        results.push(result);
-        if (result.stored) {
-          log('sink ok', {
-            registration: regName,
-            sink_idx: i,
-            id: result.id ?? item.id,
-            quarantined: isQuarantined,
-            from: msg.from,
-            to: msg.to,
-          });
-        } else {
-          log('sink failed (soft)', {
-            registration: regName,
-            sink_idx: i,
-            error: result.error,
-          });
-        }
-      }
-
-      // ── Stage 5: postStore hooks ──────────────────────────────────
-      for (const hook of reg.hooks.postStore) {
-        try {
-          await hook(item, ctx, results);
-        } catch (err) {
-          log('postStore hook threw', {
-            registration: regName,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+        blobs: parsed.blobs,
+        classify: shouldClassify,
+        quarantineLabel,
+        log: envelopeLog,
+      });
+      if (result.dropped) {
+        envelopeLog('dropped', { registration: regName, reason: result.drop_reason });
       }
     }
   };
-}
-
-/**
- * Run a chain of preIngest / postClassify hooks. Each hook sees the item
- * from the previous hook's output (if that hook returned a mutated item).
- * Short-circuits on 'drop'. Collapses 'quarantine' into the final outcome
- * (any hook verdicting quarantine taints the chain regardless of later
- * hooks returning 'accept').
- */
-async function runHookChain(
-  hooks: Array<PreIngestHook | PostClassifyHook>,
-  startItem: InboxItem,
-  ctx: HookContext,
-  log: (msg: string, extra?: Record<string, unknown>) => void,
-  regName: string | undefined,
-  stage: 'preIngest' | 'postClassify',
-): Promise<HookOutcome> {
-  let item = startItem;
-  let quarantined = false;
-  for (let i = 0; i < hooks.length; i++) {
-    let verdict: HookVerdict;
-    try {
-      verdict = await hooks[i](item, ctx);
-    } catch (err) {
-      // A throwing hook is treated as pass-through (accept) with a log —
-      // we don't want a buggy hook to kill the entire pipeline. Severe
-      // failures should still surface via log inspection.
-      log(`${stage} hook threw (bug in hook)`, {
-        registration: regName,
-        hook_idx: i,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      continue;
-    }
-    if (verdict === 'drop') {
-      return { action: 'drop', reason: `hook[${i}] verdict=drop` };
-    }
-    if (verdict === 'quarantine') {
-      quarantined = true;
-      continue;
-    }
-    if (verdict === 'accept') {
-      continue;
-    }
-    // Hook returned a mutated item
-    item = verdict;
-  }
-  return quarantined ? { action: 'quarantine', item } : { action: 'continue', item };
 }
 
 /**

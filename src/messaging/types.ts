@@ -160,6 +160,21 @@ export interface Channel<TRaw = unknown, TConfig = unknown> {
    * the watermark and passes it back on the next tick.
    */
   pull?(since: string | null, config?: TConfig): Promise<PullResult>;
+
+  /**
+   * For pull-shape channels with multiple items per feed response (RSS, Atom,
+   * api-poll batches). Returns one `ParseResult` per item. Entries with
+   * malformed fields should be skipped (logged, not thrown), so N-entry feeds
+   * with 1-2 bad entries still return N-2 items rather than failing whole-hog.
+   *
+   * `parse()` handles the single-item contract (returns the first entry or
+   * null); `parseMany()` returns every parseable entry. Runners that batch
+   * ingest should prefer this method.
+   *
+   * Non-breaking extension: channels that only emit one item per input keep
+   * using `parse()` and don't implement this.
+   */
+  parseMany?(raw: TRaw, config?: TConfig): Promise<ParseResult[]>;
 }
 
 /**

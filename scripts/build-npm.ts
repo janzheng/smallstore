@@ -85,10 +85,12 @@ await build({
     peerDependencies: {
       "hono": ">=4.0.0",
       "postal-mime": ">=2.0.0",
+      "fast-xml-parser": ">=4.5.0",
     },
     peerDependenciesMeta: {
       "hono": { optional: true },
       "postal-mime": { optional: true },
+      "fast-xml-parser": { optional: true },
     },
     optionalDependencies: {
       "@zvec/zvec": "^0.2.1",
@@ -125,6 +127,10 @@ await build({
     "npm:postal-mime@^2.4.4": {
       name: "postal-mime",
       version: "^2.4.4",
+    },
+    "npm:fast-xml-parser@^4.5.0": {
+      name: "fast-xml-parser",
+      version: "^4.5.0",
     },
   },
   // Don't run tests during build
@@ -163,6 +169,9 @@ await build({
 
     // Remove postal-mime from dependencies (it's an optional peer — only needed by cf-email channel)
     delete pkg.dependencies?.["postal-mime"];
+
+    // Remove fast-xml-parser from dependencies (it's an optional peer — only needed by rss channel)
+    delete pkg.dependencies?.["fast-xml-parser"];
 
     // Remove @zvec/zvec from dependencies, keep in optionalDependencies
     delete pkg.dependencies?.["@zvec/zvec"];
