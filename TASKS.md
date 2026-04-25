@@ -4,7 +4,17 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ## Current
 
-*(Five sprints shipped over 2026-04-23 / 2026-04-24 / 2026-04-25: mailroom pipeline, curation, peer registry, MCP reorg + tool families, in-Worker RSS pull-runner. All live at `smallstore.labspace.ai`. Canonical `skills/smallstore/SKILL.md` synced through mcp-hub to `~/.claude/skills/` + `~/.cursor/skills/` + `~/.codex/skills/` + `~/.agents/skills/`. 33 MCP tools across 3 families (core/inbox/peers). See `TASKS.done.md` + `.brief/2026-04-*-sprint.md` for full narratives.)*
+*(Five sprints shipped over 2026-04-23 / 2026-04-24 / 2026-04-25: mailroom pipeline, curation, peer registry, MCP reorg + tool families, in-Worker RSS pull-runner. All live at `smallstore.labspace.ai`. Canonical `skills/smallstore/SKILL.md` synced through mcp-hub to `~/.claude/skills/` + `~/.cursor/skills/` + `~/.codex/skills/` + `~/.agents/skills/`. 37 MCP tools across 3 families (core/inbox/peers). See `TASKS.done.md` + `.brief/2026-04-*-sprint.md` for full narratives.)*
+
+### Polish session — SHIPPED 2026-04-24
+
+Five back-to-back small features, all live at `smallstore.labspace.ai`. Detail in area files (`TASKS-MESSAGING.md` + below).
+
+- [*] **`Inbox.keyPrefix` option** — runtime inboxes now namespace within a shared adapter (`inbox/<name>/` auto-default on `POST /admin/inboxes`). Boot-time inboxes (mailroom/biorxiv/podcasts) keep bare `_index` + `items/<id>` keys — backwards-compat. Detail: `TASKS-MESSAGING.md § Inbox keyPrefix option`. Deploy `718c083d` #inbox-keyprefix-isolation
+- [*] **Runtime-configurable AUTO_CONFIRM_SENDERS** — D1-backed allowlist + admin API + MCP tools (`sm_auto_confirm_list/add/remove`); env var seeds once-per-pattern (sentinel-tracked, runtime delete sticks across cold starts). Detail: `TASKS-MESSAGING.md § Runtime-configurable AUTO_CONFIRM_SENDERS`. Deploy `46a93db3` #mailroom-auto-confirm-runtime-config
+- [*] **Plugin discipline — aws-sdk lazy-load** — applied postal-mime recipe to both consumers (`src/blob-middleware/resolver.ts` + `src/adapters/r2-direct.ts`). aws-sdk dropped from `dist/package.json` `dependencies` → `peerDependencies (optional)` via the postBuild hook. Detail: `TASKS.md § Plugin discipline — adapter-level reshape` below #plugin-discipline #blob-middleware-aws-lazy #r2-direct-lazy
+- [*] **Attachments retrieval** — capture path was already live; new `Inbox.readAttachment(itemId, filename)` + `GET /inbox/:name/items/:id/attachments[/:filename]` (Worker-streamed, path-traversal guarded) + `sm_inbox_attachments_list`. Brief: `.brief/attachments.md`. Detail: `TASKS-MESSAGING.md § Attachment retrieval`. Deploy `219d88a4` #messaging #attachments
+- [*] **Sheetlog patch verifier + Bug #2/#4 LIVE** — earlier in the day, before the session-of-five above; tracked separately at `TASKS.md § Known issues`
 
 ### Mailroom — annotation layer — SHIPPED 2026-04-24
 
