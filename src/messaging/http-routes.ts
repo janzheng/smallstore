@@ -36,6 +36,7 @@ import { listChannels, type InboxRegistry } from './registry.ts';
 import type { SenderIndex } from './sender-index.ts';
 import { unsubscribeSender } from './unsubscribe.ts';
 import type { MailroomRule, RuleAction, RulesStore } from './rules.ts';
+import type { AutoConfirmSendersStore } from './auto-confirm-senders.ts';
 import { listQuarantined, restoreItem } from './quarantine.ts';
 
 export type RequireAuth = (c: Context, next: Next) => Promise<Response | void> | Response | void;
@@ -62,13 +63,20 @@ export interface RegisterMessagingRoutesOptions {
    * case, matching the `senderIndexFor` pattern).
    */
   rulesStoreFor?: (name: string) => RulesStore | null | undefined | Promise<RulesStore | null | undefined>;
+  /**
+   * Optional Worker-global auto-confirm sender store. When provided,
+   * enables `/admin/auto-confirm/senders` admin routes. The store is
+   * Worker-global (not per-inbox) — auto-confirm is a single allowlist
+   * shared across every inbox the auto-confirm hook runs for.
+   */
+  autoConfirmSendersStore?: AutoConfirmSendersStore;
 }
 
 export function registerMessagingRoutes(
   app: Hono<any>,
   opts: RegisterMessagingRoutesOptions,
 ): void {
-  const { registry, requireAuth, createInbox, senderIndexFor, rulesStoreFor } = opts;
+  const { registry, requireAuth, createInbox, senderIndexFor, rulesStoreFor, autoConfirmSendersStore } = opts;
 
   // --------------------------------------------------------------------------
   // Per-inbox surface
@@ -849,6 +857,69 @@ export function registerMessagingRoutes(
 
   app.get('/admin/channels', requireAuth, (c) => {
     return c.json({ channels: listChannels() });
+  });
+
+  // --------------------------------------------------------------------------
+  // Auto-confirm senders — runtime-editable allowlist (Worker-global)
+  // --------------------------------------------------------------------------
+  // The auto-confirm hook (postClassify on cf-email inboxes) reads this
+  // store on every invocation (cached briefly). Adding a pattern here
+  // takes effect within the cache TTL — no redeploy needed.
+
+  app.get('/admin/auto-confirm/senders', requireAuth, async (c) => {
+    if (!autoConfirmSendersStore) {
+      return c.json(
+        { error: 'NotImplemented', message: 'autoConfirmSendersStore not provided' },
+        501,
+      );
+    }
+    const senders = await autoConfirmSendersStore.list();
+    return c.json({ senders });
+  });
+
+  app.post('/admin/auto-confirm/senders', requireAuth, async (c) => {
+    if (!autoConfirmSendersStore) {
+      return c.json(
+        { error: 'NotImplemented', message: 'autoConfirmSendersStore not provided' },
+        501,
+      );
+    }
+    const body = await readJson(c);
+    if (!body || typeof body !== 'object') return badRequest(c, 'body required');
+    if (typeof body.pattern !== 'string' || body.pattern.trim().length === 0) {
+      return badRequest(c, 'body.pattern (non-empty string) required');
+    }
+    if (body.notes !== undefined && typeof body.notes !== 'string') {
+      return badRequest(c, 'body.notes must be a string when provided');
+    }
+    const created = await autoConfirmSendersStore.add({
+      pattern: body.pattern,
+      source: 'runtime',
+      notes: body.notes,
+    });
+    return c.json({ created }, 201);
+  });
+
+  app.delete('/admin/auto-confirm/senders/:pattern', requireAuth, async (c) => {
+    if (!autoConfirmSendersStore) {
+      return c.json(
+        { error: 'NotImplemented', message: 'autoConfirmSendersStore not provided' },
+        501,
+      );
+    }
+    // The pattern is URL-encoded by the caller (it contains `*` and `@`).
+    // Hono's `c.req.param` returns the decoded value, but be defensive
+    // for double-encoded callers.
+    const raw = c.req.param('pattern')!;
+    let pattern: string;
+    try {
+      pattern = decodeURIComponent(raw);
+    } catch {
+      pattern = raw;
+    }
+    const removed = await autoConfirmSendersStore.delete(pattern);
+    if (!removed) return notFound(c, `pattern "${pattern}" not found`);
+    return c.json({ deleted: pattern });
   });
 }
 

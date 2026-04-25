@@ -44,6 +44,8 @@ import {
   createRulesStore,
   createRulesHook,
   createRssPullRunner,
+  createAutoConfirmSendersStore,
+  seedAutoConfirmFromEnv,
   createStampUnreadHook,
   parseSelfAddresses,
   parseSenderAliases,
@@ -57,6 +59,7 @@ import {
   type InboxItem,
   type PullRunner,
   type RulesStore,
+  type AutoConfirmSendersStore,
   type SenderIndex,
 } from '@yawnxyz/smallstore/messaging';
 import {
@@ -126,6 +129,7 @@ interface AppHandle {
   email: ReturnType<typeof createEmailHandler>;
   senderIndexes: Map<string, SenderIndex>;
   rulesStores: Map<string, RulesStore>;
+  autoConfirmSendersStore: AutoConfirmSendersStore;
   peerStore: PeerStore;
   rssRunner: PullRunner;
 }
@@ -145,16 +149,21 @@ function buildApp(env: Env): AppHandle {
   const senderD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_senders' });
   // Rules table — same D1 binding, generic k/v mode. Table created lazily.
   const rulesD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_rules' });
+  // Auto-confirm senders table — Worker-global allowlist (one row per pattern).
+  // Same D1 binding, dedicated table. Mutated via `/admin/auto-confirm/senders`
+  // and the `sm_auto_confirm_*` MCP tools; seeded from `AUTO_CONFIRM_SENDERS`
+  // env var on first boot (idempotent — patterns deleted via API stay deleted).
+  const autoConfirmD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_auto_confirm' });
   // Peers table — runtime-configurable registry of external data sources
   // (tigerflare, sheetlogs, other smallstores, etc.). Same D1 binding.
   // See `.brief/peer-registry.md`.
   const peersD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'peers' });
 
-  // Per-inbox D1 adapters. Each inbox needs its OWN table because the
-  // Inbox class uses hardcoded keys ('_index', 'items/<id>') that would
-  // collide if multiple inboxes shared one adapter. Until the planned
-  // `keyPrefix` option lands on Inbox, register one adapter per inbox here.
-  // See `.brief/rss-as-mailbox.md` § correction.
+  // Per-inbox D1 adapters. These boot-time inboxes were created BEFORE
+  // `Inbox.keyPrefix` shipped, so each owns a dedicated table to keep the
+  // historical bare `_index` + `items/<id>` keys non-colliding. Newer
+  // runtime-created inboxes (via POST /admin/inboxes) auto-namespace via
+  // `keyPrefix: 'inbox/<name>/'` and can share a single adapter.
   const biorxivD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'biorxiv_items' });
   const podcastsD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'podcasts_items' });
 
@@ -240,6 +249,15 @@ function buildApp(env: Env): AppHandle {
   const mailroomRulesStore = createRulesStore(rulesD1, { keyPrefix: 'rules/' });
   rulesStores.set('mailroom', mailroomRulesStore);
 
+  // Auto-confirm sender allowlist — runtime-editable, Worker-global. The
+  // postClassify auto-confirm hook reads this on every invocation (cached
+  // for 30s). Boot-time seed: any pattern in AUTO_CONFIRM_SENDERS that
+  // isn't already in the store is added as `source: 'env'`. Runtime
+  // deletes win — the seed will not re-add a pattern the user removed.
+  const autoConfirmSendersStore = createAutoConfirmSendersStore(autoConfirmD1, {
+    keyPrefix: 'auto-confirm/',
+  });
+
   // -------------------------------------------------------------------------
   // Hook pipeline (curation-aware)
   // -------------------------------------------------------------------------
@@ -288,9 +306,28 @@ function buildApp(env: Env): AppHandle {
   // can key off `newsletter` (classifier-applied) without ordering pain.
   const newsletterNameHook = createNewsletterNameHook();
   const confirmDetectHook = createConfirmDetectHook();
+  // Auto-confirm: dynamic source (D1-backed store). Hook calls
+  // `getPatterns()` on every invocation, cached for 30s. Adding a
+  // pattern via `POST /admin/auto-confirm/senders` takes effect within
+  // the cache window — no redeploy. Env var still seeds the store on
+  // first boot (see `seedAutoConfirmFromEnv` below).
   const autoConfirmHook = createAutoConfirmHook({
-    allowedSenders: env.AUTO_CONFIRM_SENDERS,
+    getPatterns: () => autoConfirmSendersStore.patterns(),
   });
+
+  // Boot-time env seed — fire-and-forget so the hook is constructed
+  // before D1 returns. The first invocation may see a stale (empty)
+  // cache while seeding completes; subsequent invocations are correct.
+  // Any seed errors get logged; we don't block boot on D1.
+  void seedAutoConfirmFromEnv(env.AUTO_CONFIRM_SENDERS, autoConfirmSendersStore, autoConfirmD1)
+    .then((added) => {
+      if (added.length > 0) {
+        console.log(`[auto-confirm] seeded ${added.length} env pattern(s):`, added);
+      }
+    })
+    .catch((err) => {
+      console.error('[auto-confirm] env seed failed:', err instanceof Error ? err.message : err);
+    });
   const stampUnreadHook = createStampUnreadHook();
 
   // Side-effect postClassify hook — updates sender-index on every ingest.
@@ -383,6 +420,7 @@ function buildApp(env: Env): AppHandle {
     createInbox: buildInboxFromConfig,
     senderIndexFor: (name: string) => senderIndexes.get(name) ?? null,
     rulesStoreFor: (name: string) => rulesStores.get(name) ?? null,
+    autoConfirmSendersStore,
   });
 
   // Peer registry routes — /peers CRUD + /peers/:name/{health,fetch,query}
@@ -438,7 +476,7 @@ function buildApp(env: Env): AppHandle {
     log: (msg, extra) => console.log(`[email] ${msg}`, JSON.stringify(extra ?? {})),
   });
 
-  return { app, email, senderIndexes, rulesStores, peerStore, rssRunner };
+  return { app, email, senderIndexes, rulesStores, autoConfirmSendersStore, peerStore, rssRunner };
 }
 
 function ensureApp(env: Env): AppHandle {

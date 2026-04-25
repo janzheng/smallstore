@@ -27,9 +27,23 @@ curl -sS -H "Authorization: Bearer $SMALLSTORE_TOKEN" \
 
 If any items come back, surface them as a separate callout (not buried in the general list). Offer to batch-confirm via the endpoint or the `sm_inbox_confirm` MCP tool. For manual clicks: show the URL first so the user stays in the loop.
 
-**Auto-confirm is active for allowlisted senders.** `AUTO_CONFIRM_SENDERS` in `wrangler.toml` (currently `*@substack.com`, `*@substackmail.com`, `*@convertkit.com`, `*@beehiiv.com`, `*@mailerlite.com`, `*@emailoctopus.com`, `*@uxdesign.cc`) triggers auto-click at ingest — those items carry `auto-confirmed` (not `needs-confirm`). To see what was auto-confirmed recently, query `labels: ["auto-confirmed"]`. Adding a new platform to the allowlist requires editing `wrangler.toml` + redeploy.
+**Auto-confirm is active for allowlisted senders.** Patterns are stored in D1 (`mailroom_auto_confirm` table) and editable at runtime via `/admin/auto-confirm/senders` or the `sm_auto_confirm_*` MCP tools — no redeploy needed. The `AUTO_CONFIRM_SENDERS` env var in `wrangler.toml` (currently `*@substack.com`, `*@substackmail.com`, `*@convertkit.com`, `*@beehiiv.com`, `*@mailerlite.com`, `*@emailoctopus.com`, `*@uxdesign.cc`, `*@every.to`) seeds the store on first ever boot only — patterns deleted via the API stay deleted (sentinel-tracked).
 
-Single-item manual confirm (mutates): `POST /inbox/mailroom/confirm/:id`. Add `?dry-run=true` to preview the URL.
+```sh
+# List active patterns
+curl -sS -H "Authorization: Bearer $SMALLSTORE_TOKEN" "https://smallstore.labspace.ai/admin/auto-confirm/senders" | jq
+
+# Add a new platform at runtime (effective within ~30s — hook caches the allowlist briefly)
+curl -sS -X POST -H "Authorization: Bearer $SMALLSTORE_TOKEN" -H "Content-Type: application/json" \
+  "https://smallstore.labspace.ai/admin/auto-confirm/senders" \
+  -d '{"pattern":"*@newplatform.com","notes":"why this was added"}'
+
+# Remove a pattern (delete-wins — survives cold starts even if the env var still lists it)
+curl -sS -X DELETE -H "Authorization: Bearer $SMALLSTORE_TOKEN" \
+  "https://smallstore.labspace.ai/admin/auto-confirm/senders/$(printf '*@x.com' | jq -sRr @uri)"
+```
+
+Items confirmed automatically carry the `auto-confirmed` label (not `needs-confirm`). Query `labels: ["auto-confirmed"]` to see recent auto-clicks. Single-item manual confirm (mutates): `POST /inbox/mailroom/confirm/:id`. Add `?dry-run=true` to preview the URL.
 
 ## MCP tools (`sm_inbox_*`, `sm_peers_*`, `sm_*`)
 

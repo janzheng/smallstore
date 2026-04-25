@@ -331,6 +331,47 @@ export const INBOX_TOOLS: Tool[] = [
       required: ['inbox', 'id'],
     },
   },
+  {
+    name: 'sm_auto_confirm_list',
+    description:
+      'List the Worker-global auto-confirm sender allowlist (patterns the auto-confirm hook will GET the double-opt-in URL for). Returns `{ senders: [{ pattern, source, created_at, notes? }] }`. `source: "env"` rows are seeded from the `AUTO_CONFIRM_SENDERS` env var on first boot; `source: "runtime"` rows were added via this tool / API.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'sm_auto_confirm_add',
+    description:
+      'Add a sender glob pattern to the Worker-global auto-confirm allowlist (e.g. `*@beehiiv.com`). Idempotent — re-adding the same pattern returns the existing row unchanged. Effect propagates to the running hook within ~30s (the hook caches the allowlist briefly to avoid hammering D1).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern: {
+          type: 'string',
+          description:
+            'Sender-address glob — `*` is the only wildcard. Lowercased + trimmed before storage. E.g. `*@beehiiv.com`, `*@every.to`.',
+        },
+        notes: {
+          type: 'string',
+          description: 'Free-form note ("added because Beehiiv started signing from this domain").',
+        },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'sm_auto_confirm_remove',
+    description:
+      "Remove a pattern from the Worker-global auto-confirm allowlist. 404 if the pattern isn't present. Removing an env-seeded pattern sticks across cold starts (the seed step won't re-add patterns the user explicitly removed).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern: {
+          type: 'string',
+          description: 'Exact pattern to remove (use `sm_auto_confirm_list` if unsure of casing).',
+        },
+      },
+      required: ['pattern'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -611,6 +652,28 @@ export async function handleInboxTool(
       const id = requireString(args, 'id');
       const r = await http('POST', `/inbox/${encName(inbox)}/rules/${encId(id)}/apply-retroactive`);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_rules_apply_retroactive failed', r));
+      return r.body;
+    }
+
+    case 'sm_auto_confirm_list': {
+      const r = await http('GET', `/admin/auto-confirm/senders`);
+      if (!r.ok) throw new Error(formatHttpError('sm_auto_confirm_list failed', r));
+      return r.body;
+    }
+
+    case 'sm_auto_confirm_add': {
+      const pattern = requireString(args, 'pattern');
+      const body: Record<string, unknown> = { pattern };
+      if (typeof args.notes === 'string') body.notes = args.notes;
+      const r = await http('POST', `/admin/auto-confirm/senders`, body);
+      if (!r.ok) throw new Error(formatHttpError('sm_auto_confirm_add failed', r));
+      return r.body;
+    }
+
+    case 'sm_auto_confirm_remove': {
+      const pattern = requireString(args, 'pattern');
+      const r = await http('DELETE', `/admin/auto-confirm/senders/${encodeURIComponent(pattern)}`);
+      if (!r.ok) throw new Error(formatHttpError('sm_auto_confirm_remove failed', r));
       return r.body;
     }
 

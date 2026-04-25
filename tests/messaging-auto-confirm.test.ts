@@ -354,3 +354,126 @@ Deno.test('hook — CSV allowlist config works', async () => {
   if (typeof v === 'string') throw new Error('expected mutated item');
   assert(v.labels?.includes('auto-confirmed'));
 });
+
+// ============================================================================
+// Dynamic pattern source (`getPatterns`) — runtime-editable allowlist
+// ============================================================================
+
+Deno.test('dynamic — getPatterns called per invocation; new pattern takes effect', async () => {
+  let patterns: string[] = []; // mutable backing store
+  const hook = createAutoConfirmHook({
+    getPatterns: async () => patterns,
+    fetch: stubFetch(200),
+    cacheTtlMs: 0, // bypass cache for the test
+  });
+
+  const item1 = makeItem({
+    from_email: 'hi@beehiiv.com',
+    confirm_url: 'https://beehiiv.com/confirm/abc',
+  });
+
+  // No patterns yet — passthrough.
+  const before = await hook(item1, CTX);
+  assertEquals(before, 'accept');
+
+  // Add a pattern — next invocation auto-confirms.
+  patterns = ['*@beehiiv.com'];
+  const item2 = makeItem({
+    from_email: 'hi@beehiiv.com',
+    confirm_url: 'https://beehiiv.com/confirm/abc',
+  });
+  const after = await hook(item2, CTX);
+  if (typeof after === 'string') throw new Error('expected mutated item');
+  assert(after.labels?.includes('auto-confirmed'));
+});
+
+Deno.test('dynamic — cache TTL avoids hammering getPatterns on every call', async () => {
+  let calls = 0;
+  const hook = createAutoConfirmHook({
+    getPatterns: async () => {
+      calls++;
+      return ['*@substack.com'];
+    },
+    fetch: stubFetch(200),
+    cacheTtlMs: 60_000, // long TTL
+  });
+
+  // Call 5 times; getPatterns should only fire once thanks to the cache.
+  for (let i = 0; i < 5; i++) {
+    const item = makeItem({
+      from_email: `n${i}@substack.com`,
+      confirm_url: `https://substack.com/confirm/${i}`,
+    });
+    await hook(item, CTX);
+  }
+  assertEquals(calls, 1);
+});
+
+Deno.test('dynamic — getPatterns failure falls back to stale cache when present', async () => {
+  let mode: 'ok' | 'fail' = 'ok';
+  const hook = createAutoConfirmHook({
+    getPatterns: async () => {
+      if (mode === 'fail') throw new Error('D1 down');
+      return ['*@substack.com'];
+    },
+    fetch: stubFetch(200),
+    cacheTtlMs: 0, // force re-fetch each call
+  });
+
+  // Prime cache with a successful call.
+  const okItem = makeItem({
+    from_email: 'hi@substack.com',
+    confirm_url: 'https://substack.com/confirm/1',
+  });
+  const v1 = await hook(okItem, CTX);
+  if (typeof v1 === 'string') throw new Error('expected mutated item');
+  assert(v1.labels?.includes('auto-confirmed'));
+
+  // Flip to failure — hook should still auto-confirm using the cached patterns.
+  mode = 'fail';
+  const failItem = makeItem({
+    from_email: 'hi@substack.com',
+    confirm_url: 'https://substack.com/confirm/2',
+  });
+  const v2 = await hook(failItem, CTX);
+  if (typeof v2 === 'string') throw new Error('expected mutated item');
+  assert(v2.labels?.includes('auto-confirmed'));
+});
+
+Deno.test('dynamic — getPatterns returning [] disables hook (passthrough)', async () => {
+  const hook = createAutoConfirmHook({
+    getPatterns: async () => [],
+    fetch: stubFetch(200),
+    cacheTtlMs: 0,
+  });
+  const item = makeItem({
+    from_email: 'hi@substack.com',
+    confirm_url: 'https://substack.com/confirm',
+  });
+  assertEquals(await hook(item, CTX), 'accept');
+});
+
+Deno.test('dynamic — getPatterns wins when both static and dynamic sources are set', async () => {
+  // Static says `*@substack.com`, dynamic says `*@beehiiv.com` — dynamic wins.
+  const hook = createAutoConfirmHook({
+    allowedSenders: ['*@substack.com'],
+    getPatterns: async () => ['*@beehiiv.com'],
+    fetch: stubFetch(200),
+    cacheTtlMs: 0,
+  });
+
+  const substackItem = makeItem({
+    from_email: 'hi@substack.com',
+    confirm_url: 'https://substack.com/confirm',
+  });
+  // Substack should NOT auto-confirm — dynamic doesn't include it.
+  assertEquals(await hook(substackItem, CTX), 'accept');
+
+  const beehiivItem = makeItem({
+    from_email: 'hi@beehiiv.com',
+    confirm_url: 'https://beehiiv.com/confirm',
+  });
+  const v = await hook(beehiivItem, CTX);
+  if (typeof v === 'string') throw new Error('expected mutated item');
+  assert(v.labels?.includes('auto-confirmed'));
+});

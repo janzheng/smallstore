@@ -154,3 +154,11 @@ export {
   type RulesStore,
 } from './rules.ts';
 export { createRulesHook, type RulesHookOptions } from './rules-hook.ts';
+export {
+  createAutoConfirmSendersStore,
+  normalizePattern,
+  seedAutoConfirmFromEnv,
+  type AutoConfirmSender,
+  type AutoConfirmSendersStore,
+  type CreateAutoConfirmSendersStoreOptions,
+} from './auto-confirm-senders.ts';

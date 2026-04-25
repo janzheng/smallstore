@@ -66,9 +66,30 @@ export interface AutoConfirmOptions {
    *  - `string[]` (most explicit)
    *  - comma-separated CSV string (for env-var configs, e.g.
    *    `"*@substack.com,*@convertkit.com"`)
-   *  - `undefined` / `""` → hook disabled (always 'accept')
+   *  - `undefined` / `""` → hook disabled (always 'accept') unless
+   *    `getPatterns` is set
+   *
+   * Mutually exclusive with `getPatterns` — pick one. When both are set,
+   * `getPatterns` wins (the dynamic source is what the runtime API mutates).
    */
-  allowedSenders: string[] | string | undefined;
+  allowedSenders?: string[] | string;
+
+  /**
+   * Dynamic pattern source — called on every hook invocation, so adds /
+   * deletes via `AutoConfirmSendersStore` take effect without restarts.
+   * Result cached for `cacheTtlMs` (default 30s) to avoid hammering the
+   * underlying adapter on busy ingest paths.
+   *
+   * Use this for the runtime-editable allowlist. Use `allowedSenders` for
+   * static / test configs.
+   */
+  getPatterns?: () => Promise<string[]>;
+
+  /**
+   * Cache TTL for the `getPatterns` result. Default 30s. Lower if your
+   * deploy has a leader/follower split where stale-by-30s is unacceptable.
+   */
+  cacheTtlMs?: number;
 
   /**
    * HTTP client — injectable for tests. Defaults to global `fetch`.
@@ -195,14 +216,44 @@ export function isSafeUrl(url: string | undefined | null): boolean {
 export function createAutoConfirmHook(
   opts: AutoConfirmOptions,
 ): PostClassifyHook {
-  const patterns = parseAllowedSenders(opts.allowedSenders);
+  const staticPatterns = parseAllowedSenders(opts.allowedSenders);
   const fetcher = opts.fetch ?? globalThis.fetch.bind(globalThis);
   const timeoutMs = opts.timeoutMs ?? 10_000;
+  const cacheTtlMs = opts.cacheTtlMs ?? 30_000;
+
+  // Lazy cache for the dynamic source. `getPatterns` is called at most
+  // once per `cacheTtlMs` even under bursty ingest. The cache is keyed by
+  // the hook closure so two hooks with different stores don't share state.
+  let cachedPatterns: string[] | null = null;
+  let cachedAt = 0;
+
+  async function resolvePatterns(): Promise<string[]> {
+    if (opts.getPatterns) {
+      const now = Date.now();
+      if (cachedPatterns !== null && now - cachedAt < cacheTtlMs) {
+        return cachedPatterns;
+      }
+      try {
+        const fresh = await opts.getPatterns();
+        cachedPatterns = parseAllowedSenders(fresh);
+        cachedAt = now;
+        return cachedPatterns;
+      } catch {
+        // On failure, prefer a stale cache to opening the auto-confirm
+        // door wide (empty allowlist = nothing auto-clicks). If we have
+        // no cache yet, fall through to staticPatterns.
+        if (cachedPatterns !== null) return cachedPatterns;
+        return staticPatterns;
+      }
+    }
+    return staticPatterns;
+  }
 
   return async function autoConfirmHook(
     item: InboxItem,
     _ctx: HookContext,
   ): Promise<HookVerdict> {
+    const patterns = await resolvePatterns();
     if (patterns.length === 0) return 'accept';
 
     const labels = item.labels ?? [];
