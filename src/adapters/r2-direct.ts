@@ -19,12 +19,55 @@
 
 import type { StorageAdapter, AdapterCapabilities } from './adapter.ts';
 import type { DataType } from '../types.ts';
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command } from "npm:@aws-sdk/client-s3@^3.0.0";
-import type { GetObjectCommandOutput, ListObjectsV2CommandOutput } from "npm:@aws-sdk/client-s3@^3.0.0";
-import { getSignedUrl } from "npm:@aws-sdk/s3-request-presigner@^3.0.0";
 import { getEnv, requireEnv } from '../utils/env.ts';
 import { retry, type RetryOptions } from '../utils/retry.ts';
 import { debug } from '../utils/debug.ts';
+
+// ============================================================================
+// AWS SDK lazy-load
+// ============================================================================
+//
+// Same recipe as `src/messaging/channels/cf-email.ts` for postal-mime
+// and `src/blob-middleware/resolver.ts` for the r2-direct backend:
+// dynamic `await import` + module-level cache + helpful "install"
+// error if the dep is missing. Lets the npm `dist/` declare aws-sdk
+// as an OPTIONAL peerDep — consumers using only Memory/D1/R2-binding/
+// Notion/etc. don't pay for the SDK install.
+//
+// `any` typing on the cache slots is intentional — `typeof import(...)`
+// looks like a static import to dnt and would re-pin aws-sdk into
+// `dependencies` regardless of the peerDeps override.
+
+let _S3Module: any | undefined;
+let _S3PresignerModule: any | undefined;
+
+async function loadS3(): Promise<any> {
+  if (_S3Module) return _S3Module;
+  try {
+    _S3Module = await import('@aws-sdk/client-s3');
+    return _S3Module;
+  } catch (err) {
+    throw new Error(
+      "The r2-direct adapter requires '@aws-sdk/client-s3'. Install it:\n" +
+        "  npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner\n" +
+        `Original error: ${(err as Error)?.message ?? err}`,
+    );
+  }
+}
+
+async function loadS3Presigner(): Promise<any> {
+  if (_S3PresignerModule) return _S3PresignerModule;
+  try {
+    _S3PresignerModule = await import('@aws-sdk/s3-request-presigner');
+    return _S3PresignerModule;
+  } catch (err) {
+    throw new Error(
+      "The r2-direct adapter signed-URL feature requires '@aws-sdk/s3-request-presigner'. Install it:\n" +
+        "  npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner\n" +
+        `Original error: ${(err as Error)?.message ?? err}`,
+    );
+  }
+}
 
 export interface R2DirectAdapterConfig {
   /** Cloudflare Account ID */
@@ -89,7 +132,11 @@ export class R2DirectAdapter implements StorageAdapter {
     }
   };
   
-  private s3Client: S3Client;
+  // S3Client is built lazily on first command — `await loadS3()` can't run
+  // in a synchronous constructor. The cached client persists for the
+  // lifetime of the adapter; concurrent first-calls race-build harmlessly
+  // (the JS module system dedups the dynamic import).
+  private s3Client?: any;
   private config: R2DirectAdapterConfig;
   private retryOpts?: RetryOptions;
 
@@ -99,35 +146,39 @@ export class R2DirectAdapter implements StorageAdapter {
       autoParse: true,
       ...config
     };
-    
-    // Build R2 endpoint
-    const endpoint = config.endpoint || 
-      `https://${config.accountId}.r2.cloudflarestorage.com`;
-    
-    // Initialize S3 client
+
+    this.retryOpts = config.retry === false ? undefined : config.retry ? { ...config.retry } : { maxRetries: 3 };
+
+    debug(`[R2Direct] Initialized with bucket: ${config.bucketName}`);
+  }
+
+  /** Build the S3 client on first call; reused thereafter. */
+  private async getClient(): Promise<any> {
+    if (this.s3Client) return this.s3Client;
+    const { S3Client } = await loadS3();
+    const endpoint = this.config.endpoint ||
+      `https://${this.config.accountId}.r2.cloudflarestorage.com`;
     this.s3Client = new S3Client({
       region: this.config.region,
       endpoint,
       credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey
-      }
+        accessKeyId: this.config.accessKeyId,
+        secretAccessKey: this.config.secretAccessKey,
+      },
     });
-    
-    this.retryOpts = config.retry === false ? undefined : config.retry ? { ...config.retry } : { maxRetries: 3 };
-
-    debug(`[R2Direct] Initialized with bucket: ${config.bucketName}`);
+    return this.s3Client;
   }
 
   /**
    * Send an S3 command, optionally with retry logic.
    */
   private async sendCommand<T>(command: any): Promise<T> {
+    const client = await this.getClient();
     if (!this.retryOpts) {
-      return await this.s3Client.send(command) as T;
+      return await client.send(command) as T;
     }
     return await retry(
-      () => this.s3Client.send(command) as Promise<T>,
+      () => client.send(command) as Promise<T>,
       {
         ...this.retryOpts,
         isRetryable: this.retryOpts.isRetryable ?? ((err: any) => {
@@ -153,14 +204,14 @@ export class R2DirectAdapter implements StorageAdapter {
    */
   async set(key: string, data: any): Promise<void> {
     const { body, contentType } = this.serializeData(key, data);
-    
+    const { PutObjectCommand } = await loadS3();
     const command = new PutObjectCommand({
       Bucket: this.config.bucketName,
       Key: key,
       Body: body,
       ContentType: contentType
     });
-    
+
     await this.sendCommand(command);
     debug(`[R2Direct] Stored: ${key} (${contentType})`);
   }
@@ -174,12 +225,13 @@ export class R2DirectAdapter implements StorageAdapter {
    */
   async get(key: string, options?: { raw?: boolean }): Promise<any> {
     try {
+      const { GetObjectCommand } = await loadS3();
       const command = new GetObjectCommand({
         Bucket: this.config.bucketName,
         Key: key
       });
-      
-      const response = await this.sendCommand<GetObjectCommandOutput>(command);
+
+      const response = await this.sendCommand<any>(command);
 
       if (!response.Body) {
         return null;
@@ -211,25 +263,27 @@ export class R2DirectAdapter implements StorageAdapter {
    * Delete data from R2
    */
   async delete(key: string): Promise<void> {
+    const { DeleteObjectCommand } = await loadS3();
     const command = new DeleteObjectCommand({
       Bucket: this.config.bucketName,
       Key: key
     });
-    
+
     await this.sendCommand(command);
     debug(`[R2Direct] Deleted: ${key}`);
   }
-  
+
   /**
    * Check if key exists in R2
    */
   async has(key: string): Promise<boolean> {
     try {
+      const { HeadObjectCommand } = await loadS3();
       const command = new HeadObjectCommand({
         Bucket: this.config.bucketName,
         Key: key
       });
-      
+
       await this.sendCommand(command);
       return true;
     } catch (error: any) {
@@ -239,19 +293,20 @@ export class R2DirectAdapter implements StorageAdapter {
       throw error;
     }
   }
-  
+
   /**
    * List keys with prefix
    */
   async keys(prefix?: string): Promise<string[]> {
+    const { ListObjectsV2Command } = await loadS3();
     const command = new ListObjectsV2Command({
       Bucket: this.config.bucketName,
       Prefix: prefix
     });
-    
-    const response = await this.sendCommand<ListObjectsV2CommandOutput>(command);
 
-    return response.Contents?.map(obj => obj.Key!) || [];
+    const response = await this.sendCommand<any>(command);
+
+    return response.Contents?.map((obj: any) => obj.Key!) || [];
   }
   
   /**
@@ -295,16 +350,19 @@ export class R2DirectAdapter implements StorageAdapter {
       contentType?: string;
     }
   ): Promise<string> {
+    const { PutObjectCommand } = await loadS3();
+    const { getSignedUrl } = await loadS3Presigner();
+    const client = await this.getClient();
     const command = new PutObjectCommand({
       Bucket: this.config.bucketName,
       Key: key,
       ContentType: options?.contentType
     });
-    
-    const url = await getSignedUrl(this.s3Client, command, {
+
+    const url = await getSignedUrl(client, command, {
       expiresIn: options?.expiresIn || 3600
     });
-    
+
     debug(`[R2Direct] Generated signed upload URL for: ${key}`);
     return url;
   }
@@ -323,18 +381,21 @@ export class R2DirectAdapter implements StorageAdapter {
       filename?: string;   // Force download with filename
     }
   ): Promise<string> {
+    const { GetObjectCommand } = await loadS3();
+    const { getSignedUrl } = await loadS3Presigner();
+    const client = await this.getClient();
     const command = new GetObjectCommand({
       Bucket: this.config.bucketName,
       Key: key,
-      ResponseContentDisposition: options?.filename 
+      ResponseContentDisposition: options?.filename
         ? `attachment; filename="${options.filename}"`
         : undefined
     });
-    
-    const url = await getSignedUrl(this.s3Client, command, {
+
+    const url = await getSignedUrl(client, command, {
       expiresIn: options?.expiresIn || 3600
     });
-    
+
     debug(`[R2Direct] Generated signed download URL for: ${key}`);
     return url;
   }

@@ -78,19 +78,28 @@ await build({
     },
     dependencies: {
       "@notionhq/client": "^5.16.0",
-      "@aws-sdk/client-s3": "^3.0.0",
-      "@aws-sdk/s3-request-presigner": "^3.0.0",
       "unstorage": "^1.17.0",
     },
     peerDependencies: {
       "hono": ">=4.0.0",
       "postal-mime": ">=2.0.0",
       "fast-xml-parser": ">=4.5.0",
+      // aws-sdk is needed only by the r2-direct adapter + the r2-direct
+      // backend in blob-middleware. Both lazy-load via `await import(...)`
+      // and throw a helpful "install @aws-sdk/..." error if missing.
+      // Consumers using only Memory/D1/R2-binding/Notion don't pay for
+      // the SDK install. dnt always adds these to `dependencies` because
+      // the import map references them — the postBuild hook below
+      // strips them so npm sees only the peerDeps placement.
+      "@aws-sdk/client-s3": ">=3.0.0",
+      "@aws-sdk/s3-request-presigner": ">=3.0.0",
     },
     peerDependenciesMeta: {
       "hono": { optional: true },
       "postal-mime": { optional: true },
       "fast-xml-parser": { optional: true },
+      "@aws-sdk/client-s3": { optional: true },
+      "@aws-sdk/s3-request-presigner": { optional: true },
     },
     optionalDependencies: {
       "@zvec/zvec": "^0.2.1",
@@ -172,6 +181,12 @@ await build({
 
     // Remove fast-xml-parser from dependencies (it's an optional peer — only needed by rss channel)
     delete pkg.dependencies?.["fast-xml-parser"];
+
+    // Remove aws-sdk packages from dependencies (optional peer — only needed
+    // by the r2-direct adapter / blob-middleware r2-direct backend; both
+    // lazy-load via `await import` and throw a helpful install error).
+    delete pkg.dependencies?.["@aws-sdk/client-s3"];
+    delete pkg.dependencies?.["@aws-sdk/s3-request-presigner"];
 
     // Remove @zvec/zvec from dependencies, keep in optionalDependencies
     delete pkg.dependencies?.["@zvec/zvec"];

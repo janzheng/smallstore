@@ -171,6 +171,57 @@ async function normalizeInput(input: BlobInput): Promise<NormalizedBlob> {
 }
 
 // ============================================================================
+// AWS SDK lazy-load (only the r2-direct backend touches it)
+// ============================================================================
+//
+// Same recipe as `src/messaging/channels/cf-email.ts` for `postal-mime`:
+// dynamic import + module-level cache + helpful error if the dep is
+// missing. Keeps the SDK out of the bundle for consumers who only use
+// `f2-r2` (or no blob middleware at all).
+//
+// The aws-sdk packages are declared as `peerDependencies` (optional) in
+// `scripts/build-npm.ts` so npm consumers don't force-install them; the
+// loaders below throw a clear "install @aws-sdk/..." instruction when
+// the r2-direct path is hit without the SDK on disk.
+
+// `any` rather than `typeof import(...)` is intentional — dnt treats a
+// `typeof import('@aws-sdk/...')` annotation as a static import and adds
+// the package to `dependencies` even when it's only used dynamically,
+// defeating the peerDeps split. Match the cf-email/postal-mime pattern:
+// loose typing on the cache slots, real types only at the destructure.
+let _S3Module: any | undefined;
+let _S3PresignerModule: any | undefined;
+
+async function loadS3(): Promise<any> {
+  if (_S3Module) return _S3Module;
+  try {
+    _S3Module = await import('@aws-sdk/client-s3');
+    return _S3Module;
+  } catch (err) {
+    throw new Error(
+      "The r2-direct blob backend requires '@aws-sdk/client-s3'. Install it:\n" +
+        "  npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner\n" +
+        "  (or use the 'f2-r2' backend if you don't want the AWS SDK dep)\n" +
+        `Original error: ${(err as Error)?.message ?? err}`,
+    );
+  }
+}
+
+async function loadS3Presigner(): Promise<any> {
+  if (_S3PresignerModule) return _S3PresignerModule;
+  try {
+    _S3PresignerModule = await import('@aws-sdk/s3-request-presigner');
+    return _S3PresignerModule;
+  } catch (err) {
+    throw new Error(
+      "The r2-direct blob backend (with signed URLs) requires '@aws-sdk/s3-request-presigner'. Install it:\n" +
+        "  npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner\n" +
+        `Original error: ${(err as Error)?.message ?? err}`,
+    );
+  }
+}
+
+// ============================================================================
 // Blob Resolver
 // ============================================================================
 
@@ -262,15 +313,17 @@ export class BlobResolver {
   // R2 Direct Upload
   // ==========================================================================
 
-  private async uploadR2Direct(r2Key: string, blob: NormalizedBlob): Promise<string> {
+  /**
+   * Build an S3 client wired for an r2-direct config. Dedup helper so
+   * `uploadR2Direct` and `deleteR2Direct` share the same construction.
+   * Doesn't cache the client itself — config can change across resolver
+   * instances; the underlying SDK module IS cached via `loadS3()`.
+   */
+  private async buildR2Client() {
     const cfg = this.config as Extract<BlobBackendConfig, { type: 'r2-direct' }>;
-
-    // Lazy-import S3 client to avoid loading AWS SDK unless needed
-    const { S3Client, PutObjectCommand, GetObjectCommand } = await import('@aws-sdk/client-s3');
-    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
-
+    const { S3Client } = await loadS3();
     const endpoint = cfg.endpoint ?? `https://${cfg.accountId}.r2.cloudflarestorage.com`;
-    const client = new S3Client({
+    return new S3Client({
       region: cfg.region ?? 'auto',
       endpoint,
       credentials: {
@@ -278,6 +331,12 @@ export class BlobResolver {
         secretAccessKey: cfg.secretAccessKey,
       },
     });
+  }
+
+  private async uploadR2Direct(r2Key: string, blob: NormalizedBlob): Promise<string> {
+    const cfg = this.config as Extract<BlobBackendConfig, { type: 'r2-direct' }>;
+    const { PutObjectCommand, GetObjectCommand } = await loadS3();
+    const client = await this.buildR2Client();
 
     // Upload
     await client.send(new PutObjectCommand({
@@ -289,6 +348,7 @@ export class BlobResolver {
 
     // Generate URL
     if (cfg.urlStrategy === 'signed') {
+      const { getSignedUrl } = await loadS3Presigner();
       const ttl = cfg.signedUrlTTL ?? 3600;
       return await getSignedUrl(
         client,
@@ -302,6 +362,7 @@ export class BlobResolver {
     }
 
     // Fallback: signed URL with default TTL
+    const { getSignedUrl } = await loadS3Presigner();
     return await getSignedUrl(
       client,
       new GetObjectCommand({ Bucket: cfg.bucketName, Key: r2Key }),
@@ -370,18 +431,8 @@ export class BlobResolver {
 
   private async deleteR2Direct(r2Key: string): Promise<void> {
     const cfg = this.config as Extract<BlobBackendConfig, { type: 'r2-direct' }>;
-
-    const { S3Client, DeleteObjectCommand } = await import('@aws-sdk/client-s3');
-
-    const endpoint = cfg.endpoint ?? `https://${cfg.accountId}.r2.cloudflarestorage.com`;
-    const client = new S3Client({
-      region: cfg.region ?? 'auto',
-      endpoint,
-      credentials: {
-        accessKeyId: cfg.accessKeyId,
-        secretAccessKey: cfg.secretAccessKey,
-      },
-    });
+    const { DeleteObjectCommand } = await loadS3();
+    const client = await this.buildR2Client();
 
     await client.send(new DeleteObjectCommand({
       Bucket: cfg.bucketName,
