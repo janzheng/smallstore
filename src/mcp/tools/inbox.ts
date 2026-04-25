@@ -332,6 +332,19 @@ export const INBOX_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'sm_inbox_attachments_list',
+    description:
+      "List attachments on a single item. Returns `{ inbox, item_id, attachments: [{ id, filename, content_type, size, content_id?, download_url }] }`. Use the `download_url` (relative path, hit with the same bearer token) to fetch the actual bytes — there's no MCP-side download tool because returning binary content through MCP isn't useful; always download via curl / browser / your tool of choice.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        id: { type: 'string', description: 'Item id.' },
+      },
+      required: ['inbox', 'id'],
+    },
+  },
+  {
     name: 'sm_auto_confirm_list',
     description:
       'List the Worker-global auto-confirm sender allowlist (patterns the auto-confirm hook will GET the double-opt-in URL for). Returns `{ senders: [{ pattern, source, created_at, notes? }] }`. `source: "env"` rows are seeded from the `AUTO_CONFIRM_SENDERS` env var on first boot; `source: "runtime"` rows were added via this tool / API.',
@@ -652,6 +665,14 @@ export async function handleInboxTool(
       const id = requireString(args, 'id');
       const r = await http('POST', `/inbox/${encName(inbox)}/rules/${encId(id)}/apply-retroactive`);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_rules_apply_retroactive failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_attachments_list': {
+      const inbox = requireString(args, 'inbox');
+      const id = requireString(args, 'id');
+      const r = await http('GET', `/inbox/${encName(inbox)}/items/${encId(id)}/attachments`);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_attachments_list failed', r));
       return r.body;
     }
 

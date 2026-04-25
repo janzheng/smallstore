@@ -222,6 +222,139 @@ Deno.test('inbox — two inboxes with different keyPrefix on the same adapter do
   assertEquals(await b.read('x'), null);
 });
 
+// ============================================================================
+// readAttachment
+// ============================================================================
+
+Deno.test('readAttachment — returns content + metadata for a known filename', async () => {
+  const items = new MemoryAdapter();
+  const blobs = new MemoryAdapter();
+  await blobs.set('attachments/abc/photo.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items, blobs } });
+  await inbox._ingest({
+    id: 'abc',
+    source: 'cf-email',
+    received_at: '2026-04-22T12:00:00Z',
+    body: null,
+    fields: {
+      from_email: 'a@b.com',
+      has_attachments: true,
+      attachments: [{
+        id: 'photo.png',
+        filename: 'photo.png',
+        content_type: 'image/png',
+        size: 4,
+        ref: 'attachments/abc/photo.png',
+      }],
+    },
+  });
+
+  const result = await inbox.readAttachment('abc', 'photo.png');
+  assertExists(result);
+  assertEquals(result?.attachment.content_type, 'image/png');
+  assertEquals(result?.attachment.size, 4);
+  assertEquals((result?.content as Uint8Array)[0], 0x89);
+});
+
+Deno.test('readAttachment — returns null for unknown filename (no traversal)', async () => {
+  const items = new MemoryAdapter();
+  const blobs = new MemoryAdapter();
+  // Plant a blob under a totally different path — only attachments listed
+  // in fields.attachments[] should resolve.
+  await blobs.set('attachments/abc/photo.png', new Uint8Array([1, 2, 3]));
+  await blobs.set('raw/abc.eml', 'secret raw email contents');
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items, blobs } });
+  await inbox._ingest({
+    id: 'abc',
+    source: 'cf-email',
+    received_at: '2026-04-22T12:00:00Z',
+    body: null,
+    fields: {
+      from_email: 'a@b.com',
+      attachments: [{
+        id: 'photo.png',
+        filename: 'photo.png',
+        content_type: 'image/png',
+        size: 3,
+        ref: 'attachments/abc/photo.png',
+      }],
+    },
+  });
+
+  // Filenames that aren't in attachments[] get rejected — even if a blob
+  // exists at that path. This is the path-traversal guard.
+  assertEquals(await inbox.readAttachment('abc', '../raw/abc.eml'), null);
+  assertEquals(await inbox.readAttachment('abc', 'unknown.pdf'), null);
+});
+
+Deno.test('readAttachment — returns null for unknown item', async () => {
+  const items = new MemoryAdapter();
+  const blobs = new MemoryAdapter();
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items, blobs } });
+  assertEquals(await inbox.readAttachment('does-not-exist', 'any.png'), null);
+});
+
+Deno.test('readAttachment — returns null when blobs adapter is missing', async () => {
+  const items = new MemoryAdapter();
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items } });
+  await inbox._ingest({
+    id: 'abc',
+    source: 'cf-email',
+    received_at: '2026-04-22T12:00:00Z',
+    body: null,
+    fields: {
+      from_email: 'a@b.com',
+      attachments: [{
+        id: 'photo.png',
+        filename: 'photo.png',
+        content_type: 'image/png',
+        size: 4,
+        ref: 'attachments/abc/photo.png',
+      }],
+    },
+  });
+  assertEquals(await inbox.readAttachment('abc', 'photo.png'), null);
+});
+
+Deno.test('readAttachment — returns null for item with no attachments field', async () => {
+  const items = new MemoryAdapter();
+  const blobs = new MemoryAdapter();
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items, blobs } });
+  await inbox._ingest({
+    id: 'abc',
+    source: 'cf-email',
+    received_at: '2026-04-22T12:00:00Z',
+    body: 'plain email',
+    fields: { from_email: 'a@b.com' }, // no attachments field
+  });
+  assertEquals(await inbox.readAttachment('abc', 'photo.png'), null);
+});
+
+Deno.test('readAttachment — returns null when blob is gone (partial-delete state)', async () => {
+  const items = new MemoryAdapter();
+  const blobs = new MemoryAdapter();
+  // Item references an attachment, but the blob was never set (or was
+  // half-deleted). Should fail soft, not throw.
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items, blobs } });
+  await inbox._ingest({
+    id: 'abc',
+    source: 'cf-email',
+    received_at: '2026-04-22T12:00:00Z',
+    body: null,
+    fields: {
+      from_email: 'a@b.com',
+      attachments: [{
+        id: 'gone.pdf',
+        filename: 'gone.pdf',
+        content_type: 'application/pdf',
+        size: 100,
+        ref: 'attachments/abc/gone.pdf',
+      }],
+    },
+  });
+  assertEquals(await inbox.readAttachment('abc', 'gone.pdf'), null);
+});
+
 Deno.test('inbox — keyPrefix isolates list/query/cursor/delete', async () => {
   const shared = new MemoryAdapter();
   const a = createInbox({ name: 'a', channel: 'cf-email', storage: { items: shared }, keyPrefix: 'inbox/a/' });

@@ -27,6 +27,8 @@ import type { StorageAdapter } from '../adapters/adapter.ts';
 import { decodeCursor, encodeCursor } from './cursor.ts';
 import { evaluateFilter } from './filter.ts';
 import type {
+  Attachment,
+  AttachmentReadResult,
   IngestOptions,
   Inbox as InboxInterface,
   InboxFilter,
@@ -148,6 +150,41 @@ export class Inbox implements InboxInterface {
     if (index.entries.length === 0) return encodeCursor({ at: new Date(0).toISOString(), id: '' });
     const head = index.entries[0];
     return encodeCursor(head);
+  }
+
+  /**
+   * Fetch a single attachment's raw bytes from the blobs adapter.
+   *
+   * Returns `null` if any of:
+   *   - the item doesn't exist
+   *   - the item has no `fields.attachments[]` (no attachments at all)
+   *   - the supplied filename doesn't match an entry in that array
+   *   - the inbox has no blobs adapter configured
+   *   - the blob ref points at a missing object (partial-delete state)
+   *
+   * Filename validation is by exact match against `attachment.filename` —
+   * arbitrary path components / traversal characters get rejected because
+   * they won't appear in the metadata. The actual blob key (`attachment.ref`)
+   * is the trusted lookup key, NOT the user-supplied filename.
+   */
+  async readAttachment(
+    itemId: string,
+    filename: string,
+  ): Promise<AttachmentReadResult | null> {
+    if (!this.storage.blobs) return null;
+    const item = await this.storage.items.get(this.itemKey(itemId)) as InboxItem | null;
+    if (!item) return null;
+
+    const attachments = (item.fields as any)?.attachments as Attachment[] | undefined;
+    if (!Array.isArray(attachments) || attachments.length === 0) return null;
+
+    const match = attachments.find((a) => a?.filename === filename);
+    if (!match || typeof match.ref !== 'string' || match.ref.length === 0) return null;
+
+    const content = await this.storage.blobs.get(match.ref).catch(() => null);
+    if (content === null || content === undefined) return null;
+
+    return { attachment: match, content: content as Uint8Array | string };
   }
 
   /**

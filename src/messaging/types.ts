@@ -86,6 +86,20 @@ export interface InboxItemFull extends InboxItem {
 }
 
 /**
+ * Result of `Inbox.readAttachment(itemId, filename)`. The `content` field
+ * is whatever the blobs adapter returns — typically `Uint8Array` for R2
+ * and either `Uint8Array` or `string` for `MemoryAdapter` depending on
+ * what was set. HTTP routes wrap this in a Response with the metadata's
+ * `content_type`.
+ */
+export interface AttachmentReadResult {
+  /** Attachment metadata as stored on `item.fields.attachments[]`. */
+  attachment: Attachment;
+  /** Raw bytes (or string) from the blobs adapter. */
+  content: Uint8Array | string;
+}
+
+/**
  * Attachment metadata. Binary content lives in adapter storage at `ref`.
  */
 export interface Attachment {
@@ -236,6 +250,20 @@ export interface Inbox {
 
   /** Current high-water cursor. Callers persist this to resume incremental syncs. */
   cursor(): Promise<string>;
+
+  /**
+   * Fetch a single attachment's raw bytes. Returns `null` if the item is
+   * missing, the filename isn't in the item's `fields.attachments[]`, or
+   * the inbox has no blobs adapter wired.
+   *
+   * The filename is validated against the item's metadata before the
+   * adapter read — arbitrary path components are rejected to prevent
+   * blob-store traversal.
+   */
+  readAttachment?(
+    itemId: string,
+    filename: string,
+  ): Promise<AttachmentReadResult | null>;
 
   /**
    * Ingest a parsed item. Called by the channel dispatcher; rarely called by consumers.

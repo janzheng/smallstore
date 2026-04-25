@@ -12,6 +12,8 @@
  *     POST   /inbox/:name/items            — ingest a parsed InboxItem
  *     GET    /inbox/:name                  — list newest-first (cursor, limit)
  *     GET    /inbox/:name/items/:id        — read one (?full=true to inflate)
+ *     GET    /inbox/:name/items/:id/attachments         — list attachments + download URLs
+ *     GET    /inbox/:name/items/:id/attachments/:file   — stream one attachment (?download=1 forces download)
  *     POST   /inbox/:name/query            — body = InboxFilter
  *     GET    /inbox/:name/cursor           — current head cursor
  *     DELETE /inbox/:name/items/:id        — delete one item (audit-emit later)
@@ -125,6 +127,81 @@ export function registerMessagingRoutes(
     const item = await inbox.read(id, { full });
     if (!item) return notFound(c, `item "${id}" not in inbox "${name}"`);
     return c.json({ inbox: name, item });
+  });
+
+  // --------------------------------------------------------------------------
+  // Attachments — list + download
+  // --------------------------------------------------------------------------
+  // List route returns metadata + a relative `download_url` per attachment.
+  // Download route streams the raw bytes through the Worker, gated on the
+  // bearer token and validated against the item's attachments[] (no
+  // path-traversal — only declared filenames resolve).
+  // See `.brief/attachments.md` for the full story.
+
+  app.get('/inbox/:name/items/:id/attachments', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const item = await inbox.read(id);
+    if (!item) return notFound(c, `item "${id}" not in inbox "${name}"`);
+
+    const raw = (item.fields as any)?.attachments;
+    const attachments = Array.isArray(raw) ? raw : [];
+    const result = attachments.map((a: any) => ({
+      id: a.id,
+      filename: a.filename,
+      content_type: a.content_type,
+      size: a.size,
+      content_id: a.content_id,
+      download_url: `/inbox/${encodeURIComponent(name)}/items/${encodeURIComponent(id)}/attachments/${encodeURIComponent(a.filename)}`,
+    }));
+    return c.json({ inbox: name, item_id: id, attachments: result });
+  });
+
+  app.get('/inbox/:name/items/:id/attachments/:filename', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const filenameRaw = c.req.param('filename')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    if (typeof inbox.readAttachment !== 'function') {
+      return c.json(
+        { error: 'NotImplemented', message: 'inbox does not expose readAttachment' },
+        501,
+      );
+    }
+
+    let filename: string;
+    try {
+      filename = decodeURIComponent(filenameRaw);
+    } catch {
+      filename = filenameRaw;
+    }
+
+    const result = await inbox.readAttachment(id, filename);
+    if (!result) return notFound(c, `attachment "${filename}" not found on item "${id}"`);
+
+    const { attachment, content } = result;
+    const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
+    const disposition = c.req.query('download') === '1' ? 'attachment' : 'inline';
+    // Safe filename for the Content-Disposition header — strip control
+    // chars + quotes so the header value can't be broken.
+    const safe = attachment.filename.replace(/[\x00-\x1f"\\]/g, '_');
+
+    return new Response(bytes as BodyInit, {
+      status: 200,
+      headers: {
+        'content-type': attachment.content_type || 'application/octet-stream',
+        'content-length': String(bytes.byteLength),
+        'content-disposition': `${disposition}; filename="${safe}"`,
+        // Don't cache aggressively — attachments can be replaced if the
+        // item re-ingests under the same id (rare but possible).
+        'cache-control': 'private, max-age=60',
+      },
+    });
   });
 
   app.post('/inbox/:name/query', requireAuth, async (c) => {
