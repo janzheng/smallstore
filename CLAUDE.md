@@ -2,6 +2,8 @@
 
 Deployed Worker lives at `https://smallstore.labspace.ai`. Code ships via `deno task build:npm && cd deploy && yarn deploy`.
 
+> **Just here to triage email?** Start sessions in `mailroom-inbox/` instead — that workspace has its own CLAUDE.md focused on inbox operations (read, confirm, delete, archive, manage auto-confirm patterns). This root is for *building* the Worker.
+
 ## Hitting the deployed Worker
 
 The bearer token is stored in `deploy/.env` as `SMALLSTORE_TOKEN` (gitignored — never copy the value into repo files). To query any authed route from a shell:
