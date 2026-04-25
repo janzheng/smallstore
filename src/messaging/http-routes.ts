@@ -809,8 +809,17 @@ export function registerMessagingRoutes(
       return c.json({ error: 'Conflict', message: `inbox "${name}" already exists` }, 409);
     }
 
-    const inbox = await createInbox(name, config as InboxConfig);
-    registry.register(name, inbox, config as InboxConfig, 'runtime');
+    // Runtime-created inboxes auto-namespace within their storage adapter so
+    // multiple runtime inboxes can share one D1 table without `_index` rows
+    // trampling each other. Boot-time inboxes (declared in .smallstore.json)
+    // keep the historical bare-key layout — they get a dedicated adapter.
+    const finalConfig: InboxConfig = {
+      ...(config as InboxConfig),
+      keyPrefix: (config as InboxConfig).keyPrefix ?? `inbox/${name}/`,
+    };
+
+    const inbox = await createInbox(name, finalConfig);
+    registry.register(name, inbox, finalConfig, 'runtime');
 
     const reg = registry.getRegistration(name)!;
     return c.json({ created: serializeRegistration(name, reg) }, 201);

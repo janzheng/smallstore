@@ -47,13 +47,19 @@ function buildApp(opts: { token?: string; inboxes?: Record<string, InboxConfig> 
       name,
       channel: cfg.channel,
       storage: { items: adapters.items, blobs: adapters.blobs },
+      keyPrefix: cfg.keyPrefix,
     });
   };
 
   if (opts.inboxes) {
     for (const [name, cfg] of Object.entries(opts.inboxes)) {
       // synchronous register because buildInbox here is in-memory
-      const inbox = createInbox({ name, channel: cfg.channel, storage: { items: adapters.items, blobs: adapters.blobs } });
+      const inbox = createInbox({
+        name,
+        channel: cfg.channel,
+        storage: { items: adapters.items, blobs: adapters.blobs },
+        keyPrefix: cfg.keyPrefix,
+      });
       registry.register(name, inbox, cfg, 'boot');
     }
   }
@@ -318,6 +324,105 @@ Deno.test('admin — POST /admin/inboxes rejects malformed body', async () => {
     body: JSON.stringify({ channel: 'cf-email' }), // missing name + storage
   });
   assertEquals(res.status, 400);
+});
+
+Deno.test('admin — POST /admin/inboxes auto-defaults keyPrefix to inbox/<name>/', async () => {
+  const fx = buildApp();
+
+  const create = await fx.fetch('/admin/inboxes', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({ name: 'adhoc', channel: 'cf-email', storage: 'items' }),
+  });
+  assertEquals(create.status, 201);
+
+  // Ingest one item, then peek at the underlying adapter to confirm keys
+  // landed under the auto-default namespace.
+  const post = await fx.fetch('/inbox/adhoc/items', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify(makeItem('a1', '2026-04-22T12:00:00Z')),
+  });
+  assertEquals(post.status, 200);
+
+  assertExists(await fx.adapters.items.get('inbox/adhoc/_index'));
+  assertExists(await fx.adapters.items.get('inbox/adhoc/items/a1'));
+  // Bare keys must remain untouched — that's the point.
+  assertEquals(await fx.adapters.items.get('_index'), null);
+  assertEquals(await fx.adapters.items.get('items/a1'), null);
+});
+
+Deno.test('admin — POST /admin/inboxes lets caller override keyPrefix explicitly', async () => {
+  const fx = buildApp();
+
+  const create = await fx.fetch('/admin/inboxes', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({
+      name: 'adhoc',
+      channel: 'cf-email',
+      storage: 'items',
+      keyPrefix: 'custom/ns/',
+    }),
+  });
+  assertEquals(create.status, 201);
+
+  await fx.fetch('/inbox/adhoc/items', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify(makeItem('a1', '2026-04-22T12:00:00Z')),
+  });
+
+  assertExists(await fx.adapters.items.get('custom/ns/_index'));
+  assertExists(await fx.adapters.items.get('custom/ns/items/a1'));
+  assertEquals(await fx.adapters.items.get('inbox/adhoc/_index'), null);
+});
+
+Deno.test('admin — two runtime inboxes on the same adapter do not collide', async () => {
+  const fx = buildApp();
+
+  await fx.fetch('/admin/inboxes', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({ name: 'inbox-a', channel: 'cf-email', storage: 'items' }),
+  });
+  await fx.fetch('/admin/inboxes', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({ name: 'inbox-b', channel: 'cf-email', storage: 'items' }),
+  });
+
+  await fx.fetch('/inbox/inbox-a/items', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify(makeItem('x', '2026-04-22T12:00:00Z')),
+  });
+  await fx.fetch('/inbox/inbox-b/items', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify(makeItem('y', '2026-04-22T13:00:00Z')),
+  });
+
+  const a = await (await fx.fetch('/inbox/inbox-a')).json();
+  const b = await (await fx.fetch('/inbox/inbox-b')).json();
+  assertEquals(a.items.map((i: InboxItem) => i.id), ['x']);
+  assertEquals(b.items.map((i: InboxItem) => i.id), ['y']);
+});
+
+Deno.test('admin — GET /admin/inboxes/:name surfaces the resolved keyPrefix', async () => {
+  const fx = buildApp();
+
+  await fx.fetch('/admin/inboxes', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({ name: 'adhoc', channel: 'cf-email', storage: 'items' }),
+  });
+
+  const res = await fx.fetch('/admin/inboxes/adhoc');
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  // Auto-default surfaced in the persisted config so callers can inspect it.
+  assertEquals(body.config.keyPrefix, 'inbox/adhoc/');
 });
 
 Deno.test('admin — GET /admin/channels returns registered channels', async () => {

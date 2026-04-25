@@ -168,3 +168,81 @@ Deno.test('inbox — full read inflates body_ref from blobs adapter', async () =
   const full = await inbox.read('abc', { full: true });
   assertEquals(full?.body_inflated, '<p>Hello world</p>');
 });
+
+// ============================================================================
+// keyPrefix — namespace isolation when multiple inboxes share one adapter
+// ============================================================================
+
+Deno.test('inbox — keyPrefix omitted writes bare _index + items/<id> (backwards compat)', async () => {
+  const items = new MemoryAdapter();
+  const inbox = createInbox({ name: 'mailroom', channel: 'cf-email', storage: { items } });
+
+  await inbox._ingest(makeItem('a', '2026-04-22T12:00:00Z'));
+
+  // The historical layout: keys are `_index` and `items/a` (no prefix).
+  assertExists(await items.get('_index'));
+  assertExists(await items.get('items/a'));
+  assertEquals(await items.get('inbox/mailroom/_index'), null);
+  assertEquals(await items.get('inbox/mailroom/items/a'), null);
+});
+
+Deno.test('inbox — keyPrefix prefixes _index + items/<id>', async () => {
+  const items = new MemoryAdapter();
+  const inbox = createInbox({
+    name: 'biorxiv',
+    channel: 'rss',
+    storage: { items },
+    keyPrefix: 'inbox/biorxiv/',
+  });
+
+  await inbox._ingest(makeItem('paper-1', '2026-04-22T12:00:00Z'));
+
+  // Keys live under the namespace; bare keys are untouched.
+  assertExists(await items.get('inbox/biorxiv/_index'));
+  assertExists(await items.get('inbox/biorxiv/items/paper-1'));
+  assertEquals(await items.get('_index'), null);
+  assertEquals(await items.get('items/paper-1'), null);
+});
+
+Deno.test('inbox — two inboxes with different keyPrefix on the same adapter do not collide', async () => {
+  const shared = new MemoryAdapter();
+  const a = createInbox({ name: 'a', channel: 'cf-email', storage: { items: shared }, keyPrefix: 'inbox/a/' });
+  const b = createInbox({ name: 'b', channel: 'cf-email', storage: { items: shared }, keyPrefix: 'inbox/b/' });
+
+  await a._ingest(makeItem('x', '2026-04-22T12:00:00Z'));
+  await b._ingest(makeItem('y', '2026-04-22T13:00:00Z'));
+
+  const aList = await a.list();
+  const bList = await b.list();
+  assertEquals(aList.items.map(i => i.id), ['x']);
+  assertEquals(bList.items.map(i => i.id), ['y']);
+
+  // Cross-reads return null — each inbox only sees its own namespace.
+  assertEquals(await a.read('y'), null);
+  assertEquals(await b.read('x'), null);
+});
+
+Deno.test('inbox — keyPrefix isolates list/query/cursor/delete', async () => {
+  const shared = new MemoryAdapter();
+  const a = createInbox({ name: 'a', channel: 'cf-email', storage: { items: shared }, keyPrefix: 'inbox/a/' });
+  const b = createInbox({ name: 'b', channel: 'cf-email', storage: { items: shared }, keyPrefix: 'inbox/b/' });
+
+  await a._ingest(makeItem('a1', '2026-04-22T10:00:00Z', { from_email: 'alice@a.com' }));
+  await a._ingest(makeItem('a2', '2026-04-22T11:00:00Z', { from_email: 'alice@a.com' }));
+  await b._ingest(makeItem('b1', '2026-04-22T12:00:00Z', { from_email: 'bob@b.com' }));
+
+  // Query scoped to inbox a only — bob's item must not appear.
+  const aQuery = await a.query({ fields: { from_email: 'alice@a.com' } });
+  assertEquals(aQuery.items.map(i => i.id).sort(), ['a1', 'a2']);
+
+  // Cursor on inbox a points at the head of inbox a, not inbox b.
+  const aCursor = await a.cursor();
+  const decoded = decodeCursor(aCursor);
+  assertEquals(decoded?.id, 'a2');
+
+  // Delete on inbox b removes b1 only; inbox a is untouched.
+  const removed = await b.delete('b1');
+  assertEquals(removed, true);
+  assertEquals((await a.list()).items.length, 2);
+  assertEquals((await b.list()).items.length, 0);
+});

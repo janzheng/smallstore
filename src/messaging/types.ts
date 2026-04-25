@@ -441,6 +441,17 @@ export interface InboxConfig {
 
   /** TTL in seconds (runtime-created inboxes only — gets reaped after this). */
   ttl?: number;
+
+  /**
+   * Optional key namespace prefix passed through to the Inbox class. Use to
+   * share a single storage adapter between multiple inboxes without their
+   * `_index` rows colliding (e.g. `keyPrefix: 'inbox/biorxiv/'`). When omitted
+   * for boot-time inboxes, the Inbox uses the bare `_index` + `items/<id>`
+   * layout (backwards compat). The runtime-create surface
+   * (`POST /admin/inboxes`) auto-defaults this to `inbox/<name>/` so callers
+   * don't have to think about isolation.
+   */
+  keyPrefix?: string;
 }
 
 /**

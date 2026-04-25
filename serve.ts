@@ -323,6 +323,7 @@ async function buildInboxFromConfig(name: string, cfg: InboxConfig): Promise<Ret
     name,
     channel: cfg.channel,
     storage,
+    keyPrefix: cfg.keyPrefix,
   });
 }
 

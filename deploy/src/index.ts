@@ -211,7 +211,7 @@ function buildApp(env: Env): AppHandle {
     const items = typeof ref === 'string' ? adapterByName[ref] : adapterByName[ref.items];
     const blobs = typeof ref === 'string' ? undefined : ref.blobs ? adapterByName[ref.blobs] : undefined;
     if (!items) throw new Error(`Inbox storage references unknown adapter`);
-    return createInbox({ name, channel: cfg.channel, storage: { items, blobs } });
+    return createInbox({ name, channel: cfg.channel, storage: { items, blobs }, keyPrefix: cfg.keyPrefix });
   };
 
   const mailroomConfig: InboxConfig = {

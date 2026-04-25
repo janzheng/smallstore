@@ -5,9 +5,17 @@
  * + content-addressed dedup + opaque cursor.
  *
  * Storage layout (under the items adapter):
- * - `items/<id>`  → InboxItem JSON
- * - `_index`      → JSON `{ entries: [{at, id}, ...], version: 1 }`
- *                   sorted newest-first; rebuilt on every ingest
+ * - `<keyPrefix>items/<id>`  → InboxItem JSON
+ * - `<keyPrefix>_index`      → JSON `{ entries: [{at, id}, ...], version: 1 }`
+ *                              sorted newest-first; rebuilt on every ingest
+ *
+ * `keyPrefix` defaults to '' so a single-inbox-per-adapter deployment
+ * stores at the bare `_index` and `items/<id>` keys (the historical layout).
+ * Set `keyPrefix: 'inbox/<name>/'` (or any other unique string) to
+ * namespace within a shared adapter — multiple inboxes can then back onto
+ * one D1 table without their `_index` rows trampling each other. The
+ * runtime-create surface (`POST /admin/inboxes`) auto-defaults the prefix
+ * to `inbox/<name>/` so callers don't have to think about isolation.
  *
  * Concurrency: ingest does a read-modify-write on `_index`. In Worker
  * contexts where a single email handler runs at a time per request this
@@ -52,17 +60,36 @@ export interface InboxOptions {
   channel: string;
   /** Storage handle (items + optional blobs). */
   storage: InboxStorage;
+  /**
+   * Optional namespace prefix prepended to every key this inbox writes
+   * (`<keyPrefix>_index`, `<keyPrefix>items/<id>`). Default `''` — the
+   * historical single-inbox-per-adapter layout. Set to e.g.
+   * `'inbox/biorxiv/'` to share one adapter between multiple inboxes.
+   * The blobs adapter is NOT prefixed (blob keys are content-addressed
+   * and shareable across inboxes).
+   */
+  keyPrefix?: string;
 }
 
 export class Inbox implements InboxInterface {
   readonly name: string;
   readonly channel: string;
+  readonly keyPrefix: string;
   private readonly storage: InboxStorage;
+  private readonly indexKey: string;
+  private readonly itemPrefix: string;
 
   constructor(opts: InboxOptions) {
     this.name = opts.name;
     this.channel = opts.channel;
     this.storage = opts.storage;
+    this.keyPrefix = opts.keyPrefix ?? '';
+    this.indexKey = `${this.keyPrefix}${INDEX_KEY}`;
+    this.itemPrefix = `${this.keyPrefix}${ITEM_PREFIX}`;
+  }
+
+  private itemKey(id: string): string {
+    return `${this.itemPrefix}${id}`;
   }
 
   // --------------------------------------------------------------------------
@@ -75,7 +102,7 @@ export class Inbox implements InboxInterface {
   }
 
   async read(id: string, options: ReadOptions = {}): Promise<InboxItemFull | null> {
-    const item = await this.storage.items.get(itemKey(id)) as InboxItem | null;
+    const item = await this.storage.items.get(this.itemKey(id)) as InboxItem | null;
     if (!item) return null;
     if (!options.full) return item as InboxItemFull;
 
@@ -97,7 +124,7 @@ export class Inbox implements InboxInterface {
 
     for (let i = startIdx; i < index.entries.length; i++) {
       const entry = index.entries[i];
-      const item = await this.storage.items.get(itemKey(entry.id)) as InboxItem | null;
+      const item = await this.storage.items.get(this.itemKey(entry.id)) as InboxItem | null;
       if (!item) continue;
       if (!evaluateFilter(filter, item)) continue;
       matching.push(entry);
@@ -107,7 +134,7 @@ export class Inbox implements InboxInterface {
     const hasMore = matching.length > limit;
     const page = hasMore ? matching.slice(0, limit) : matching;
     const items = await Promise.all(
-      page.map(async e => (await this.storage.items.get(itemKey(e.id))) as InboxItem),
+      page.map(async e => (await this.storage.items.get(this.itemKey(e.id))) as InboxItem),
     );
 
     return {
@@ -138,7 +165,7 @@ export class Inbox implements InboxInterface {
     const entryIdx = index.entries.findIndex((e) => e.id === id);
     if (entryIdx < 0) return false;
 
-    const existing = (await this.storage.items.get(itemKey(id))) as InboxItem | null;
+    const existing = (await this.storage.items.get(this.itemKey(id))) as InboxItem | null;
 
     // Best-effort blob cleanup before we drop the item record.
     if (existing && this.storage.blobs) {
@@ -157,9 +184,9 @@ export class Inbox implements InboxInterface {
     }
 
     // Remove item, rewrite index.
-    await this.storage.items.delete(itemKey(id));
+    await this.storage.items.delete(this.itemKey(id));
     index.entries.splice(entryIdx, 1);
-    await this.storage.items.set(INDEX_KEY, index);
+    await this.storage.items.set(this.indexKey, index);
     return true;
   }
 
@@ -167,7 +194,7 @@ export class Inbox implements InboxInterface {
     const finalItem = applyRefs(item, options.refs);
 
     if (!options.force) {
-      const existing = await this.storage.items.get(itemKey(finalItem.id));
+      const existing = await this.storage.items.get(this.itemKey(finalItem.id));
       if (existing) return existing as InboxItem;
     }
 
@@ -180,7 +207,7 @@ export class Inbox implements InboxInterface {
       }
     }
 
-    await this.storage.items.set(itemKey(finalItem.id), finalItem);
+    await this.storage.items.set(this.itemKey(finalItem.id), finalItem);
     await this.appendIndex({ at: finalItem.received_at, id: finalItem.id });
     return finalItem;
   }
@@ -190,7 +217,7 @@ export class Inbox implements InboxInterface {
   // --------------------------------------------------------------------------
 
   private async loadIndex(): Promise<IndexFile> {
-    const raw = await this.storage.items.get(INDEX_KEY) as IndexFile | null;
+    const raw = await this.storage.items.get(this.indexKey) as IndexFile | null;
     if (!raw || !Array.isArray(raw.entries)) {
       return { entries: [], version: INDEX_VERSION };
     }
@@ -202,7 +229,7 @@ export class Inbox implements InboxInterface {
     if (index.entries.some(e => e.id === entry.id)) return; // already indexed
     index.entries.push(entry);
     index.entries.sort(compareNewestFirst);
-    await this.storage.items.set(INDEX_KEY, index);
+    await this.storage.items.set(this.indexKey, index);
   }
 
   private async paginateAndHydrate(
@@ -218,7 +245,7 @@ export class Inbox implements InboxInterface {
     const page = hasMore ? slice.slice(0, limit) : slice;
 
     const items = await Promise.all(
-      page.map(async e => (await this.storage.items.get(itemKey(e.id))) as InboxItem),
+      page.map(async e => (await this.storage.items.get(this.itemKey(e.id))) as InboxItem),
     );
 
     return {
@@ -240,10 +267,6 @@ export function createInbox(opts: InboxOptions): Inbox {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-function itemKey(id: string): string {
-  return `${ITEM_PREFIX}${id}`;
-}
 
 function compareNewestFirst(a: IndexEntry, b: IndexEntry): number {
   if (a.at !== b.at) return a.at < b.at ? 1 : -1;
