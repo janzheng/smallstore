@@ -76,7 +76,9 @@ export interface CreateEmailHandlerOptions {
  * Build an `email()` handler bound to the given registry. Reusable across
  * Workers if you have multiple deployments sharing the same registry shape.
  */
-export function createEmailHandler(opts: CreateEmailHandlerOptions) {
+export function createEmailHandler(
+  opts: CreateEmailHandlerOptions,
+): (msg: ForwardableEmailMessage, env?: unknown, ctx?: unknown) => Promise<void> {
   const channelName = opts.channelName ?? 'cf-email';
   const channel = new CloudflareEmailChannel();
   const log = opts.log ?? ((m, extra) => console.log(`[email] ${m}`, extra ?? ''));

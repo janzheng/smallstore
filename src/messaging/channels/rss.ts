@@ -170,7 +170,7 @@ export class RssChannel implements Channel<RssInput, RssConfig> {
   }
 }
 
-export const rssChannel = new RssChannel();
+export const rssChannel: RssChannel = new RssChannel();
 
 // ============================================================================
 // Feed parsing

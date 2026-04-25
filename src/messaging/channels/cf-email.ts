@@ -375,4 +375,4 @@ function detectAutoReply(parsed: any, autoSubmitted: string | undefined): string
 // Singleton + registration
 // ============================================================================
 
-export const cloudflareEmailChannel = new CloudflareEmailChannel();
+export const cloudflareEmailChannel: CloudflareEmailChannel = new CloudflareEmailChannel();

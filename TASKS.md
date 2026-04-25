@@ -97,8 +97,8 @@ See `TASKS-MESSAGING.md` § Later for the full deferred list (read/unread state,
 
 ### Publishing + infra
 
-- [ ] Publish to npm (`deno task build:npm && cd dist && npm publish`) #npm-publish
-- [ ] Test and validate npm build works in Node.js projects #npm-validate
+- [?] **npm publish — PARKED indefinitely.** Smallstore is JSR-first; the dist build (`deno task build:npm`) is Node-compatible and the Worker already consumes it via `file:../dist`, so npm-shape correctness is exercised. But there's no real Node consumer asking for it on the registry today. Promote when a real Node consumer materializes — `cd dist && npm publish` is the one-shot, peerDeps split is already correct. Do NOT surface as a default next-step. #npm-publish #parked
+- [?] **npm validation in Node.js projects** — same trigger as the publish task above #npm-validate #parked
 - [ ] Migrate coverflow-workers into smallstore-owned worker `-> foxfire .brief/smallstore-workers-takeover.md` #infra
 
 ### Known issues
