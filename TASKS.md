@@ -8,12 +8,13 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ### Polish session — SHIPPED 2026-04-24
 
-Five back-to-back small features, all live at `smallstore.labspace.ai`. Detail in area files (`TASKS-MESSAGING.md` + below).
+Seven back-to-back small features, all live at `smallstore.labspace.ai`; `@yawnxyz/smallstore@0.2.0` published to JSR. Detail in area files (`TASKS-MESSAGING.md` + below).
 
 - [*] **`Inbox.keyPrefix` option** — runtime inboxes now namespace within a shared adapter (`inbox/<name>/` auto-default on `POST /admin/inboxes`). Boot-time inboxes (mailroom/biorxiv/podcasts) keep bare `_index` + `items/<id>` keys — backwards-compat. Detail: `TASKS-MESSAGING.md § Inbox keyPrefix option`. Deploy `718c083d` #inbox-keyprefix-isolation
 - [*] **Runtime-configurable AUTO_CONFIRM_SENDERS** — D1-backed allowlist + admin API + MCP tools (`sm_auto_confirm_list/add/remove`); env var seeds once-per-pattern (sentinel-tracked, runtime delete sticks across cold starts). Detail: `TASKS-MESSAGING.md § Runtime-configurable AUTO_CONFIRM_SENDERS`. Deploy `46a93db3` #mailroom-auto-confirm-runtime-config
-- [*] **Plugin discipline — aws-sdk lazy-load** — applied postal-mime recipe to both consumers (`src/blob-middleware/resolver.ts` + `src/adapters/r2-direct.ts`). aws-sdk dropped from `dist/package.json` `dependencies` → `peerDependencies (optional)` via the postBuild hook. Detail: `TASKS.md § Plugin discipline — adapter-level reshape` below #plugin-discipline #blob-middleware-aws-lazy #r2-direct-lazy
+- [*] **Plugin discipline — full lazy-load sweep** — applied postal-mime recipe to all four remaining adapter SDKs (aws-sdk in `src/blob-middleware/resolver.ts` + `src/adapters/r2-direct.ts`; `@notionhq/client` in `src/clients/notion/notionModern.ts`; `unstorage` in `src/adapters/unstorage.ts`). Combined with the postBuild stripper, **`dist/package.json` `dependencies` is now `{}`** — every adapter SDK is an optional peerDep. Detail: `TASKS.md § Plugin discipline — adapter-level reshape` below #plugin-discipline #blob-middleware-aws-lazy #r2-direct-lazy #notion-lazy #unstorage-lazy
 - [*] **Attachments retrieval** — capture path was already live; new `Inbox.readAttachment(itemId, filename)` + `GET /inbox/:name/items/:id/attachments[/:filename]` (Worker-streamed, path-traversal guarded) + `sm_inbox_attachments_list`. Brief: `.brief/attachments.md`. Detail: `TASKS-MESSAGING.md § Attachment retrieval`. Deploy `219d88a4` #messaging #attachments
+- [*] **JSR publish 0.2.0** — caught up four months of shipped work on the registry. JSR jumped from `0.1.11` (2026-04-22) → `0.2.0`. Three slow-type fixes needed at the cf-email/rss channel exports + `createEmailHandler` return type. https://jsr.io/@yawnxyz/smallstore@0.2.0 #jsr-publish
 - [*] **Sheetlog patch verifier + Bug #2/#4 LIVE** — earlier in the day, before the session-of-five above; tracked separately at `TASKS.md § Known issues`
 
 ### Mailroom — annotation layer — SHIPPED 2026-04-24
