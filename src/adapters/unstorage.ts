@@ -7,11 +7,54 @@
  * Phase 3.1: Config Routing & Unstorage Integration
  */
 
-import { createStorage } from 'npm:unstorage@^1.17.0';
-import upstashDriver from 'npm:unstorage@^1.17.0/drivers/upstash';
 import type { StorageAdapter, AdapterCapabilities } from './adapter.ts';
 import { resolveUpstashEnv } from '../../config.ts';
 import { debug } from '../utils/debug.ts';
+
+// ============================================================================
+// unstorage lazy-load
+// ============================================================================
+//
+// Same recipe as `src/adapters/r2-direct.ts` for aws-sdk: dynamic import
+// + module-level cache + helpful error. The `unstorage` package and its
+// `drivers/upstash` entry are declared as optional peerDependencies in
+// the npm dist — consumers using only Memory/D1/R2-binding/Notion don't
+// pay for the unstorage install.
+//
+// `any` typing on the cache slots is intentional — `typeof import(...)`
+// looks like a static import to dnt and would re-pin unstorage into
+// `dependencies` regardless of the peerDeps override.
+
+let _UnstorageModule: any | undefined;
+let _UpstashDriverModule: any | undefined;
+
+async function loadUnstorage(): Promise<any> {
+  if (_UnstorageModule) return _UnstorageModule;
+  try {
+    _UnstorageModule = await import('unstorage');
+    return _UnstorageModule;
+  } catch (err) {
+    throw new Error(
+      "The unstorage adapter requires 'unstorage'. Install it:\n" +
+        "  npm install unstorage\n" +
+        `Original error: ${(err as Error)?.message ?? err}`,
+    );
+  }
+}
+
+async function loadUpstashDriver(): Promise<any> {
+  if (_UpstashDriverModule) return _UpstashDriverModule;
+  try {
+    _UpstashDriverModule = await import('unstorage/drivers/upstash');
+    return _UpstashDriverModule;
+  } catch (err) {
+    throw new Error(
+      "The unstorage upstash driver requires 'unstorage'. Install it:\n" +
+        "  npm install unstorage\n" +
+        `Original error: ${(err as Error)?.message ?? err}`,
+    );
+  }
+}
 
 /**
  * Supported unstorage drivers
@@ -74,17 +117,17 @@ export class UnstorageAdapter implements StorageAdapter {
         // Use provided options or read from shared resolver
         upstashConfig.url = config.options?.url || env.url;
         upstashConfig.token = config.options?.token || env.token;
-        
+
         // Support base (namespace) option
         if (config.options?.base) {
           upstashConfig.base = config.options.base;
         }
-        
+
         // Support default TTL
         if (config.options?.ttl) {
           upstashConfig.ttl = config.options.ttl;
         }
-        
+
         // Validate credentials
         if (!upstashConfig.url || !upstashConfig.token) {
           throw new Error(
@@ -92,10 +135,17 @@ export class UnstorageAdapter implements StorageAdapter {
             'UPSTASH_REDIS_REST_TOKEN env vars, or pass url/token in options.'
           );
         }
-        
-        return createStorage({
-          driver: (upstashDriver as any)(upstashConfig),
-        });
+
+        // Was sync before lazy-load; now async like the CF branches.
+        // _storageReady normalizes the wait downstream.
+        return (async () => {
+          const { createStorage } = await loadUnstorage();
+          const upstashMod = await loadUpstashDriver();
+          const upstashDriver = upstashMod.default ?? upstashMod;
+          return createStorage({
+            driver: (upstashDriver as any)(upstashConfig),
+          });
+        })();
       }
       
       case 'cloudflare-kv': {
@@ -106,6 +156,7 @@ export class UnstorageAdapter implements StorageAdapter {
         // Dynamic import for Cloudflare Workers environment
         return (async () => {
           try {
+            const { createStorage } = await loadUnstorage();
             const { default: cloudflareKVDriver } = await import(
               'unstorage/drivers/cloudflare-kv-binding'
             );
@@ -122,15 +173,16 @@ export class UnstorageAdapter implements StorageAdapter {
           }
         })();
       }
-      
+
       case 'cloudflare-r2': {
         if (!config.options?.binding) {
           throw new Error('Cloudflare R2 requires binding in options');
         }
-        
+
         // Dynamic import for Cloudflare Workers environment
         return (async () => {
           try {
+            const { createStorage } = await loadUnstorage();
             const { default: cloudflareR2Driver } = await import(
               'unstorage/drivers/cloudflare-r2-binding'
             );

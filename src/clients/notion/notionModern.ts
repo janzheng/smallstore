@@ -17,13 +17,41 @@
  * We use `NotionApiResponse` for the most common pattern (objects with .id, .results, etc).
  */
 
-import { Client } from '@notionhq/client';
+import type { Client } from '@notionhq/client';
 import {
   resolveNotionApiKey,
   resolveNotionVersion,
   cleanNotionId,
   formatNotionIdWithDashes
 } from "./helpers.ts";
+
+// ============================================================================
+// Notion SDK lazy-load
+// ============================================================================
+//
+// Same recipe as `src/adapters/r2-direct.ts` for aws-sdk: dynamic
+// import + module-level cache + helpful error. `@notionhq/client` is
+// declared as an optional peerDependency in the npm dist — consumers
+// using only Memory/D1/R2/Sheetlog don't pay for the Notion SDK install.
+//
+// The `Client` type is imported with `import type` (purely erased) so the
+// runtime emit has no static reference to the package.
+
+let _NotionModule: any | undefined;
+
+async function loadNotionClient(): Promise<any> {
+  if (_NotionModule) return _NotionModule;
+  try {
+    _NotionModule = await import('@notionhq/client');
+    return _NotionModule;
+  } catch (err) {
+    throw new Error(
+      "The Notion adapter requires '@notionhq/client'. Install it:\n" +
+        "  npm install @notionhq/client\n" +
+        `Original error: ${(err as Error)?.message ?? err}`,
+    );
+  }
+}
 import {
   transformCreatePageParams,
   transformUpdatePageParams,
@@ -81,26 +109,47 @@ export interface NotionModernClientOptions {
  * 3. Environment variables
  */
 export class NotionModernClient {
-  private client: Client;
+  // The Notion SDK is loaded lazily — `_client` is built on first call to
+  // `_resolveClient()` and cached. The auth secret is captured at
+  // construction so the lazy build can fire without re-resolving.
+  private _client?: Client;
+  private notionSecret: string;
   private notionVersion: string;
   private autoTransform: boolean;
   private dataSourceCache: Map<string, string> = new Map();
 
   constructor(options: NotionModernClientOptions = {}) {
     // Resolve API key using helper (supports params > keyResolver > env)
-    const secret = resolveNotionApiKey(options, options.keyResolver);
-    
+    this.notionSecret = resolveNotionApiKey(options, options.keyResolver);
+
     // Resolve version using helper (optional, will use default if not found)
     const resolvedVersion = resolveNotionVersion(options, options.keyResolver);
     this.notionVersion = resolvedVersion || '2025-09-03'; // Latest version with multi-source databases
-    
+
     // Auto-transform is enabled by default
     this.autoTransform = options.autoTransform !== false;
-    
-    this.client = new Client({ 
-      auth: secret,
-      notionVersion: this.notionVersion
-    });
+  }
+
+  /**
+   * Build (or return cached) underlying Notion SDK client. Runs the
+   * dynamic import on first call; subsequent calls return the same
+   * instance. Internal helper — public callers use `getClient()`.
+   */
+  private async _resolveClient(): Promise<Client> {
+    if (this._client) return this._client;
+    const mod = await loadNotionClient();
+    const ClientCtor = mod.Client ?? mod.default?.Client ?? mod.default;
+    if (typeof ClientCtor !== 'function') {
+      throw new Error(
+        "Loaded '@notionhq/client' but couldn't resolve the Client constructor. " +
+          'SDK export shape may have changed; check the installed version.',
+      );
+    }
+    this._client = new ClientCtor({
+      auth: this.notionSecret,
+      notionVersion: this.notionVersion,
+    }) as Client;
+    return this._client;
   }
 
   // ============================================================================
@@ -112,7 +161,7 @@ export class NotionModernClient {
    */
   async getPage(page_id: string): Promise<PageObjectResponse | PartialPageObjectResponse> {
     const cleanId = formatNotionIdWithDashes(page_id);
-    return await this.client.pages.retrieve({ page_id: cleanId });
+    return await (await this._resolveClient()).pages.retrieve({ page_id: cleanId });
   }
 
   /**
@@ -127,7 +176,7 @@ export class NotionModernClient {
       cleanedParams = transformCreatePageParams(cleanedParams);
     }
     
-    const page = await this.client.pages.create(cleanedParams);
+    const page = await (await this._resolveClient()).pages.create(cleanedParams);
     
     // Normalize the response for API v2025-09-03+
     // The API returns parent.type = "data_source_id" but tools expect "database_id"
@@ -161,7 +210,7 @@ export class NotionModernClient {
       cleanedParams = transformUpdatePageParams(cleanedParams);
     }
     
-    return await this.client.pages.update(cleanedParams);
+    return await (await this._resolveClient()).pages.update(cleanedParams);
   }
 
   /**
@@ -169,7 +218,7 @@ export class NotionModernClient {
    */
   async archivePage(page_id: string): Promise<PageObjectResponse | PartialPageObjectResponse> {
     const cleanId = formatNotionIdWithDashes(page_id);
-    return await this.client.pages.update({
+    return await (await this._resolveClient()).pages.update({
       page_id: cleanId,
       in_trash: true
     } as any);
@@ -180,7 +229,7 @@ export class NotionModernClient {
    */
   async restorePage(page_id: string): Promise<PageObjectResponse | PartialPageObjectResponse> {
     const cleanId = formatNotionIdWithDashes(page_id);
-    return await this.client.pages.update({
+    return await (await this._resolveClient()).pages.update({
       page_id: cleanId,
       in_trash: false
     } as any);
@@ -195,7 +244,7 @@ export class NotionModernClient {
    */
   async getDatabase(database_id: string): Promise<GetDatabaseResponse> {
     const cleanId = formatNotionIdWithDashes(database_id);
-    return await this.client.databases.retrieve({ database_id: cleanId });
+    return await (await this._resolveClient()).databases.retrieve({ database_id: cleanId });
   }
 
   /**
@@ -212,7 +261,7 @@ export class NotionModernClient {
     if (cached) return cached;
 
     try {
-      const db = await this.client.databases.retrieve({ database_id: cleanId }) as NotionApiResponse;
+      const db = await (await this._resolveClient()).databases.retrieve({ database_id: cleanId }) as NotionApiResponse;
       const dsId = db.data_sources?.[0]?.id;
       if (dsId) {
         this.dataSourceCache.set(cleanId, dsId);
@@ -241,23 +290,23 @@ export class NotionModernClient {
     // SDK v5+ removed databases.query; it's now dataSources.query.
     // For older API versions (< 2025), dataSources endpoint doesn't exist server-side,
     // so we fall back to a raw POST to /v1/databases/{id}/query.
-    const useDataSources = this.notionVersion >= '2025-01-01' && (this.client as any).dataSources?.query;
+    const useDataSources = this.notionVersion >= '2025-01-01' && ((await this._resolveClient()) as any).dataSources?.query;
 
     if (useDataSources) {
       // v5 split databases (containers) from data sources (tables). Resolve the
       // database_id to its first data_source_id; fall back to the raw id if the
       // caller already passed a data_source_id.
       const dataSourceId = (await this.resolveDataSourceId(cleanId)) ?? cleanId;
-      return await (this.client as any).dataSources.query({
+      return await ((await this._resolveClient()) as any).dataSources.query({
         data_source_id: dataSourceId,
         filter: params.filter,
         sorts: params.sorts,
         start_cursor: params.start_cursor,
         page_size: params.page_size,
       });
-    } else if ((this.client as any).databases?.query) {
+    } else if (((await this._resolveClient()) as any).databases?.query) {
       // SDK v4 path
-      return await (this.client as any).databases.query({
+      return await ((await this._resolveClient()) as any).databases.query({
         database_id: cleanId,
         filter: params.filter,
         sorts: params.sorts,
@@ -272,7 +321,7 @@ export class NotionModernClient {
       if (params.start_cursor) body.start_cursor = params.start_cursor;
       if (params.page_size) body.page_size = params.page_size;
 
-      return await (this.client as any).request({
+      return await ((await this._resolveClient()) as any).request({
         path: `databases/${cleanId}/query`,
         method: 'post',
         body,
@@ -311,7 +360,7 @@ export class NotionModernClient {
       const { properties, ...dbParamsWithoutProps } = cleanedParams;
       
       // Create database (gets a default data source with "Name" title property)
-      const database = await this.client.databases.create(dbParamsWithoutProps as any);
+      const database = await (await this._resolveClient()).databases.create(dbParamsWithoutProps as any);
 
       // Get the auto-created data source ID
       const dbResponse = database as NotionApiResponse;
@@ -326,7 +375,7 @@ export class NotionModernClient {
         // If user provided a "Title" property, rename the default "Name" to match
         if (Title) {
           try {
-            await (this.client as any).dataSources.update({
+            await ((await this._resolveClient()) as any).dataSources.update({
               data_source_id: dataSourceId,
               properties: {
                 "Name": {
@@ -340,7 +389,7 @@ export class NotionModernClient {
           } catch (error: any) {
             // Fallback: try adding just the other properties without title rename
             try {
-              await (this.client as any).dataSources.update({
+              await ((await this._resolveClient()) as any).dataSources.update({
                 data_source_id: dataSourceId,
                 properties: propertiesWithoutTitle
               } as any);
@@ -353,7 +402,7 @@ export class NotionModernClient {
         } else {
           // No Title property, just add the others
           try {
-            await (this.client as any).dataSources.update({
+            await ((await this._resolveClient()) as any).dataSources.update({
               data_source_id: dataSourceId,
               properties: propertiesWithoutTitle
             } as any);
@@ -388,7 +437,7 @@ export class NotionModernClient {
       return result;
     } else {
       // Older API versions: create database with properties directly
-      return await this.client.databases.create(cleanedParams);
+      return await (await this._resolveClient()).databases.create(cleanedParams);
     }
   }
 
@@ -406,7 +455,7 @@ export class NotionModernClient {
       cleanedParams = transformUpdateDatabaseParams(cleanedParams);
     }
     
-    return await this.client.databases.update(cleanedParams);
+    return await (await this._resolveClient()).databases.update(cleanedParams);
   }
 
   // ============================================================================
@@ -428,7 +477,7 @@ export class NotionModernClient {
       ...params,
       data_source_id: formatNotionIdWithDashes(params.data_source_id)
     };
-    return await (this.client as any).dataSources.query(cleanedParams);
+    return await ((await this._resolveClient()) as any).dataSources.query(cleanedParams);
   }
 
   /**
@@ -447,7 +496,7 @@ export class NotionModernClient {
    */
   async getDataSource(dataSourceId: string): Promise<any> {
     const cleanId = formatNotionIdWithDashes(dataSourceId);
-    return await (this.client as any).dataSources.retrieve({ data_source_id: cleanId });
+    return await ((await this._resolveClient()) as any).dataSources.retrieve({ data_source_id: cleanId });
   }
 
   // ============================================================================
@@ -459,7 +508,7 @@ export class NotionModernClient {
    */
   async getBlock(block_id: string): Promise<BlockObjectResponse | PartialBlockObjectResponse> {
     const cleanId = formatNotionIdWithDashes(block_id);
-    return await this.client.blocks.retrieve({ block_id: cleanId });
+    return await (await this._resolveClient()).blocks.retrieve({ block_id: cleanId });
   }
 
   /**
@@ -474,7 +523,7 @@ export class NotionModernClient {
       ...params,
       block_id: formatNotionIdWithDashes(params.block_id)
     };
-    const response = await this.client.blocks.children.list(cleanedParams);
+    const response = await (await this._resolveClient()).blocks.children.list(cleanedParams);
     // Convert the response to match QueryDataSourceResponse format
     return response as any;
   }
@@ -512,7 +561,7 @@ export class NotionModernClient {
     // Notion API limit: max 100 blocks per append call
     const NOTION_BLOCK_LIMIT = 100;
     if (params.children.length <= NOTION_BLOCK_LIMIT) {
-      const response = await this.client.blocks.children.append({
+      const response = await (await this._resolveClient()).blocks.children.append({
         block_id: blockId,
         children: params.children,
         ...firstPositionArg,
@@ -524,7 +573,7 @@ export class NotionModernClient {
     let lastResponse: any;
     for (let i = 0; i < params.children.length; i += NOTION_BLOCK_LIMIT) {
       const batch = params.children.slice(i, i + NOTION_BLOCK_LIMIT);
-      lastResponse = await this.client.blocks.children.append({
+      lastResponse = await (await this._resolveClient()).blocks.children.append({
         block_id: blockId,
         children: batch,
         ...(i === 0 ? firstPositionArg : {}),
@@ -544,7 +593,7 @@ export class NotionModernClient {
       ...params,
       block_id: formatNotionIdWithDashes(params.block_id)
     };
-    return await this.client.blocks.update(cleanedParams);
+    return await (await this._resolveClient()).blocks.update(cleanedParams);
   }
 
   /**
@@ -552,7 +601,7 @@ export class NotionModernClient {
    */
   async deleteBlock(block_id: string): Promise<BlockObjectResponse | PartialBlockObjectResponse> {
     const cleanId = formatNotionIdWithDashes(block_id);
-    return await this.client.blocks.update({
+    return await (await this._resolveClient()).blocks.update({
       block_id: cleanId,
       in_trash: true
     } as any);
@@ -569,7 +618,7 @@ export class NotionModernClient {
     start_cursor?: string;
     page_size?: number;
   }): Promise<QueryDataSourceResponse> {
-    const response = await this.client.users.list(params || {});
+    const response = await (await this._resolveClient()).users.list(params || {});
     // Convert the response to match QueryDataSourceResponse format
     return response as any;
   }
@@ -579,7 +628,7 @@ export class NotionModernClient {
    */
   async getUser(user_id: string): Promise<any> {
     const cleanId = formatNotionIdWithDashes(user_id);
-    return await this.client.users.retrieve({ user_id: cleanId });
+    return await (await this._resolveClient()).users.retrieve({ user_id: cleanId });
   }
 
   // ============================================================================
@@ -602,7 +651,7 @@ export class NotionModernClient {
     start_cursor?: string;
     page_size?: number;
   }): Promise<QueryDataSourceResponse> {
-    const response = await this.client.search(params as any || {});
+    const response = await (await this._resolveClient()).search(params as any || {});
     // Convert the response to match QueryDataSourceResponse format
     return response as any;
   }
@@ -623,7 +672,7 @@ export class NotionModernClient {
       ...params,
       block_id: formatNotionIdWithDashes(params.block_id)
     };
-    const response = await this.client.comments.list(cleanedParams);
+    const response = await (await this._resolveClient()).comments.list(cleanedParams);
     // Convert the response to match QueryDataSourceResponse format
     return response as any;
   }
@@ -663,7 +712,7 @@ export class NotionModernClient {
       commentParams.discussion_id = params.discussion_id;
     }
     
-    return await this.client.comments.create(commentParams);
+    return await (await this._resolveClient()).comments.create(commentParams);
   }
 
   // ============================================================================
@@ -736,10 +785,14 @@ export class NotionModernClient {
   // ============================================================================
 
   /**
-   * Get the underlying Notion client for advanced usage
+   * Get the underlying Notion client for advanced usage.
+   *
+   * Now async — the SDK is lazy-loaded so the first call awaits a
+   * dynamic import; subsequent calls return the cached instance.
+   * Existing callers using sync access need an `await` on this.
    */
-  getClient(): Client {
-    return this.client;
+  async getClient(): Promise<Client> {
+    return await this._resolveClient();
   }
 
   /**

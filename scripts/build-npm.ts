@@ -77,22 +77,23 @@ await build({
       node: ">=18.0.0",
     },
     dependencies: {
-      "@notionhq/client": "^5.16.0",
-      "unstorage": "^1.17.0",
+      // None at module level — every adapter SDK is now an optional peer
+      // dep, lazy-loaded on first use with a helpful "install X" error
+      // if missing. dnt auto-adds anything from the import map to
+      // `dependencies`; the postBuild hook below strips those entries so
+      // npm sees only the peerDeps placement.
     },
     peerDependencies: {
       "hono": ">=4.0.0",
       "postal-mime": ">=2.0.0",
       "fast-xml-parser": ">=4.5.0",
-      // aws-sdk is needed only by the r2-direct adapter + the r2-direct
-      // backend in blob-middleware. Both lazy-load via `await import(...)`
-      // and throw a helpful "install @aws-sdk/..." error if missing.
-      // Consumers using only Memory/D1/R2-binding/Notion don't pay for
-      // the SDK install. dnt always adds these to `dependencies` because
-      // the import map references them — the postBuild hook below
-      // strips them so npm sees only the peerDeps placement.
+      // aws-sdk: r2-direct adapter + blob-middleware r2-direct backend.
       "@aws-sdk/client-s3": ">=3.0.0",
       "@aws-sdk/s3-request-presigner": ">=3.0.0",
+      // Notion: notion adapter + src/clients/notion/notionModern.
+      "@notionhq/client": ">=5.0.0",
+      // unstorage: unstorage adapter (upstash + cloudflare-kv/r2 driver wrappers).
+      "unstorage": ">=1.0.0",
     },
     peerDependenciesMeta: {
       "hono": { optional: true },
@@ -100,6 +101,8 @@ await build({
       "fast-xml-parser": { optional: true },
       "@aws-sdk/client-s3": { optional: true },
       "@aws-sdk/s3-request-presigner": { optional: true },
+      "@notionhq/client": { optional: true },
+      "unstorage": { optional: true },
     },
     optionalDependencies: {
       "@zvec/zvec": "^0.2.1",
@@ -187,6 +190,15 @@ await build({
     // lazy-load via `await import` and throw a helpful install error).
     delete pkg.dependencies?.["@aws-sdk/client-s3"];
     delete pkg.dependencies?.["@aws-sdk/s3-request-presigner"];
+
+    // Remove @notionhq/client from dependencies (optional peer — only needed
+    // by the notion adapter + clients/notion/notionModern; lazy-loaded on
+    // first NotionModernClient method call).
+    delete pkg.dependencies?.["@notionhq/client"];
+
+    // Remove unstorage from dependencies (optional peer — only needed by
+    // the unstorage adapter; lazy-loaded inside createUnstorageInstance).
+    delete pkg.dependencies?.["unstorage"];
 
     // Remove @zvec/zvec from dependencies, keep in optionalDependencies
     delete pkg.dependencies?.["@zvec/zvec"];
