@@ -29,6 +29,7 @@
  *
  *   Admin surface:
  *     POST   /admin/inboxes                — create a runtime inbox
+ *     POST   /admin/inboxes/:name/replay   — re-run a registered hook over filtered items (retroactive backfill)
  *     GET    /admin/inboxes                — list all inboxes (registrations)
  *     GET    /admin/inboxes/:name          — get one registration
  *     DELETE /admin/inboxes/:name          — remove an inbox
@@ -96,13 +97,26 @@ export interface RegisterMessagingRoutesOptions {
    * when any registered webhook peer uses HMAC verification.
    */
   resolveHmacSecret?: (envName: string) => string | undefined;
+  /**
+   * Optional hook lookup — when provided, enables `POST /admin/inboxes/:name/replay`.
+   * The factory receives the inbox name + a hook name and returns the
+   * registered hook function (or undefined when the inbox has no hook by
+   * that name). Powers the retroactive backfill system (see
+   * `.brief/forward-notes-and-newsletter-profiles.md` Phase 3): re-running
+   * a registered hook over filtered existing items is one curl call, not a
+   * one-off script.
+   */
+  replayHookFor?: (
+    inboxName: string,
+    hookName: string,
+  ) => import('./types.ts').PreIngestHook | undefined;
 }
 
 export function registerMessagingRoutes(
   app: Hono<any>,
   opts: RegisterMessagingRoutesOptions,
 ): void {
-  const { registry, requireAuth, createInbox, senderIndexFor, rulesStoreFor, autoConfirmSendersStore, webhookConfigFor, resolveHmacSecret } = opts;
+  const { registry, requireAuth, createInbox, senderIndexFor, rulesStoreFor, autoConfirmSendersStore, webhookConfigFor, resolveHmacSecret, replayHookFor } = opts;
 
   // --------------------------------------------------------------------------
   // Per-inbox surface
@@ -1173,6 +1187,131 @@ export function registerMessagingRoutes(
 
   app.get('/admin/channels', requireAuth, (c) => {
     return c.json({ channels: listChannels() });
+  });
+
+  // --------------------------------------------------------------------------
+  // Hook replay — retroactive field backfill
+  //
+  // POST /admin/inboxes/:name/replay
+  //   Body: { hook: 'forward-detect' | ..., filter?: InboxFilter, dry_run?: boolean, limit?: number }
+  //
+  // Re-runs a registered hook over existing items matching `filter`. For each
+  // verdict that's an item, merges fields + unions labels via fields_only
+  // ingest. Identity (id/received_at/source) preserved; index untouched. The
+  // generic version of `RulesStore.applyRetroactive` — works on any registered
+  // hook. See `.brief/forward-notes-and-newsletter-profiles.md` Phase 3.
+  //
+  // Response shape:
+  //   { inbox, hook, dry_run, scanned, matched, applied, skipped: { drop, quarantine },
+  //     errors: [{ id, message }], samples?: [{ id, before_fields, after_fields, added_labels }] }
+  //
+  // dry_run=true: no writes; samples populated with up to 10 representative diffs.
+  // --------------------------------------------------------------------------
+
+  app.post('/admin/inboxes/:name/replay', requireAuth, async (c) => {
+    const inboxName = c.req.param('name')!;
+    const inbox = registry.get(inboxName);
+    if (!inbox) return notFound(c, `inbox "${inboxName}" not registered`);
+
+    if (!replayHookFor) {
+      return c.json({ error: 'NotImplemented', message: 'replayHookFor not provided' }, 501);
+    }
+
+    const body = await readJson(c);
+    const hookName = typeof body?.hook === 'string' ? body.hook : null;
+    if (!hookName) return badRequest(c, 'body.hook (string) required');
+
+    const hook = replayHookFor(inboxName, hookName);
+    if (!hook) {
+      return notFound(
+        c,
+        `no hook "${hookName}" registered on inbox "${inboxName}"`,
+      );
+    }
+
+    const filter: InboxFilter = (body && typeof body.filter === 'object' && body.filter)
+      ? body.filter
+      : {};
+    const dryRun = body?.dry_run === true;
+    const limit = parseLimit(body?.limit) ?? 10_000;
+
+    // Pull all matching items (no cursor; replay is bounded by limit).
+    const queryResult = await inbox.query(filter, { limit });
+    const matched = queryResult.items;
+
+    let applied = 0;
+    let dropCount = 0;
+    let quarantineCount = 0;
+    const errors: Array<{ id: string; message: string }> = [];
+    const samples: Array<{
+      id: string;
+      added_fields: Record<string, unknown>;
+      added_labels: string[];
+    }> = [];
+
+    const ctx = { channel: inbox.channel, registration: inboxName };
+
+    const anyInbox = inbox as unknown as {
+      _ingest: (
+        item: import('./types.ts').InboxItem,
+        opts?: import('./types.ts').IngestOptions,
+      ) => Promise<import('./types.ts').InboxItem>;
+    };
+
+    for (const item of matched) {
+      try {
+        const verdict = await hook(item, ctx);
+        if (verdict === 'accept') continue;
+        if (verdict === 'drop') {
+          dropCount++;
+          continue;
+        }
+        if (verdict === 'quarantine') {
+          quarantineCount++;
+          continue;
+        }
+        // Verdict is an updated InboxItem — extract diff.
+        const updatedItem = verdict as import('./types.ts').InboxItem;
+        const beforeFields = (item.fields ?? {}) as Record<string, unknown>;
+        const afterFields = (updatedItem.fields ?? {}) as Record<string, unknown>;
+        const addedFields: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(afterFields)) {
+          if (beforeFields[k] !== v) addedFields[k] = v;
+        }
+        const beforeLabels = new Set(item.labels ?? []);
+        const addedLabels = (updatedItem.labels ?? []).filter((l) => !beforeLabels.has(l));
+
+        if (Object.keys(addedFields).length === 0 && addedLabels.length === 0) continue;
+
+        if (samples.length < 10) {
+          samples.push({ id: item.id, added_fields: addedFields, added_labels: addedLabels });
+        }
+        if (!dryRun) {
+          await anyInbox._ingest(
+            { ...updatedItem, id: item.id }, // id pin guards against any hook bug
+            { fields_only: true },
+          );
+        }
+        applied++;
+      } catch (err) {
+        errors.push({
+          id: item.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return c.json({
+      inbox: inboxName,
+      hook: hookName,
+      dry_run: dryRun,
+      scanned: matched.length,
+      matched: matched.length,
+      applied,
+      skipped: { drop: dropCount, quarantine: quarantineCount },
+      errors,
+      ...(dryRun && { samples }),
+    });
   });
 
   // --------------------------------------------------------------------------

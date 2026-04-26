@@ -328,6 +328,26 @@ export interface IngestOptions {
    * If no blobs adapter is configured and `blobs` is provided, the inbox throws.
    */
   blobs?: Record<string, BlobPayload>;
+  /**
+   * Fields-only merge mode (per `.brief/forward-notes-and-newsletter-profiles.md`
+   * Phase 3, the replay-hook system). When `true`:
+   *
+   *   - The supplied item's `id` MUST already exist; missing-item returns null
+   *     (callers handle the not-found case).
+   *   - `fields` are shallow-merged into the existing item's fields (new wins
+   *     per key; undefined values do NOT clear existing values).
+   *   - `labels` are unioned with existing labels (no removal).
+   *   - The index entry is NOT updated — `received_at`, `sort order`, and
+   *     pagination cursor stay stable.
+   *   - Blobs and refs are ignored — bodies / raw / attachments are immutable.
+   *   - Identity fields (`id`, `received_at`, `source`, `source_version`) on
+   *     the supplied item are silently ignored in favor of the stored values.
+   *
+   * Use this for retroactive hook replay (a new field added to forward-detect
+   * needs to be back-populated on existing items). NOT for general writes —
+   * use `force: true` for full replacement instead.
+   */
+  fields_only?: boolean;
 }
 
 // ============================================================================

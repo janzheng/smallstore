@@ -277,6 +277,21 @@ export class Inbox implements InboxInterface {
   }
 
   async _ingest(item: InboxItem, options: IngestOptions = {}): Promise<InboxItem> {
+    // Fields-only merge — used by the hook-replay system for retroactive field
+    // population. Identity fields and the index entry are preserved; only
+    // `fields` (shallow-merge, new wins) and `labels` (union) change.
+    if (options.fields_only) {
+      const existing = await this.storage.items.get(this.itemKey(item.id)) as InboxItem | null;
+      if (!existing) return item; // caller can detect "not stored" via id-mismatch
+      const merged: InboxItem = {
+        ...existing,
+        fields: { ...(existing.fields ?? {}), ...(item.fields ?? {}) },
+        labels: Array.from(new Set([...(existing.labels ?? []), ...(item.labels ?? [])])),
+      };
+      await this.storage.items.set(this.itemKey(existing.id), merged);
+      return merged;
+    }
+
     const finalItem = applyRefs(item, options.refs);
 
     if (!options.force) {

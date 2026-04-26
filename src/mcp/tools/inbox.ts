@@ -451,6 +451,34 @@ export const INBOX_TOOLS: Tool[] = [
       required: ['inbox', 'slug'],
     },
   },
+  {
+    name: 'sm_inbox_replay_hook',
+    description:
+      'Retroactively re-run a registered hook (e.g. `forward-detect`) over existing items in an inbox, merging any new fields and labels into stored items. The system version of "running a backfill script" — generic over any hook the deploy registers. ALWAYS dry-run first (`dry_run: true`) to preview the field/label diffs before applying. Common use: a forward-detect upgrade adds new fields (e.g. `original_sent_at`) — replay populates them on items that landed before the upgrade. Identity (id, received_at, source) and the index are preserved.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        hook: {
+          type: 'string',
+          description: 'Hook name as registered by the deploy (e.g. `forward-detect`, `sender-aliases`, `newsletter-name`). The deploy decides which hooks are replayable.',
+        },
+        filter: {
+          type: 'object',
+          description: 'Optional InboxFilter to scope the replay (e.g. `{ labels: ["forwarded"] }`, `{ fields_regex: { subject: "IP Digest|Pipes " } }`). Omit to replay over all items.',
+        },
+        dry_run: {
+          type: 'boolean',
+          description: 'When true, no writes — returns up to 10 representative diffs in `samples`. Strongly recommended for the first call.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Cap on items processed. Default 10000.',
+        },
+      },
+      required: ['inbox', 'hook'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -812,6 +840,23 @@ export async function handleInboxTool(
         `/inbox/${encName(inbox)}/newsletters/${encodeURIComponent(slug)}/notes${qs({ limit, order })}`,
       );
       if (!r.ok) throw new Error(formatHttpError('sm_newsletter_notes failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_replay_hook': {
+      const inbox = requireString(args, 'inbox');
+      const hook = requireString(args, 'hook');
+      const body: Record<string, unknown> = { hook };
+      if (args.filter !== undefined) {
+        if (typeof args.filter !== 'object' || Array.isArray(args.filter)) {
+          throw new Error('sm_inbox_replay_hook: `filter` must be an InboxFilter object');
+        }
+        body.filter = args.filter;
+      }
+      if (args.dry_run !== undefined) body.dry_run = args.dry_run === true;
+      if (typeof args.limit === 'number') body.limit = args.limit;
+      const r = await http('POST', `/admin/inboxes/${encName(inbox)}/replay`, body);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_replay_hook failed', r));
       return r.body;
     }
 

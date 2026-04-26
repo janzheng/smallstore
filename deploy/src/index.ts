@@ -438,6 +438,25 @@ function buildApp(env: Env): AppHandle {
     },
     resolveHmacSecret: (envName: string) =>
       (env as unknown as Record<string, string | undefined>)[envName],
+    // Hook replay — register the hooks that are safe to re-run retroactively.
+    // The forward-detect hook is the first concrete use case (back-fills
+    // `original_sent_at` / `newsletter_slug` etc. on existing items). New
+    // hooks become replayable by adding them here.
+    replayHookFor: (inboxName: string, hookName: string) => {
+      if (inboxName !== 'mailroom') return undefined;
+      switch (hookName) {
+        case 'forward-detect':
+          return forwardDetectHook;
+        case 'sender-aliases':
+          return senderAliasHook;
+        case 'plus-addr':
+          return plusAddrHook;
+        case 'newsletter-name':
+          return newsletterNameHook;
+        default:
+          return undefined;
+      }
+    },
   });
 
   // Peer registry routes — /peers CRUD + /peers/:name/{health,fetch,query}
