@@ -15,6 +15,8 @@ Universal storage abstraction layer for JavaScript and TypeScript. One API, 20 b
 - **Views & materializers** — JSON, CSV, Markdown, YAML, text output.
 - **Blob middleware** — transparent binary-field handling (R2Direct backend, Airtable Attachments, Notion Files).
 - **Adapter sync** — bidirectional replication with 3-way merge.
+- **Messaging plugin family** — `Inbox` + `Channel` primitives. Channels: `cf-email` (Cloudflare Email Routing), `rss` (Atom + RSS 2.0/1.0), `webhook` (generic HTTP receiver with HMAC verify + JSON-path field mapping). Mailroom-style curation: rules engine, auto-confirm allowlist, classifier, sender index, quarantine, attachments. See [`docs/user-guide/mailroom-quickstart.md`](docs/user-guide/mailroom-quickstart.md).
+- **Peer registry** — register external data sources (other smallstores, tigerflare, sheetlogs, RSS feeds, webhooks, generic HTTP) as peers; `GET/POST /peers/:name/{health,fetch,query}` proxies through with env-resolved auth.
 - **HTTP API** — Hono integration exposes full CRUD + search + query + views + presigned URLs + namespace tree ops (route list below).
 - **MCP server** — `src/mcp-server.ts` exposes 9 tools (`sm_read`, `sm_write`, `sm_delete`, `sm_list`, `sm_query`, `sm_adapters`, `sm_sync`, `sm_sync_jobs`, `sm_sync_status`) for Claude Code / agent integration. Forwards to a running HTTP server.
 - **VFS** — bash-like CLI shell over any adapter (~20 commands: `ls`, `cat`, `cd`, `cp`, `mv`, `rm`, `pwd`, `find`, `grep`, `tree`, `stat`, `wc`, `du`, `export`, `retrieve`, `snapshot`, `write` + overlay commands).

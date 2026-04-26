@@ -423,11 +423,100 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE/peers/tigerflare-prod"
 | `smallstore` | `GET /health` | Other smallstore deployments |
 | `tigerflare` | `GET /health` | Tigerflare Workers |
 | `sheetlog` | `HEAD /` | Apps Script web apps (query-auth typical) |
+| `rss` | n/a | RSS / Atom feed source — `metadata.feed_config.target_inbox` names the inbox; in-Worker pull-runner polls on cron |
+| `webhook` | n/a | Inbound HTTP webhook target — see § 2.10 |
 | `webdav` | `OPTIONS /` | WebDAV servers (basic-auth typical; level-3 adapter future) |
 | `http-json` | `HEAD /` | Generic JSON APIs |
 | `generic` | `HEAD /` | Catch-all |
 
 Type is metadata + a health-probe method hint. MVP uses the same proxy path for all types; type-specific smarts come in level 3.
+
+### 2.10 Webhook ingest — turn any HMAC'd webhook into an InboxItem
+
+Register a webhook peer to give an external service (GitHub, Stripe, Linear, Slack, custom poller) a structured ingest target with HMAC verification and JSON-path field mapping. The receiving URL is `POST /webhook/<peer-name>`.
+
+**Flow:**
+
+1. Register a peer with `type: 'webhook'` and a `metadata.webhook_config`.
+2. Set the peer's HMAC secret via `wrangler secret put <ENV_NAME>` (or your host's equivalent).
+3. Point the upstream service at `https://<your-host>/webhook/<peer-name>`.
+4. When a webhook lands, smallstore verifies HMAC, parses the JSON body, extracts mapped fields, and ingests into `target_inbox`.
+
+**`webhook_config` fields:**
+
+| Field | Required | Purpose |
+|---|---|---|
+| `target_inbox` | yes | Inbox name to ingest into. |
+| `default_labels` | no | Labels every webhook item gets at ingest. |
+| `source` | no | Override `InboxItem.source` (e.g. `"github"`). Default `"webhook"`. |
+| `source_version` | no | Override `InboxItem.source_version` (e.g. `"github-pr/v1"`). Default `"webhook/v1"`. |
+| `fields.id` | no but recommended | Dotted path to a stable upstream id. When set, dedup uses `sha256(peer_name + ':' + extracted_id)` so retries land on the same InboxItem. |
+| `fields.summary` | no | Path to a short title / event line. |
+| `fields.body` | no | Path to body / description. |
+| `fields.sent_at` | no | Path to a timestamp (ISO string or unix seconds/ms). |
+| `fields.thread_id` | no | Path to a thread / conversation id. |
+| `hmac.header` | yes (if `hmac` set) | Signature header name (e.g. `X-Hub-Signature-256`). |
+| `hmac.algorithm` | no | `sha256` (default) or `sha1`. |
+| `hmac.prefix` | no | Prefix to strip from header value (e.g. `sha256=`). |
+| `hmac.secret_env` | yes (if `hmac` set) | Env var name holding the secret. Resolved at request time. |
+
+**Authentication note:** `POST /webhook/:peer` does NOT require the smallstore bearer token — HMAC IS the authentication mechanism. Peers without an `hmac` block have unauthenticated webhook URLs by your choice; document the trade-off in your peer setup. Registering / managing peers themselves still requires the bearer.
+
+#### Example — GitHub PR webhook
+
+```bash
+# 1. Register a webhook peer
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "name": "github-prs",
+    "type": "webhook",
+    "url": "https://smallstore.labspace.ai/webhook/github-prs",
+    "description": "GitHub PR events from the foo/bar repo",
+    "metadata": {
+      "webhook_config": {
+        "target_inbox": "github",
+        "default_labels": ["github", "pr"],
+        "source": "github",
+        "source_version": "github-pr/v1",
+        "fields": {
+          "id": "pull_request.id",
+          "summary": "pull_request.title",
+          "body": "pull_request.body",
+          "sent_at": "pull_request.created_at",
+          "thread_id": "pull_request.id"
+        },
+        "hmac": {
+          "header": "X-Hub-Signature-256",
+          "algorithm": "sha256",
+          "prefix": "sha256=",
+          "secret_env": "GITHUB_WEBHOOK_SECRET"
+        }
+      }
+    }
+  }' \
+  "$BASE/peers"
+
+# 2. Set the secret on the Worker
+wrangler secret put GITHUB_WEBHOOK_SECRET
+
+# 3. Configure GitHub: Settings → Webhooks → Add webhook
+#    Payload URL:  https://smallstore.labspace.ai/webhook/github-prs
+#    Content type: application/json
+#    Secret:       (the value you just set)
+#    Events:       Pull requests
+
+# 4. Verify by opening a PR, then querying the inbox
+curl -H "Authorization: Bearer $TOKEN" "$BASE/inbox/github?limit=5" | jq
+```
+
+**Same shape works for:**
+- **Stripe** — `header: "Stripe-Signature"`, no prefix, parse webhook signing secret. (Stripe's signature format is `t=...,v1=...`; current channel handles a single hex signature; use Stripe's `whsec_*` directly with prefix-trimming via your own pre-handler if you want strict Stripe parity. Plain hex HMAC works for most Stripe-style emitters.)
+- **Linear / Slack / Discord** — sha256 HMAC with vendor-specific headers.
+- **Custom pollers** — your own scripts can sign and POST; gives you a structured target with retry-safe dedup and label routing.
+
+**Idempotency:** when `fields.id` resolves, retries / duplicate deliveries dedup to the same `InboxItem.id` via `sha256(peer_name + ':' + extracted_id)`. Without `fields.id`, dedup falls back to a canonical-JSON hash of the whole payload (replay-safe but drift-sensitive).
+
+**Disable a webhook** — `PUT /peers/<name>` with `{"disabled": true}`. The route 404s while disabled; re-enable when ready.
 
 ---
 
