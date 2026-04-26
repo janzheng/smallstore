@@ -1,34 +1,31 @@
 /**
  * valtown cron val — generic RSS → smallstore inbox poller
  *
- * Path A poller (per `.brief/rss-as-mailbox.md`). Default config polls
- * bioRxiv neuroscience into the `biorxiv` inbox; override via env to point
- * at any feed.
+ * Path A ingest template (per `.brief/rss-as-mailbox.md`). Polls any RSS feed,
+ * generates content-addressed `InboxItem`s (formula matches the in-Worker
+ * Path B channel — both paths dedup cleanly against the same feed), POSTs
+ * to `/inbox/<TARGET_INBOX>/items`. Env-driven config — clone per feed,
+ * or fan one val over a feed-config array.
  *
- * IMPORTANT — bioRxiv specifically is gated by Cloudflare's bot challenge.
- * External pollers (valtown, this script run from your laptop) get 403'd
- * with a CF JS challenge. Path B (the in-Worker pull-runner already running
- * on smallstore.labspace.ai) reaches bioRxiv successfully because Worker →
- * Worker bypasses the bot gate. This val is the right shape for permissive
- * feeds (arXiv, Hacker News, Substack export-as-RSS, podcast feeds, blogs);
- * for bioRxiv specifically, prefer Path B by re-enabling the bioRxiv peers
- * in the registry.
- *
- * Both paths use identical content-addressed IDs, so running both against
- * the same feed dedups cleanly.
+ * Use this for **permissive feeds** — arXiv, Hacker News, Substack export-as-RSS,
+ * blog feeds, podcast feeds without bot gates. For Cloudflare-protected
+ * sources (bioRxiv being the canonical example — JS bot challenge for
+ * external IPs), external pollers get 403'd. The biorxiv inbox is parked
+ * from smallstore's side: registered as a generic POST target only, no
+ * peers, no in-Worker polling — other tools handle bioRxiv ingest and push
+ * to it via `POST /inbox/biorxiv/items` when they have items.
  *
  * Deploy on val.town:
  *   1. New cron val
  *   2. Paste this file
  *   3. Env: SMALLSTORE_TOKEN  (smallstore master token, same as deploy/.env)
- *   4. Optional env overrides: FEED_URL, TARGET_INBOX, DEFAULT_LABELS (JSON array)
+ *   4. Optional env: FEED_URL, TARGET_INBOX, DEFAULT_LABELS (JSON array or CSV)
  *   5. Cron: every 30 min (e.g. "0,30 * * * *")
  *   6. First run: set DRY_RUN=1 to verify parsing without ingesting
  *
- * Smoke-test locally against a permissive feed (won't trip CF challenges):
- *   FEED_URL="https://hnrss.org/frontpage" \
- *   TARGET_INBOX="biorxiv" DRY_RUN=1 \
- *   deno run --allow-net --allow-env examples/valtown-biorxiv-poller.ts
+ * Smoke-test locally:
+ *   FEED_URL="https://hnrss.org/frontpage" TARGET_INBOX="<inbox>" DRY_RUN=1 \
+ *   deno run --allow-net --allow-env examples/valtown-rss-poller.ts
  */
 
 import Parser from "npm:rss-parser";
