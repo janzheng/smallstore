@@ -100,6 +100,9 @@ export class Inbox implements InboxInterface {
 
   async list(options: ListOptions = {}): Promise<ListResult> {
     const index = await this.loadIndex();
+    if (isCustomOrder(options.order_by)) {
+      return this.listSortedByField(index.entries, undefined, options);
+    }
     return this.paginateAndHydrate(index.entries, options);
   }
 
@@ -120,6 +123,11 @@ export class Inbox implements InboxInterface {
 
   async query(filter: InboxFilter, options: QueryOptions = {}): Promise<ListResult> {
     const index = await this.loadIndex();
+
+    if (isCustomOrder(options.order_by)) {
+      return this.listSortedByField(index.entries, filter, options);
+    }
+
     const matching: IndexEntry[] = [];
     const limit = options.limit ?? 50;
     const startIdx = startIndex(index.entries, decodeCursor(options.cursor));
@@ -142,6 +150,47 @@ export class Inbox implements InboxInterface {
     return {
       items,
       next_cursor: hasMore ? encodeCursor(page[page.length - 1]) : undefined,
+    };
+  }
+
+  /**
+   * Sort-by-field path. Hydrates every item in the index, applies the filter
+   * (if any), sorts by the chosen field (items missing the field tail), and
+   * returns up to `limit` items. Cursor pagination is not supported in this
+   * mode — `total` is set so callers can see the matching size.
+   *
+   * O(N) hydrations on the index. At inbox sizes < ~10K this is fine; past
+   * that, see the `_index` scaling cliff in `TASKS-MESSAGING.md`.
+   */
+  private async listSortedByField(
+    entries: IndexEntry[],
+    filter: InboxFilter | undefined,
+    options: ListOptions,
+  ): Promise<ListResult> {
+    const order = options.order ?? 'newest';
+    const orderBy = options.order_by ?? 'received_at';
+    const limit = options.limit ?? 50;
+
+    if (options.cursor) {
+      throw new Error(
+        `Cursor pagination is not supported with order_by='${orderBy}'. ` +
+          `Use limit alone or fall back to order_by='received_at' for cursor support.`,
+      );
+    }
+
+    const items: InboxItem[] = [];
+    for (const entry of entries) {
+      const item = await this.storage.items.get(this.itemKey(entry.id)) as InboxItem | null;
+      if (!item) continue;
+      if (filter && !evaluateFilter(filter, item)) continue;
+      items.push(item);
+    }
+
+    items.sort((a, b) => compareItemsByField(a, b, orderBy, order));
+    const page = items.slice(0, limit);
+    return {
+      items: page,
+      total: items.length,
     };
   }
 
@@ -308,6 +357,49 @@ export function createInbox(opts: InboxOptions): Inbox {
 function compareNewestFirst(a: IndexEntry, b: IndexEntry): number {
   if (a.at !== b.at) return a.at < b.at ? 1 : -1;
   return a.id < b.id ? 1 : -1;
+}
+
+function isCustomOrder(orderBy: string | undefined): boolean {
+  return orderBy !== undefined && orderBy !== 'received_at';
+}
+
+/**
+ * Resolve the sort-key value for a given order_by selector. Returns
+ * `undefined` for items missing the field — those tail in the sort.
+ */
+function getSortValue(item: InboxItem, orderBy: string): string | undefined {
+  if (orderBy === 'received_at') return item.received_at;
+  if (orderBy === 'sent_at') return item.sent_at;
+  if (orderBy === 'original_sent_at') {
+    const v = (item.fields ?? {}).original_sent_at;
+    return typeof v === 'string' ? v : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Compare two items by an arbitrary date-shaped field. Items missing the
+ * field always tail (regardless of `order` direction) — they come AFTER
+ * the field-bearing items in both 'newest' and 'oldest' orders so the
+ * caller never has to filter them out to see the meaningful results first.
+ */
+function compareItemsByField(
+  a: InboxItem,
+  b: InboxItem,
+  orderBy: string,
+  order: 'newest' | 'oldest',
+): number {
+  const av = getSortValue(a, orderBy);
+  const bv = getSortValue(b, orderBy);
+  // Missing-field items always tail.
+  if (av === undefined && bv === undefined) {
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  }
+  if (av === undefined) return 1;
+  if (bv === undefined) return -1;
+  if (av === bv) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  if (order === 'newest') return av < bv ? 1 : -1;
+  return av < bv ? -1 : 1;
 }
 
 /** Find the index of the first entry strictly AFTER the cursor position (cursor is exclusive). */

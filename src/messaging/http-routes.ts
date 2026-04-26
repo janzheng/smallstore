@@ -10,13 +10,19 @@
  *
  *   Reader / writer surface (per inbox):
  *     POST   /inbox/:name/items            — ingest a parsed InboxItem
- *     GET    /inbox/:name                  — list newest-first (cursor, limit)
+ *     GET    /inbox/:name                  — list newest-first (cursor, limit, order, order_by)
  *     GET    /inbox/:name/items/:id        — read one (?full=true to inflate)
  *     GET    /inbox/:name/items/:id/attachments         — list attachments + download URLs
  *     GET    /inbox/:name/items/:id/attachments/:file   — stream one attachment (?download=1 forces download)
  *     POST   /inbox/:name/query            — body = InboxFilter
  *     GET    /inbox/:name/cursor           — current head cursor
  *     DELETE /inbox/:name/items/:id        — delete one item (audit-emit later)
+ *
+ *   Newsletter views (derived from `fields.newsletter_slug`):
+ *     GET    /inbox/:name/newsletters                 — slugs + counts (latest-first)
+ *     GET    /inbox/:name/newsletters/:slug           — profile dashboard (count, first/last seen, notes_count)
+ *     GET    /inbox/:name/newsletters/:slug/items     — chronological reading list (?order=newest|oldest, default oldest)
+ *     GET    /inbox/:name/newsletters/:slug/notes     — items with non-empty `forward_note`, slim shape
  *
  *   Webhook surface (no requireAuth — HMAC is the auth):
  *     POST   /webhook/:peer                — inbound webhook → channel.parse → inbox._ingest
@@ -36,7 +42,7 @@
  */
 
 import type { Context, Hono, Next } from 'hono';
-import type { InboxConfig, InboxFilter } from './types.ts';
+import type { InboxConfig, InboxFilter, ListOptions } from './types.ts';
 import { listChannels, type InboxRegistry } from './registry.ts';
 import type { SenderIndex } from './sender-index.ts';
 import { unsubscribeSender } from './unsubscribe.ts';
@@ -130,8 +136,9 @@ export function registerMessagingRoutes(
     const cursor = c.req.query('cursor');
     const limit = parseLimit(c.req.query('limit'));
     const order = (c.req.query('order') === 'oldest') ? 'oldest' : 'newest';
+    const order_by = parseOrderBy(c.req.query('order_by'));
 
-    const result = await inbox.list({ cursor, limit, order });
+    const result = await inbox.list({ cursor, limit, order, order_by });
     return c.json({ inbox: name, ...result });
   });
 
@@ -231,8 +238,10 @@ export function registerMessagingRoutes(
     const filter: InboxFilter = (body && typeof body === 'object') ? body.filter ?? body : {};
     const cursor = c.req.query('cursor') ?? body?.cursor;
     const limit = parseLimit(c.req.query('limit') ?? body?.limit);
+    const order = (c.req.query('order') ?? body?.order) === 'oldest' ? 'oldest' : 'newest';
+    const order_by = parseOrderBy(c.req.query('order_by') ?? body?.order_by);
 
-    const result = await inbox.query(filter, { cursor, limit });
+    const result = await inbox.query(filter, { cursor, limit, order, order_by });
     return c.json({ inbox: name, ...result });
   });
 
@@ -414,6 +423,147 @@ export function registerMessagingRoutes(
       return notFound(c, `item "${id}" not in inbox "${name}" or not quarantined`);
     }
     return c.json({ inbox: name, item: restored });
+  });
+
+  // --------------------------------------------------------------------------
+  // Newsletter views — derived from `fields.newsletter_slug`. Per
+  // `.brief/forward-notes-and-newsletter-profiles.md` Phase 2.
+  //
+  //   GET /inbox/:name/newsletters                      list slugs + counts
+  //   GET /inbox/:name/newsletters/:slug                profile dashboard
+  //   GET /inbox/:name/newsletters/:slug/items          chronological reading list
+  //   GET /inbox/:name/newsletters/:slug/notes          items with non-empty forward_note
+  //
+  // All read-only, derived from inbox queries — no new storage.
+  // --------------------------------------------------------------------------
+
+  app.get('/inbox/:name/newsletters', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    // Pull every item with a slug (via order_by 'received_at' default — but
+    // we want all of them so we use a high limit). At inbox sizes < ~10K this
+    // is fine; past that, see `_index` scaling cliff in TASKS-MESSAGING.md.
+    const result = await inbox.query(
+      { fields_regex: { newsletter_slug: '.+' } },
+      { limit: 10_000 },
+    );
+    const counts = new Map<string, { count: number; latest_at?: string; display?: string }>();
+    for (const item of result.items) {
+      const slug = String(item.fields?.newsletter_slug ?? '');
+      if (!slug) continue;
+      const cur = counts.get(slug) ?? { count: 0 };
+      cur.count++;
+      const at = (item.fields?.original_sent_at as string | undefined) ?? item.received_at;
+      if (!cur.latest_at || at > cur.latest_at) {
+        cur.latest_at = at;
+        const addr = item.fields?.original_from_addr as string | undefined;
+        if (addr) cur.display = stripAngleAddr(addr);
+      }
+      counts.set(slug, cur);
+    }
+    const newsletters = [...counts.entries()]
+      .map(([slug, v]) => ({ slug, count: v.count, latest_at: v.latest_at, display: v.display }))
+      .sort((a, b) => (b.latest_at ?? '').localeCompare(a.latest_at ?? ''));
+
+    return c.json({ inbox: name, newsletters });
+  });
+
+  app.get('/inbox/:name/newsletters/:slug', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const slug = c.req.param('slug')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const result = await inbox.query(
+      { fields_regex: { newsletter_slug: `^${escapeRegex(slug)}$` } },
+      { limit: 10_000 },
+    );
+    if (result.items.length === 0) return notFound(c, `no items with newsletter_slug "${slug}" in "${name}"`);
+
+    let firstAt: string | undefined;
+    let lastAt: string | undefined;
+    let lastNote: { text: string; at: string; subject?: string } | undefined;
+    let notesCount = 0;
+    let display: string | undefined;
+    for (const item of result.items) {
+      const at = (item.fields?.original_sent_at as string | undefined) ?? item.received_at;
+      if (!firstAt || at < firstAt) firstAt = at;
+      if (!lastAt || at > lastAt) {
+        lastAt = at;
+        const addr = item.fields?.original_from_addr as string | undefined;
+        if (addr) display = stripAngleAddr(addr);
+      }
+      const note = item.fields?.forward_note as string | undefined;
+      if (typeof note === 'string' && note.trim().length > 0) {
+        notesCount++;
+        if (!lastNote || at > lastNote.at) {
+          lastNote = {
+            text: note,
+            at,
+            subject: (item.fields?.original_subject as string | undefined),
+          };
+        }
+      }
+    }
+
+    return c.json({
+      inbox: name,
+      slug,
+      display,
+      count: result.items.length,
+      first_seen_at: firstAt,
+      last_seen_at: lastAt,
+      notes_count: notesCount,
+      last_note: lastNote,
+    });
+  });
+
+  app.get('/inbox/:name/newsletters/:slug/items', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const slug = c.req.param('slug')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const limit = parseLimit(c.req.query('limit'));
+    const order = c.req.query('order') === 'newest' ? 'newest' : 'oldest';
+
+    const result = await inbox.query(
+      { fields_regex: { newsletter_slug: `^${escapeRegex(slug)}$` } },
+      { limit, order, order_by: 'original_sent_at' },
+    );
+    return c.json({ inbox: name, slug, ...result });
+  });
+
+  app.get('/inbox/:name/newsletters/:slug/notes', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const slug = c.req.param('slug')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const limit = parseLimit(c.req.query('limit'));
+    const order = c.req.query('order') === 'newest' ? 'newest' : 'oldest';
+
+    const result = await inbox.query(
+      {
+        fields_regex: {
+          newsletter_slug: `^${escapeRegex(slug)}$`,
+          forward_note: '.+',
+        },
+      },
+      { limit, order, order_by: 'original_sent_at' },
+    );
+    // Project down to a slim notes-only shape for cheap LLM summarization.
+    const notes = result.items.map((item) => ({
+      id: item.id,
+      original_sent_at: item.fields?.original_sent_at,
+      received_at: item.received_at,
+      subject: item.fields?.original_subject ?? item.summary,
+      from: item.fields?.original_from_addr,
+      note: item.fields?.forward_note,
+    }));
+    return c.json({ inbox: name, slug, count: notes.length, total: result.total, notes });
   });
 
   /**
@@ -1114,6 +1264,23 @@ function parseLimit(raw: string | number | undefined): number | undefined {
   const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
   if (!Number.isFinite(n) || n <= 0) return undefined;
   return Math.min(n, 500);
+}
+
+const VALID_ORDER_BY = new Set(['received_at', 'sent_at', 'original_sent_at']);
+function parseOrderBy(raw: string | undefined): ListOptions['order_by'] {
+  if (!raw) return undefined;
+  return VALID_ORDER_BY.has(raw) ? (raw as ListOptions['order_by']) : undefined;
+}
+
+/** Strip "<addr@host>" tail from a "Display Name <addr@host>" form. */
+function stripAngleAddr(raw: string): string {
+  const lt = raw.indexOf('<');
+  return lt === -1 ? raw.trim() : raw.slice(0, lt).trim().replace(/^["']|["']$/g, '');
+}
+
+/** Escape regex meta-chars so a slug can be embedded in a regex pattern. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 const VALID_RULE_ACTIONS: ReadonlySet<string> = new Set([

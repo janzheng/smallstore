@@ -25,7 +25,7 @@ export const INBOX_TOOLS: Tool[] = [
   {
     name: 'sm_inbox_list',
     description:
-      'List items in an inbox, newest-first by default, with cursor-based pagination. Returns `{ inbox, items, next_cursor? }`. Use this for a quick look at the top of a mailroom; for anything filter-shaped (by sender, labels, time range) prefer `sm_inbox_query`.',
+      'List items in an inbox, newest-first by default, with cursor-based pagination. Returns `{ inbox, items, next_cursor? }`. Use this for a quick look at the top of a mailroom; for anything filter-shaped (by sender, labels, time range) prefer `sm_inbox_query`. Pass `order_by: "original_sent_at"` for forwards landing chronologically by their original send date (cursor pagination disabled in that mode — use `limit` alone).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -33,6 +33,11 @@ export const INBOX_TOOLS: Tool[] = [
         cursor: { type: 'string', description: 'Opaque cursor returned by a prior `sm_inbox_list` call. Omit for the first page.' },
         limit: { type: 'number', description: 'Max items per page. Server-enforced upper bound.' },
         order: { type: 'string', enum: ['newest', 'oldest'], description: 'Sort order. Default: `newest`.' },
+        order_by: {
+          type: 'string',
+          enum: ['received_at', 'sent_at', 'original_sent_at'],
+          description: "Sort key. Default `received_at`. `original_sent_at` sorts forwards by their original send date — useful when forwards landed out of order. Cursor pagination disabled for non-default `order_by`.",
+        },
       },
       required: ['inbox'],
     },
@@ -54,7 +59,7 @@ export const INBOX_TOOLS: Tool[] = [
   {
     name: 'sm_inbox_query',
     description:
-      'Filter an inbox with an `InboxFilter` object (labels, senders, time windows, etc). Use this instead of `sm_inbox_list` when you need to scope by label (e.g. `{ labels: ["unread"] }` for what\'s new since last sweep — new items auto-stamp `unread` at ingest, cleared by `sm_inbox_mark_read`) or sender. Returns `{ inbox, items, next_cursor? }`.',
+      'Filter an inbox with an `InboxFilter` object (labels, senders, time windows, etc). Use this instead of `sm_inbox_list` when you need to scope by label (e.g. `{ labels: ["unread"] }` for what\'s new since last sweep — new items auto-stamp `unread` at ingest, cleared by `sm_inbox_mark_read`) or sender. Returns `{ inbox, items, next_cursor? }`. Pass `order_by: "original_sent_at"` to sort forwards by their original send date (cursor disabled in that mode).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -66,6 +71,12 @@ export const INBOX_TOOLS: Tool[] = [
         },
         cursor: { type: 'string', description: 'Opaque cursor from a prior page. Sent as a query-string param.' },
         limit: { type: 'number', description: 'Max items per page. Sent as a query-string param.' },
+        order: { type: 'string', enum: ['newest', 'oldest'], description: 'Sort order. Default: `newest`.' },
+        order_by: {
+          type: 'string',
+          enum: ['received_at', 'sent_at', 'original_sent_at'],
+          description: 'Sort key. Default `received_at`. Use `original_sent_at` for chronological reading lists.',
+        },
       },
       required: ['inbox', 'filter'],
     },
@@ -385,6 +396,61 @@ export const INBOX_TOOLS: Tool[] = [
       required: ['pattern'],
     },
   },
+  {
+    name: 'sm_newsletters_list',
+    description:
+      'List every newsletter slug present in an inbox (derived from `fields.newsletter_slug` populated by forward-detect). Returns `{ inbox, newsletters: [{ slug, count, latest_at, display }] }`, sorted latest-first by the most recent issue\'s `original_sent_at`. Useful as a directory of "newsletters I have annotations on."',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name. Usually `mailroom`.' },
+      },
+      required: ['inbox'],
+    },
+  },
+  {
+    name: 'sm_newsletter_get',
+    description:
+      'Get a newsletter profile dashboard — count, first/last seen, notes count, last note + subject. The slug-level identity card. Use after `sm_newsletters_list` to drill in.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        slug: { type: 'string', description: 'Newsletter slug (from `sm_newsletters_list`).' },
+      },
+      required: ['inbox', 'slug'],
+    },
+  },
+  {
+    name: 'sm_newsletter_items',
+    description:
+      'Chronological reading list for a newsletter — every item with this `newsletter_slug`, sorted by `original_sent_at` (oldest-first by default; pass `order: "newest"` for newest-first). Items missing `original_sent_at` tail. Use this to read a newsletter back through its history without forwards-out-of-order noise.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        slug: { type: 'string', description: 'Newsletter slug.' },
+        limit: { type: 'number', description: 'Max items returned. Server-enforced cap.' },
+        order: { type: 'string', enum: ['newest', 'oldest'], description: 'Sort order. Default `oldest` (chronological reading order).' },
+      },
+      required: ['inbox', 'slug'],
+    },
+  },
+  {
+    name: 'sm_newsletter_notes',
+    description:
+      'Just the items where you wrote a `forward_note` — your accumulating commentary on a newsletter. Returns a slim `{ id, original_sent_at, received_at, subject, from, note }` projection per item. Cheap to feed into an LLM ("synthesize what I\'ve thought about Internet Pipes over time"). Chronological by default.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        slug: { type: 'string', description: 'Newsletter slug.' },
+        limit: { type: 'number', description: 'Max items returned.' },
+        order: { type: 'string', enum: ['newest', 'oldest'], description: 'Sort order. Default `oldest`.' },
+      },
+      required: ['inbox', 'slug'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -435,7 +501,8 @@ export async function handleInboxTool(
         }
         order = orderRaw;
       }
-      const r = await http('GET', `/inbox/${encName(inbox)}${qs({ cursor, limit, order })}`);
+      const order_by = parseOrderByArg(args.order_by, 'sm_inbox_list');
+      const r = await http('GET', `/inbox/${encName(inbox)}${qs({ cursor, limit, order, order_by })}`);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_list failed', r));
       return r.body;
     }
@@ -457,7 +524,16 @@ export async function handleInboxTool(
       }
       const cursor = typeof args.cursor === 'string' ? args.cursor : undefined;
       const limit = typeof args.limit === 'number' ? args.limit : undefined;
-      const path = `/inbox/${encName(inbox)}/query${qs({ cursor, limit })}`;
+      const orderRaw = args.order;
+      let order: 'newest' | 'oldest' | undefined;
+      if (orderRaw !== undefined) {
+        if (orderRaw !== 'newest' && orderRaw !== 'oldest') {
+          throw new Error('sm_inbox_query: `order` must be "newest" or "oldest"');
+        }
+        order = orderRaw;
+      }
+      const order_by = parseOrderByArg(args.order_by, 'sm_inbox_query');
+      const path = `/inbox/${encName(inbox)}/query${qs({ cursor, limit, order, order_by })}`;
       const r = await http('POST', path, filter);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_query failed', r));
       return r.body;
@@ -698,7 +774,65 @@ export async function handleInboxTool(
       return r.body;
     }
 
+    case 'sm_newsletters_list': {
+      const inbox = requireString(args, 'inbox');
+      const r = await http('GET', `/inbox/${encName(inbox)}/newsletters`);
+      if (!r.ok) throw new Error(formatHttpError('sm_newsletters_list failed', r));
+      return r.body;
+    }
+
+    case 'sm_newsletter_get': {
+      const inbox = requireString(args, 'inbox');
+      const slug = requireString(args, 'slug');
+      const r = await http('GET', `/inbox/${encName(inbox)}/newsletters/${encodeURIComponent(slug)}`);
+      if (!r.ok) throw new Error(formatHttpError('sm_newsletter_get failed', r));
+      return r.body;
+    }
+
+    case 'sm_newsletter_items': {
+      const inbox = requireString(args, 'inbox');
+      const slug = requireString(args, 'slug');
+      const limit = typeof args.limit === 'number' ? args.limit : undefined;
+      const order = parseOrderArg(args.order, 'sm_newsletter_items');
+      const r = await http(
+        'GET',
+        `/inbox/${encName(inbox)}/newsletters/${encodeURIComponent(slug)}/items${qs({ limit, order })}`,
+      );
+      if (!r.ok) throw new Error(formatHttpError('sm_newsletter_items failed', r));
+      return r.body;
+    }
+
+    case 'sm_newsletter_notes': {
+      const inbox = requireString(args, 'inbox');
+      const slug = requireString(args, 'slug');
+      const limit = typeof args.limit === 'number' ? args.limit : undefined;
+      const order = parseOrderArg(args.order, 'sm_newsletter_notes');
+      const r = await http(
+        'GET',
+        `/inbox/${encName(inbox)}/newsletters/${encodeURIComponent(slug)}/notes${qs({ limit, order })}`,
+      );
+      if (!r.ok) throw new Error(formatHttpError('sm_newsletter_notes failed', r));
+      return r.body;
+    }
+
     default:
       throw new Error(`handleInboxTool: unknown tool "${name}"`);
   }
+}
+
+const ORDER_BY_VALUES = new Set(['received_at', 'sent_at', 'original_sent_at']);
+function parseOrderByArg(raw: unknown, toolName: string): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || !ORDER_BY_VALUES.has(raw)) {
+    throw new Error(`${toolName}: \`order_by\` must be one of received_at | sent_at | original_sent_at`);
+  }
+  return raw;
+}
+
+function parseOrderArg(raw: unknown, toolName: string): 'newest' | 'oldest' | undefined {
+  if (raw === undefined) return undefined;
+  if (raw !== 'newest' && raw !== 'oldest') {
+    throw new Error(`${toolName}: \`order\` must be "newest" or "oldest"`);
+  }
+  return raw;
 }

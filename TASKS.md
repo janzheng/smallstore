@@ -19,7 +19,7 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 Per `.brief/forward-notes-and-newsletter-profiles.md`. Building Phase 1 (capture: extend forward-detect for `original_sent_at` + `newsletter_slug`) → Phase 2 (newsletter views) → Phase 3 (replay-hook system + IP Digest backfill).
 
 - [x] **Phase 1 — capture — SHIPPED 2026-04-26.** Extended `forward-detect.ts` to parse `Date:` / `Message-ID:` / `Reply-To:` from forward bodies (Gmail/Outlook/RFC-5322/ISO) + derive `newsletter_slug` from display name (`X at Y` → Y heuristic, slugify-then-fallback-to-domain). New public exports: `parseForwardDate`, `deriveNewsletterSlug`. 19 new tests; 638/638 messaging suite green. **In repo; needs build+deploy for new forwards to carry these fields.** Existing items pick them up via Phase 3 backfill. Detail: `TASKS-MESSAGING.md § Forward notes + newsletter profiles § Phase 1`
-- [ ] Phase 2 — surface (newsletter routes + MCP). Detail: same § Phase 2
+- [x] **Phase 2 — surface — SHIPPED 2026-04-26.** Added `order_by` to Inbox.list/query (received_at/sent_at/original_sent_at; missing-field-tails; cursor disabled for non-default). New routes `GET /inbox/:name/newsletters[/:slug[/items|notes]]` derived from `fields.newsletter_slug`. New MCP tools `sm_newsletters_list`, `sm_newsletter_get`, `sm_newsletter_items`, `sm_newsletter_notes`; existing `sm_inbox_list/query` gained `order_by`. 15 new tests; 653/653 messaging suite green. Detail: `TASKS-MESSAGING.md § Forward notes + newsletter profiles § Phase 2`
 - [ ] Phase 3 — retroactive backfill via replay-hook system. Detail: same § Phase 3. Validates with the 26 IP Digest backfill
 
 ### Polish session — SHIPPED 2026-04-24

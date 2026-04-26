@@ -282,6 +282,17 @@ export interface ListOptions {
   limit?: number;
   /** Stable order. Default 'newest'. */
   order?: 'newest' | 'oldest';
+  /**
+   * Sort key. Default `'received_at'` — uses the inbox `_index` directly
+   * and is fully cursor-aware. Other values (`'sent_at'`,
+   * `'original_sent_at'`) load all matching items, sort in memory by the
+   * chosen field (items missing the field tail), and disable cursor
+   * pagination — callers must use `limit` alone. Useful for chronological
+   * reading lists where the index's `received_at` order is wrong (e.g.
+   * forwards that landed out of order; see
+   * `.brief/forward-notes-and-newsletter-profiles.md`).
+   */
+  order_by?: 'received_at' | 'sent_at' | 'original_sent_at';
 }
 
 export interface ReadOptions {
