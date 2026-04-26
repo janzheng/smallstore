@@ -12,6 +12,15 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 - [x] **Valtown RSS poller template** — `examples/valtown-rss-poller.ts`. Generic env-driven RSS-to-smallstore template (FEED_URL / TARGET_INBOX / DEFAULT_LABELS / SMALLSTORE_TOKEN / DRY_RUN). Content-addressed IDs match the in-Worker rss channel formula → both paths dedup cleanly. Graceful CF-challenge handling (logs `fetch_blocked` summary, exits 0). Smoke-tested against HN RSS. **bioRxiv polling parked** (`TASKS-MESSAGING.md § Decisions, 2026-04-26`) — feed is gated by Cloudflare bot challenge for external IPs; the `biorxiv` inbox stays as a generic POST target for whatever tools handle bioRxiv ingest end-to-end. Use this val for permissive feeds (arXiv, HN, Substack export-as-RSS, blogs). #rss-valtown-biorxiv-poller #rss-valtown-fanout
 - [x] **A103 audit cleanup** — `merge` default-mode bug from TASKS-AUDIT was already fixed in `291617d` (2026-04-17); flipped audit entry to `[x]` with fix-commit citation, surfaced default in `MergeOptions.overwrite` JSDoc. #audit-A103
 - [x] **README + mailroom-quickstart** — Added messaging plugin family + peer registry to README headline features. Added § 2.10 "Webhook ingest" walkthrough to `docs/user-guide/mailroom-quickstart.md` with the GitHub PR example + field reference. #docs
+- [x] **Brief: forward notes + newsletter profiles** — `.brief/forward-notes-and-newsletter-profiles.md`. Three-phase plan: (1) extend forward-detect to capture `original_sent_at` / `message_id` / `newsletter_slug` at ingest, (2) derived `GET /newsletters[/:slug[/items|notes]]` views + MCP tools, (3) generic `POST /admin/inboxes/:name/replay` admin endpoint that generalizes the rules-engine `applyRetroactive` pattern to all hooks (so future field additions are backfillable for free, not script-of-the-month). User trigger: 26 IP Digest forwards landed out of order today + asked "do notes aggregate per newsletter?" Detail in `TASKS-MESSAGING.md § Forward notes + newsletter profiles`. Phase 1 is the next build target. #messaging #brief
+
+### Forward notes + newsletter profiles — IN PROGRESS
+
+Per `.brief/forward-notes-and-newsletter-profiles.md`. Building Phase 1 (capture: extend forward-detect for `original_sent_at` + `newsletter_slug`) → Phase 2 (newsletter views) → Phase 3 (replay-hook system + IP Digest backfill).
+
+- [ ] Phase 1 — capture (additive, zero-risk). Detail: `TASKS-MESSAGING.md § Forward notes + newsletter profiles § Phase 1`
+- [ ] Phase 2 — surface (newsletter routes + MCP). Detail: same § Phase 2
+- [ ] Phase 3 — retroactive backfill via replay-hook system. Detail: same § Phase 3. Validates with the 26 IP Digest backfill
 
 ### Polish session — SHIPPED 2026-04-24
 
