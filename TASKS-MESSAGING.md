@@ -160,6 +160,31 @@ Two paths: fast (external poller POSTs via existing `/inbox/:name/items`) and la
 
 Sprint complete. All ingestion hooks (forward-detect, plus-addr, rules), rules CRUD + retroactive apply, deploy wiring, polish (manual-tag, hard-delete, quarantine/restore routes, mainViewFilter), and removal taxonomy all live at `smallstore.labspace.ai`. Details + commits: `TASKS.done.md § 2026-04-25`. Sprint narrative: `.brief/2026-04-25-curation-sprint.md`. Design: `.brief/mailroom-curation.md`.
 
+### Forward notes + newsletter profiles (design: `.brief/forward-notes-and-newsletter-profiles.md`)
+
+Turn forwards into a real curation primitive. Capture original-date + newsletter-slug on every forward at ingest; expose chronological reading lists + per-newsletter notes views; ship a generic hook-replay endpoint so adding a new forward-detect field retroactively becomes a one-call admin op (not a script-of-the-month). User trigger: 26 IP Digest forwards landed out of order with the 2026-04-26 mass-forward; user wants chronological order + an aggregate "what I've thought about IP" notes view.
+
+**Phase 1 — capture (additive, zero-risk):**
+- [ ] Extend `extractForwardHeaders()` to parse `Date:` / `Message-ID:` / `Reply-To:` from forward body. Tolerate Gmail/Outlook/Apple Mail date shapes. Writes `fields.original_sent_at` (ISO), `fields.original_message_id`, `fields.original_reply_to`. Tests for each mail client + malformed-date graceful path #messaging #forward-detect-original-date
+- [ ] Derive `fields.newsletter_slug` from `original_from_addr` display name. Reuse `slugifySenderName` from `sender-aliases.ts` if shape matches #messaging #newsletter-slug
+
+**Phase 2 — surface (new HTTP + MCP):**
+- [ ] `Inbox.list` / `Inbox.query` `order_by: 'received_at' | 'sent_at' | 'original_sent_at'`. Default `received_at` (no behavior change); items missing the sort field tail #messaging #inbox-multi-sort
+- [ ] HTTP routes: `GET /newsletters`, `GET /newsletters/:slug`, `GET /newsletters/:slug/items`, `GET /newsletters/:slug/notes`. All read-only, derived from inbox queries (no new storage) #messaging #newsletter-routes
+- [ ] MCP tools: `sm_newsletters_list`, `sm_newsletter_get`, `sm_newsletter_notes` #messaging #newsletter-mcp
+
+**Phase 3 — retroactive backfill (the system, not a script):**
+- [ ] `POST /admin/inboxes/:name/replay` — generic hook-replay endpoint. Body: `{ hook, filter, fields_only, dry_run }`. Mirrors `RulesStore.applyRetroactive` ergonomics; generalizes to ANY hook so future fields become backfillable for free. Dry-run mandatory before real run #messaging #replay-hook-system
+- [ ] `IngestOptions.fields_only` — new flag on `_ingest` that merges fields into existing item without re-running blobs/hooks/index-update. Forbids rewriting `id` / `received_at` / `source` (immutable identity). Tests for label union, fields merge, missing-item 404 #messaging #ingest-fields-only
+- [ ] MCP: `sm_inbox_replay_hook` #messaging #replay-mcp
+- [ ] Concrete trigger — backfill the 26 IP Digest items: dry-run, then real run, populating `original_sent_at` + `newsletter_slug`. End-to-end validation #messaging #ipdigest-backfill
+
+**Stretch (defer until v1 ships):**
+- [?] `POST /inbox/:name/items/:id/note` — after-the-fact annotation endpoint #messaging #annotation-endpoint
+- [?] `GET /newsletters/:slug/notes?format=markdown` — second-brain export (Obsidian/tigerflare) #messaging #notes-md-export
+- [?] Note-length aggregation as engagement signal per newsletter #messaging #interest-signal
+- [?] Cross-newsletter topic threading (LLM-extracted topics from notes) #messaging #cross-newsletter-tags
+
 ### Mailroom pipeline — remaining after curation sprint
 
 - [x] **Newsletter auto-name + double-opt-in detector + auto-confirm** — 2026-04-24: shipped `src/messaging/newsletter-name.ts` (postClassify: reads `fields.from_addr`, extracts display name, adds `newsletter:<slug>` when the classifier already tagged `newsletter`; defers to manual `sender:*` labels), `src/messaging/confirm-detect.ts` (postClassify: subject heuristic for "confirm/verify subscription" patterns, body scan for confirm URL near anchor phrases or via path hints like `/subscribe/confirm`, explicitly avoids unsubscribe URLs; writes `fields.confirm_url` + `needs-confirm` label), and `src/messaging/auto-confirm.ts` (postClassify: follows `confirm_url` at ingest for senders matching `AUTO_CONFIRM_SENDERS` globs, swaps `needs-confirm` → `auto-confirmed`; HTTPS-only, domain-host-only, unsubscribe-URL-blocked defensively, 10s timeout). Manual-click surface: `POST /inbox/:name/confirm/:id` + `sm_inbox_confirm` MCP tool. 85 new tests total. CLAUDE.md instructs agents to always surface `needs-confirm` items as a callout and documents which senders auto-confirm #messaging #mailroom-newsletter-auto-name #mailroom-confirm-detect #mailroom-auto-confirm
