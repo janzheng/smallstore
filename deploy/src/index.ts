@@ -412,6 +412,11 @@ function buildApp(env: Env): AppHandle {
   // Messaging routes (mount before /api so wildcards stay disjoint).
   // `senderIndexFor` resolves the per-inbox sender index for the unsubscribe
   // route (POST /inbox/:name/unsubscribe); `rulesStoreFor` unlocks the
+  // Peer store — created before messaging routes so the webhook handler can
+  // look up peers by name. (Was created later in earlier revisions; moved up
+  // to support webhookConfigFor closure on registerMessagingRoutes.)
+  const peerStore = createPeerStore(peersD1, { keyPrefix: 'peers/' });
+
   // /rules CRUD + retroactive-apply endpoints per inbox. Both return null
   // for inboxes without those resources, in which case the routes 501.
   registerMessagingRoutes(app, {
@@ -421,13 +426,24 @@ function buildApp(env: Env): AppHandle {
     senderIndexFor: (name: string) => senderIndexes.get(name) ?? null,
     rulesStoreFor: (name: string) => rulesStores.get(name) ?? null,
     autoConfirmSendersStore,
+    // Webhook ingest. Looks up the peer, returns its `metadata.webhook_config`
+    // when present + valid; null otherwise (route 404s). HMAC secrets are
+    // resolved from the Worker env at request time.
+    webhookConfigFor: async (peerName: string) => {
+      const peer = await peerStore.get(peerName);
+      if (!peer || peer.type !== 'webhook' || peer.disabled) return null;
+      const cfg = (peer.metadata as any)?.webhook_config;
+      if (!cfg || typeof cfg !== 'object' || !cfg.target_inbox) return null;
+      return cfg;
+    },
+    resolveHmacSecret: (envName: string) =>
+      (env as unknown as Record<string, string | undefined>)[envName],
   });
 
   // Peer registry routes — /peers CRUD + /peers/:name/{health,fetch,query}
   // proxy surface. env is passed so the proxy can resolve env-referenced
   // auth secrets (e.g. `{ kind: 'bearer', token_env: 'TF_TOKEN' }` →
   // Authorization: Bearer ${env.TF_TOKEN}).
-  const peerStore = createPeerStore(peersD1, { keyPrefix: 'peers/' });
   registerPeersRoutes(app, {
     peerStore,
     requireAuth,

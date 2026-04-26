@@ -57,6 +57,15 @@ export { inboxSink, httpSink, functionSink, type HttpSinkOptions } from './sinks
 export { registerMessagingRoutes, type RegisterMessagingRoutesOptions, type RequireAuth } from './http-routes.ts';
 export { CloudflareEmailChannel, cloudflareEmailChannel, type EmailInput } from './channels/cf-email.ts';
 export { RssChannel, rssChannel, type RssInput, type RssConfig } from './channels/rss.ts';
+export {
+  WebhookChannel,
+  webhookChannel,
+  verifyHmac,
+  extractByPath,
+  type WebhookConfig,
+  type WebhookHmacConfig,
+  type WebhookInput,
+} from './channels/webhook.ts';
 export { createEmailHandler, type CreateEmailHandlerOptions, type ForwardableEmailMessage } from './email-handler.ts';
 export { dispatchItem, type DispatchOptions, type DispatchResult } from './dispatch.ts';
 export {

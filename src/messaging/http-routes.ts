@@ -18,6 +18,9 @@
  *     GET    /inbox/:name/cursor           — current head cursor
  *     DELETE /inbox/:name/items/:id        — delete one item (audit-emit later)
  *
+ *   Webhook surface (no requireAuth — HMAC is the auth):
+ *     POST   /webhook/:peer                — inbound webhook → channel.parse → inbox._ingest
+ *
  *   Admin surface:
  *     POST   /admin/inboxes                — create a runtime inbox
  *     GET    /admin/inboxes                — list all inboxes (registrations)
@@ -40,6 +43,7 @@ import { unsubscribeSender } from './unsubscribe.ts';
 import type { MailroomRule, RuleAction, RulesStore } from './rules.ts';
 import type { AutoConfirmSendersStore } from './auto-confirm-senders.ts';
 import { listQuarantined, restoreItem } from './quarantine.ts';
+import { verifyHmac, webhookChannel, type WebhookConfig } from './channels/webhook.ts';
 
 export type RequireAuth = (c: Context, next: Next) => Promise<Response | void> | Response | void;
 
@@ -72,13 +76,27 @@ export interface RegisterMessagingRoutesOptions {
    * shared across every inbox the auto-confirm hook runs for.
    */
   autoConfirmSendersStore?: AutoConfirmSendersStore;
+  /**
+   * Optional peer lookup — when provided, enables the `/webhook/:peer`
+   * route. Should return the peer's `metadata.webhook_config` (typed),
+   * or `null` to 404. Opaque function rather than a PeerStore reference
+   * to keep the messaging module from depending on the peers module.
+   */
+  webhookConfigFor?: (peerName: string) => Promise<WebhookConfig | null> | WebhookConfig | null;
+  /**
+   * Optional resolver for env-referenced HMAC secrets. Receives the env
+   * var name from `webhook_config.hmac.secret_env` and returns the secret
+   * value. In CF Workers, callers wrap `(name) => env[name]`. Required
+   * when any registered webhook peer uses HMAC verification.
+   */
+  resolveHmacSecret?: (envName: string) => string | undefined;
 }
 
 export function registerMessagingRoutes(
   app: Hono<any>,
   opts: RegisterMessagingRoutesOptions,
 ): void {
-  const { registry, requireAuth, createInbox, senderIndexFor, rulesStoreFor, autoConfirmSendersStore } = opts;
+  const { registry, requireAuth, createInbox, senderIndexFor, rulesStoreFor, autoConfirmSendersStore, webhookConfigFor, resolveHmacSecret } = opts;
 
   // --------------------------------------------------------------------------
   // Per-inbox surface
@@ -874,6 +892,77 @@ export function registerMessagingRoutes(
     if (!rule) return notFound(c, `rule "${id}" not in inbox "${name}"`);
     const result = await resolved.store.applyRetroactive(rule, resolved.inbox);
     return c.json({ inbox: name, rule_id: id, ...result });
+  });
+
+  // --------------------------------------------------------------------------
+  // Webhook ingest
+  //
+  // POST /webhook/:peer
+  //   Inbound webhook handler. Looks up the peer's `webhook_config`, optionally
+  //   verifies HMAC, parses the JSON body, and ingests via the configured
+  //   `target_inbox`. Does NOT use `requireAuth` — HMAC is the auth mechanism.
+  //   When a peer has no HMAC config, its webhook URL is unauthenticated by
+  //   design (caller's choice; document the trade-off in your peer setup).
+  // --------------------------------------------------------------------------
+
+  app.post('/webhook/:peer', async (c) => {
+    if (!webhookConfigFor) {
+      return c.json({ error: 'webhook routes not enabled (webhookConfigFor not provided)' }, 501);
+    }
+
+    const peerName = c.req.param('peer')!;
+    const config = await Promise.resolve(webhookConfigFor(peerName));
+    if (!config) return notFound(c, `webhook peer "${peerName}" not registered`);
+    if (!config.target_inbox) {
+      return c.json({ error: `webhook peer "${peerName}" missing target_inbox in config` }, 500);
+    }
+
+    const inbox = registry.get(config.target_inbox);
+    if (!inbox) return notFound(c, `target inbox "${config.target_inbox}" not registered`);
+
+    // Read raw body once — needed both for HMAC verify and JSON parse.
+    let rawBody: string;
+    try {
+      rawBody = await c.req.text();
+    } catch {
+      return badRequest(c, 'failed to read request body');
+    }
+
+    if (config.hmac) {
+      if (!resolveHmacSecret) {
+        return c.json({ error: 'webhook HMAC required but resolveHmacSecret not provided' }, 500);
+      }
+      const secret = resolveHmacSecret(config.hmac.secret_env);
+      if (!secret) {
+        return c.json({ error: `HMAC secret env "${config.hmac.secret_env}" not set` }, 500);
+      }
+      const headerVal = c.req.header(config.hmac.header) ?? '';
+      const sig = config.hmac.prefix && headerVal.startsWith(config.hmac.prefix)
+        ? headerVal.slice(config.hmac.prefix.length)
+        : headerVal;
+      const valid = await verifyHmac(rawBody, sig, secret, config.hmac.algorithm ?? 'sha256');
+      if (!valid) {
+        return c.json({ error: 'webhook signature verification failed' }, 401);
+      }
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      return badRequest(c, 'webhook body must be valid JSON');
+    }
+
+    const result = await webhookChannel.parse(
+      { payload, peer_name: peerName, received_at: new Date().toISOString() },
+      config,
+    );
+    if (!result) {
+      return c.json({ error: 'webhook channel returned no item' }, 500);
+    }
+
+    const stored = await inbox._ingest(result.item);
+    return c.json({ inbox: config.target_inbox, peer: peerName, item: stored });
   });
 
   // --------------------------------------------------------------------------

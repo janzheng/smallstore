@@ -41,6 +41,12 @@ export type PeerType =
                  // their own schedule, POST parsed items to the inbox named
                  // in `metadata.feed_config.target_inbox`. Smallstore stays
                  // pull-agnostic; the type is a label + future-resolver hint.
+  | 'webhook'    // Inbound HTTP webhook. External tools POST to
+                 // `/webhook/<peer-name>`; peer's `metadata.webhook_config`
+                 // describes HMAC verification, JSON-path field mapping, and
+                 // the target_inbox to ingest into. The peer `url` is the
+                 // smallstore-side inbound URL (descriptor only — webhooks
+                 // arrive, smallstore doesn't dial out).
   | 'http-json'
   | 'webdav'
   | 'generic';
