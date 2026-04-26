@@ -68,6 +68,27 @@ export interface ForwardDetectResult {
   /** Best-effort original subject with leading Re:/Fwd: prefixes stripped. */
   original_subject?: string;
   /**
+   * Best-effort original send date, ISO-8601 UTC. Parsed from the
+   * forwarded body's `Date:` line. Tolerates the major mail-client
+   * shapes (Gmail's `Sun, Apr 26, 2026 at 10:16 AM`, RFC 5322,
+   * Outlook's `Sunday, April 26, 2026 10:16 AM`). When parsing fails,
+   * absent rather than approximate. See
+   * `.brief/forward-notes-and-newsletter-profiles.md`.
+   */
+  original_sent_at?: string;
+  /** Best-effort original Message-ID from the forwarded body's `Message-ID:` line. */
+  original_message_id?: string;
+  /** Best-effort original Reply-To address (lowercased) from the forwarded body. */
+  original_reply_to?: string;
+  /**
+   * Slug derived from the original sender's display name — durable across
+   * ESP migrations (a publication that changes from Substack to Beehiiv
+   * keeps the same slug as long as the display name is consistent).
+   * Powers the `newsletters/<slug>` aggregate views. Slugified via
+   * `slugifySenderName` from sender-aliases.
+   */
+  newsletter_slug?: string;
+  /**
    * User-typed commentary above the forwarded block. Captured when a
    * forward separator is present and the text above it is non-empty
    * after trimming. Populated on forwards only. Absent when there's no
@@ -142,6 +163,9 @@ export function detectForward(
   let original_from_email: string | undefined;
   let original_from_addr: string | undefined;
   let original_subject: string | undefined;
+  let original_sent_at: string | undefined;
+  let original_message_id: string | undefined;
+  let original_reply_to: string | undefined;
 
   try {
     // Priority 1 — trust explicit headers.
@@ -164,7 +188,7 @@ export function detectForward(
     }
 
     // Priority 2 — parse the body.
-    if (body && (!original_from_email || !original_from_addr || !original_subject)) {
+    if (body) {
       const parsed = parseForwardedBody(body);
       if (parsed) {
         if (!original_from_addr && parsed.from) original_from_addr = parsed.from;
@@ -174,6 +198,17 @@ export function detectForward(
         }
         if (!original_subject && parsed.subject) {
           original_subject = stripSubjectPrefixes(parsed.subject);
+        }
+        if (!original_sent_at && parsed.date) {
+          const iso = parseForwardDate(parsed.date);
+          if (iso) original_sent_at = iso;
+        }
+        if (!original_message_id && parsed.message_id) {
+          original_message_id = parsed.message_id;
+        }
+        if (!original_reply_to && parsed.reply_to) {
+          const extracted = extractEmailAddress(parsed.reply_to);
+          original_reply_to = extracted ?? parsed.reply_to.trim().toLowerCase();
         }
       }
     }
@@ -188,6 +223,20 @@ export function detectForward(
     }
   } catch {
     // Extraction is best-effort — never let a parse failure block tagging.
+  }
+
+  // --- Newsletter slug derivation -------------------------------------------
+  // Pure function of `original_from_addr` — durable across ESP migrations as
+  // long as the display name stays consistent.
+  let newsletter_slug: string | undefined;
+  if (original_from_addr) {
+    const slug = deriveNewsletterSlug(original_from_addr, original_from_email);
+    if (slug) newsletter_slug = slug;
+  } else if (original_from_email) {
+    // No display name — fall back to slugifying the domain so the item still
+    // groups with other items from the same source.
+    const slug = deriveNewsletterSlug(undefined, original_from_email);
+    if (slug) newsletter_slug = slug;
   }
 
   // Forward-note extraction: whatever the user typed above the forwarded
@@ -209,6 +258,10 @@ export function detectForward(
     original_from_email,
     original_from_addr,
     original_subject,
+    original_sent_at,
+    original_message_id,
+    original_reply_to,
+    newsletter_slug,
     forward_note,
   };
 }
@@ -249,6 +302,18 @@ export function createForwardDetectHook(opts: ForwardDetectOptions): PreIngestHo
     }
     if (result.original_subject !== undefined) {
       nextFields.original_subject = result.original_subject;
+    }
+    if (result.original_sent_at !== undefined) {
+      nextFields.original_sent_at = result.original_sent_at;
+    }
+    if (result.original_message_id !== undefined) {
+      nextFields.original_message_id = result.original_message_id;
+    }
+    if (result.original_reply_to !== undefined) {
+      nextFields.original_reply_to = result.original_reply_to;
+    }
+    if (result.newsletter_slug !== undefined) {
+      nextFields.newsletter_slug = result.newsletter_slug;
     }
     if (result.forward_note !== undefined) {
       nextFields.forward_note = result.forward_note;
@@ -388,20 +453,30 @@ export function extractForwardNote(body: string): string | undefined {
 }
 
 /**
- * Parse a forwarded body for From:/Subject: lines following a recognized
- * separator. Returns partial results on best-effort basis. Never throws.
+ * Parse a forwarded body for From:/Subject:/Date:/Message-ID:/Reply-To: lines
+ * following a recognized separator. Returns partial results on best-effort
+ * basis. Never throws.
+ *
+ * Mail clients can wrap long header values onto continuation lines (RFC 5322
+ * "folded" headers — a leading whitespace line continues the previous one),
+ * but Gmail's plaintext forward format does that for `From:` only and the
+ * other headers stay on a single line. We handle the From: continuation;
+ * other headers are taken as single-line for now.
  */
 export interface ParsedForwardBody {
   from?: string;
   subject?: string;
+  date?: string;
+  message_id?: string;
+  reply_to?: string;
 }
 
 function parseForwardedBody(body: string): ParsedForwardBody | null {
   if (!body) return null;
 
   // Find the earliest separator occurrence and skip past it to begin scanning
-  // for pseudo-headers (From:/Subject:). If no separator is found, scan from
-  // the top — some forwards (as-attachment, minimal clients) skip the banner.
+  // for pseudo-headers. If no separator is found, scan from the top — some
+  // forwards (as-attachment, minimal clients) skip the banner.
   const sepStart = findEarliestSeparatorStart(body);
   let scanStart = 0;
   if (sepStart !== -1) {
@@ -417,27 +492,175 @@ function parseForwardedBody(body: string): ParsedForwardBody | null {
   // Only look at the first ~40 lines after the separator — forwards always
   // put the pseudo-headers near the top. Prevents false positives from a
   // quoted "From:" deeper in a thread.
-  const slice = body.slice(scanStart).split(/\r?\n/).slice(0, 40);
+  const lines = body.slice(scanStart).split(/\r?\n/).slice(0, 40);
 
   let from: string | undefined;
   let subject: string | undefined;
+  let date: string | undefined;
+  let message_id: string | undefined;
+  let reply_to: string | undefined;
 
-  for (const line of slice) {
+  for (let i = 0; i < lines.length; i++) {
     // Strip common quote markers: "> ", ">> ", etc.
-    const cleaned = line.replace(/^[>\s]*/, '');
+    const cleaned = lines[i].replace(/^[>\s]*/, '');
     if (!from) {
       const m = cleaned.match(/^From\s*:\s*(.+?)\s*$/i);
-      if (m) from = m[1].trim();
+      if (m) {
+        // Gmail wraps the From: value when the address is long. The next
+        // line, if it doesn't introduce a new pseudo-header, is the
+        // continuation. Stitch them.
+        let value = m[1].trim();
+        const next = lines[i + 1];
+        if (next !== undefined) {
+          const nextCleaned = next.replace(/^[>\s]*/, '');
+          if (
+            nextCleaned &&
+            !/^(Subject|Date|To|Cc|Bcc|Reply-To|Message-ID|From)\s*:/i.test(nextCleaned)
+          ) {
+            value = (value + ' ' + nextCleaned.trim()).trim();
+          }
+        }
+        from = value;
+      }
     }
     if (!subject) {
       const m = cleaned.match(/^Subject\s*:\s*(.+?)\s*$/i);
       if (m) subject = m[1].trim();
     }
-    if (from && subject) break;
+    if (!date) {
+      const m = cleaned.match(/^Date\s*:\s*(.+?)\s*$/i);
+      if (m) date = m[1].trim();
+    }
+    if (!message_id) {
+      const m = cleaned.match(/^Message-ID\s*:\s*(.+?)\s*$/i);
+      if (m) message_id = m[1].trim();
+    }
+    if (!reply_to) {
+      const m = cleaned.match(/^Reply-To\s*:\s*(.+?)\s*$/i);
+      if (m) reply_to = m[1].trim();
+    }
+    if (from && subject && date && message_id && reply_to) break;
   }
 
-  if (!from && !subject) return null;
-  return { from, subject };
+  if (!from && !subject && !date && !message_id && !reply_to) return null;
+  return { from, subject, date, message_id, reply_to };
+}
+
+/**
+ * Parse a forwarded `Date:` value into ISO-8601 UTC. Tolerates the major
+ * mail-client shapes:
+ *
+ *   - Gmail plaintext:    "Sun, Apr 26, 2026 at 10:16 AM"
+ *   - Outlook longform:   "Sunday, April 26, 2026 10:16 AM"
+ *   - RFC 5322:           "Sun, 26 Apr 2026 10:16:00 -0700"
+ *   - Bare ISO:           "2026-04-26T10:16:00.000Z"
+ *
+ * Returns `undefined` when no parser succeeds (rather than approximating).
+ */
+export function parseForwardDate(raw: string): string | undefined {
+  if (!raw) return undefined;
+  const cleaned = raw.trim();
+  if (!cleaned) return undefined;
+
+  // Try Date.parse on the cleaned value first — handles RFC 5322 and ISO.
+  const direct = Date.parse(cleaned);
+  if (!Number.isNaN(direct)) return new Date(direct).toISOString();
+
+  // Gmail's "at " infix — strip it and retry.
+  const gmail = cleaned.replace(/\s+at\s+/i, ' ');
+  if (gmail !== cleaned) {
+    const t = Date.parse(gmail);
+    if (!Number.isNaN(t)) return new Date(t).toISOString();
+  }
+
+  // Outlook full weekday (some locales) — Date.parse handles "Sunday, April
+  // 26, 2026 10:16 AM" natively; tried above. No further fallback today.
+
+  return undefined;
+}
+
+/**
+ * Filler tokens that don't carry publication identity. Stripped before
+ * slugifying so "Steph at Internet Pipes" → "internet-pipes" (not
+ * "steph-at-internet-pipes"), but only when the result is still meaningful.
+ *
+ * Conservative — we'd rather have a verbose-but-correct slug than aggressively
+ * trim and lose identity. The fallback is "slug the whole display name."
+ */
+const NEWSLETTER_FILLER_PREFIXES: RegExp[] = [
+  /^.*?\s+at\s+(.+)$/i, // "Steph at Internet Pipes" → "Internet Pipes"
+  /^(.+)\s+by\s+.+$/i, // "Stratechery by Ben Thompson" → "Stratechery"
+  /^(.+)\s+from\s+.+$/i, // "Updates from FooCo" → matched but conservative
+];
+
+/**
+ * Derive a stable newsletter slug from the original sender's display name.
+ * Falls back to the email domain (without TLD-stripping) when no display
+ * name is available.
+ *
+ * Examples:
+ *   "Steph at Internet Pipes <internetpipes@...>" → "internet-pipes"
+ *   "Sidebar.io <hello@uxdesign.cc>"               → "sidebar-io"
+ *   "Stratechery by Ben Thompson <stratechery@...>" → "stratechery"
+ *   "<hello@every.to>" / undefined display + "hello@every.to" → "every-to"
+ *
+ * Returns `undefined` when nothing slug-worthy can be derived.
+ */
+export function deriveNewsletterSlug(
+  fromAddr: string | undefined,
+  fromEmail: string | undefined,
+): string | undefined {
+  // 1. Try the display-name portion of `fromAddr`.
+  if (fromAddr) {
+    let display = fromAddr;
+    // Strip the angle-bracketed address if present.
+    const lt = display.indexOf('<');
+    if (lt !== -1) display = display.slice(0, lt);
+    display = display.trim().replace(/^["']|["']$/g, '').trim();
+
+    if (display) {
+      // Try filler-prefix patterns first.
+      for (const re of NEWSLETTER_FILLER_PREFIXES) {
+        const m = display.match(re);
+        if (m && m[1]) {
+          const slug = slugifyNewsletterDisplayName(m[1]);
+          if (slug) return slug;
+        }
+      }
+      // Otherwise slugify the full display name.
+      const slug = slugifyNewsletterDisplayName(display);
+      if (slug) return slug;
+    }
+  }
+
+  // 2. Fall back to the email domain.
+  if (fromEmail) {
+    const at = fromEmail.indexOf('@');
+    if (at !== -1) {
+      const domain = fromEmail.slice(at + 1).trim().toLowerCase();
+      if (domain) {
+        // Slugify the whole domain so dots become dashes (every.to → every-to).
+        return domain.replace(/\./g, '-').replace(/^-+|-+$/g, '');
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Slugify a publication display name. Matches `slugifySenderName` from
+ * `sender-aliases.ts` semantics so manual `sender:<slug>` aliases line up
+ * with auto-derived `newsletter:<slug>` labels when the same display name
+ * is used in both contexts.
+ */
+function slugifyNewsletterDisplayName(name: string): string {
+  if (!name) return '';
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[\s._/\\:;,!?@#$%^&*()+=<>"'`~|[\]{}]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 // ============================================================================

@@ -9,8 +9,10 @@
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert';
 import {
   createForwardDetectHook,
+  deriveNewsletterSlug,
   detectForward,
   extractForwardNote,
+  parseForwardDate,
   parseSelfAddresses,
 } from '../src/messaging/forward-detect.ts';
 import type { HookContext, InboxItem } from '../src/messaging/types.ts';
@@ -519,4 +521,233 @@ Deno.test('parseSelfAddresses — empty string → []', () => {
 Deno.test('parseSelfAddresses — array input → lowercased & deduped', () => {
   const out = parseSelfAddresses(['A@X.com', 'a@x.com', ' b@y.com ']);
   assertEquals(out, ['a@x.com', 'b@y.com']);
+});
+
+// ============================================================================
+// Phase 1: original_sent_at + original_message_id + original_reply_to + newsletter_slug
+// (per .brief/forward-notes-and-newsletter-profiles.md)
+// ============================================================================
+
+Deno.test('parseForwardDate — Gmail "at" infix', () => {
+  const iso = parseForwardDate('Sun, Apr 26, 2026 at 10:16 AM');
+  assertExists(iso);
+  // Locale-dependent timezone interpretation, but the wall-clock date stays.
+  assert(iso.startsWith('2026-04-26'), `expected 2026-04-26 prefix, got ${iso}`);
+});
+
+Deno.test('parseForwardDate — Outlook longform weekday', () => {
+  const iso = parseForwardDate('Sunday, April 26, 2026 10:16 AM');
+  assertExists(iso);
+  assert(iso.startsWith('2026-04-26'));
+});
+
+Deno.test('parseForwardDate — RFC 5322', () => {
+  const iso = parseForwardDate('Sun, 26 Apr 2026 17:16:00 +0000');
+  assertEquals(iso, '2026-04-26T17:16:00.000Z');
+});
+
+Deno.test('parseForwardDate — bare ISO', () => {
+  const iso = parseForwardDate('2026-04-26T10:16:00.000Z');
+  assertEquals(iso, '2026-04-26T10:16:00.000Z');
+});
+
+Deno.test('parseForwardDate — unparseable returns undefined (not approximate)', () => {
+  assertEquals(parseForwardDate('not a date at all'), undefined);
+  assertEquals(parseForwardDate(''), undefined);
+});
+
+Deno.test('deriveNewsletterSlug — "X at Internet Pipes" → internet-pipes', () => {
+  const slug = deriveNewsletterSlug(
+    'Steph at Internet Pipes <internetpipes@broadcasts.lemonsqueezy-mail.com>',
+    'internetpipes@broadcasts.lemonsqueezy-mail.com',
+  );
+  assertEquals(slug, 'internet-pipes');
+});
+
+Deno.test('deriveNewsletterSlug — "Sidebar.io" → sidebar-io', () => {
+  const slug = deriveNewsletterSlug('Sidebar.io <hello@uxdesign.cc>', 'hello@uxdesign.cc');
+  assertEquals(slug, 'sidebar-io');
+});
+
+Deno.test('deriveNewsletterSlug — "Stratechery by Ben Thompson" → stratechery', () => {
+  const slug = deriveNewsletterSlug(
+    'Stratechery by Ben Thompson <stratechery@example.com>',
+    'stratechery@example.com',
+  );
+  assertEquals(slug, 'stratechery');
+});
+
+Deno.test('deriveNewsletterSlug — bare display name (no angle bracket)', () => {
+  const slug = deriveNewsletterSlug("Lenny's Newsletter", 'lenny@substack.com');
+  assertEquals(slug, "lenny-s-newsletter");
+});
+
+Deno.test('deriveNewsletterSlug — no display name, falls back to email domain', () => {
+  const slug = deriveNewsletterSlug(undefined, 'hello@every.to');
+  assertEquals(slug, 'every-to');
+});
+
+Deno.test('deriveNewsletterSlug — only angle-bracketed addr, no display → falls back to email domain', () => {
+  const slug = deriveNewsletterSlug('<hello@every.to>', 'hello@every.to');
+  assertEquals(slug, 'every-to');
+});
+
+Deno.test('deriveNewsletterSlug — both undefined → undefined', () => {
+  assertEquals(deriveNewsletterSlug(undefined, undefined), undefined);
+});
+
+Deno.test('detectForward — extracts original_sent_at from Gmail-shape body', () => {
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: Steph at Internet Pipes <internetpipes@broadcasts.lemonsqueezy-mail.com>',
+    'Date: Sun, Apr 26, 2026 at 10:16 AM',
+    'Subject: IP Digest: Whimsymaxxing',
+    'To: <janeazy@gmail.com>',
+    '',
+    'Hello Internet sleuths!',
+  ].join('\n');
+  const item = makeItem(
+    { body },
+    { from_email: 'me@example.com', subject: 'Fwd: IP Digest: Whimsymaxxing' },
+    body,
+  );
+  const result = detectForward(item, { selfAddresses: SELF });
+  assertExists(result.original_sent_at);
+  assert(result.original_sent_at!.startsWith('2026-04-26'));
+});
+
+Deno.test('detectForward — populates newsletter_slug from forwarded body', () => {
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: Steph at Internet Pipes <internetpipes@broadcasts.lemonsqueezy-mail.com>',
+    'Date: Sun, Apr 26, 2026 at 10:16 AM',
+    'Subject: IP Digest',
+    '',
+    'body',
+  ].join('\n');
+  const item = makeItem(
+    { body },
+    { from_email: 'me@example.com', subject: 'Fwd: IP Digest' },
+    body,
+  );
+  const result = detectForward(item, { selfAddresses: SELF });
+  assertEquals(result.newsletter_slug, 'internet-pipes');
+});
+
+Deno.test('detectForward — extracts message_id and reply_to', () => {
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: Sender <sender@example.com>',
+    'Date: Sun, Apr 26, 2026 at 10:16 AM',
+    'Subject: Hello',
+    'Message-ID: <abc123@mail.example.com>',
+    'Reply-To: replies@example.com',
+    'To: me@example.com',
+    '',
+    'body',
+  ].join('\n');
+  const item = makeItem(
+    { body },
+    { from_email: 'me@example.com', subject: 'Fwd: Hello' },
+    body,
+  );
+  const result = detectForward(item, { selfAddresses: SELF });
+  assertEquals(result.original_message_id, '<abc123@mail.example.com>');
+  assertEquals(result.original_reply_to, 'replies@example.com');
+});
+
+Deno.test('detectForward — malformed Date silently absent (graceful)', () => {
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: Sender <sender@example.com>',
+    'Date: not a real date',
+    'Subject: Hello',
+    '',
+    'body',
+  ].join('\n');
+  const item = makeItem(
+    { body },
+    { from_email: 'me@example.com', subject: 'Fwd: Hello' },
+    body,
+  );
+  const result = detectForward(item, { selfAddresses: SELF });
+  assertEquals(result.original_sent_at, undefined);
+  // Other extractions still succeed
+  assertEquals(result.original_subject, 'Hello');
+});
+
+Deno.test('detectForward — From: line continuation across two lines (Gmail wrap)', () => {
+  // Gmail wraps long From: values onto the next line. The wrapped portion
+  // should be stitched back together so `original_from_email` extraction works.
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: Steph at Internet Pipes <',
+    'internetpipes@broadcasts.lemonsqueezy-mail.com>',
+    'Date: Sun, Apr 26, 2026 at 10:16 AM',
+    'Subject: IP Digest',
+    '',
+    'body',
+  ].join('\n');
+  const item = makeItem(
+    { body },
+    { from_email: 'me@example.com', subject: 'Fwd: IP Digest' },
+    body,
+  );
+  const result = detectForward(item, { selfAddresses: SELF });
+  assertEquals(
+    result.original_from_email,
+    'internetpipes@broadcasts.lemonsqueezy-mail.com',
+  );
+  assertEquals(result.newsletter_slug, 'internet-pipes');
+});
+
+Deno.test('createForwardDetectHook — writes new fields when present', async () => {
+  const hook = createForwardDetectHook({ selfAddresses: SELF });
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: Sender <sender@example.com>',
+    'Date: Sun, Apr 26, 2026 at 10:16 AM',
+    'Subject: Hello',
+    'Message-ID: <abc@mail.com>',
+    'Reply-To: replies@example.com',
+    '',
+    'body',
+  ].join('\n');
+  const item = makeItem(
+    { body },
+    { from_email: 'me@example.com', subject: 'Fwd: Hello' },
+    body,
+  );
+  const verdict = await hook(item, {} as HookContext);
+  assert(typeof verdict === 'object');
+  const next = verdict as InboxItem;
+  assertExists(next.fields.original_sent_at);
+  assertEquals(next.fields.original_message_id, '<abc@mail.com>');
+  assertEquals(next.fields.original_reply_to, 'replies@example.com');
+  assertEquals(next.fields.newsletter_slug, 'sender');
+});
+
+Deno.test('createForwardDetectHook — does not overwrite missing fields with undefined', async () => {
+  // When forward body has no Date: line, original_sent_at is absent in the
+  // verdict and MUST NOT clobber any pre-existing `fields.original_sent_at`.
+  const hook = createForwardDetectHook({ selfAddresses: SELF });
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: Sender <sender@example.com>',
+    'Subject: Hello',
+    '',
+    'body',
+  ].join('\n');
+  const item = makeItem(
+    { body },
+    {
+      from_email: 'me@example.com',
+      subject: 'Fwd: Hello',
+      original_sent_at: '2020-01-01T00:00:00Z', // pre-existing
+    },
+    body,
+  );
+  const verdict = await hook(item, {} as HookContext);
+  const next = verdict as InboxItem;
+  assertEquals(next.fields.original_sent_at, '2020-01-01T00:00:00Z');
 });

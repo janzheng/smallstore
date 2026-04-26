@@ -100,8 +100,10 @@ export {
 } from './quarantine.ts';
 export {
   createForwardDetectHook,
+  deriveNewsletterSlug,
   detectForward,
   extractForwardNote,
+  parseForwardDate,
   parseSelfAddresses,
   type ForwardDetectOptions,
   type ForwardDetectResult,
