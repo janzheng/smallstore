@@ -2,8 +2,8 @@
 
 Focused sweep of this session's changes (new features + 7 bug fixes). Findings only — no fixes applied. Created 2026-04-17. **Wave 3 added 2026-04-18** covering paging + JSONL job-log feature (post-b24338f commits).
 
-**Totals: 47 + 11 = 58 findings, 58 resolved / 9 open as of 2026-04-18**
-> 57 fixed + 1 won't-fix (A042-path deprecated). 9 deferrable remain — mostly at-scale-only polish (A022 CacheManager disjoint-key race, A025 stats divergence docs, A103 merge default, A201/A203/A204 JSONL growth/collision/parallelism, A220 cursor+offset docs, A242 weak casts, A243 preset-as-any).
+**Totals: 47 + 11 = 58 findings, 58 resolved / 8 open as of 2026-04-26**
+> 58 fixed + 1 won't-fix (A042-path deprecated). 8 deferrable remain — mostly at-scale-only polish (A022 CacheManager disjoint-key race, A025 stats divergence docs, A201/A203/A204 JSONL growth/collision/parallelism, A220 cursor+offset docs, A242 weak casts, A243 preset-as-any). A103 (merge default) fixed 2026-04-17.
 
 > **Deployment context:** Public JSR library (`@yawnxyz/smallstore`) consumed by coverflow-v3 (production Deno service, multi-user). Treat race conditions, error-swallowing, and wiring failures as real.
 > `#local-real` = affects every caller / every session.
@@ -107,7 +107,7 @@ Focused sweep of this session's changes (new features + 7 bug fixes). Findings o
 - [x] **A100** [fixed: hydrate() catch block sets `this._hydratePromise = null` before re-throwing — next call retries instead of poisoning all future searches, src/adapters/local-json.ts:100-103] LocalJson hydrate-promise poisoning #error-handling #local-real
 - [x] **A101** [fixed: searchProvider getter caches the wrapper in `this._searchProviderWrapper` and returns the same instance on subsequent calls, src/adapters/local-json.ts:87,110] LocalJson wrapper identity #wiring #at-scale-only
 - [x] **A102** [fixed: index() receives the cloned storedValue, so async providers (vector/zvec) can't observe caller mutations] MemoryAdapter clone on index #bug-fix
-- [ ] **A103** `merge` default mode is `append` — callers expecting "replace dest" get doubled data on re-runs. `src/router.ts:1503-1568` #logic-bug #local-real #breaking-change
+- [x] **A103** `merge` default mode is `append` — callers expecting "replace dest" get doubled data on re-runs. **FIXED 2026-04-17 in commit `291617d`** — flipped `overwrite: false` → `overwrite: true` in `router.ts` `merge()` defaults; added explanatory comment. **2026-04-26**: also annotated `MergeOptions.overwrite` JSDoc in `types.ts` to surface the default in the public contract. `src/router.ts:1651-1660`, `src/types.ts:2110-2111` #logic-bug #local-real #breaking-change
 - [x] **A104** [fixed: null/undefined check instead of truthy check] merge() preserves scalar 0 / '' / false #bug-fix
 
 ---

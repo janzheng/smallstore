@@ -2107,7 +2107,7 @@ export interface MergeOptions {
   /** Merge strategy for conflicts */
   onConflict?: 'replace' | 'skip' | 'merge';
   
-  /** Overwrite destination */
+  /** Overwrite destination (default: `true` — re-running `merge` is idempotent). Set `false` to append to existing dest. */
   overwrite?: boolean;
 }
 
