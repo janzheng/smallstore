@@ -4,6 +4,19 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ---
 
+## 2026-04-27 — Stale-unread auto-mark-read sweep
+
+User pitched: "auto-mark-read sweep, will pay off as my subscription list grows."
+Initial framing was "rule-shaped, ~10 min" — but the rules engine doesn't have
+a `mark_read` action or age-based matching, so this shipped as a server-side
+cron sweep instead. Same end result, slightly bigger surface: a configurable
+env knob, runs on every cron tick, no-op when nothing's stale. 826/826 messaging
+tests green.
+
+- [x] [done 2026-04-27, deploy `dde2a916`] **`runUnreadSweep` + cron wiring** — new `src/messaging/unread-sweep.ts` exports a pure function: query items matching `{ labels: ["unread"], until: <now - cutoffDays> }`, drop the `unread` label, leave everything else (including `bookmark`, `newsletter:*`) intact. Cron handler in `deploy/src/index.ts` reads `UNREAD_SWEEP_DAYS` from env (default disabled, recommended `30`), iterates registered inboxes, runs the sweep per-inbox with isolation. Wrangler `[vars]` ships with `UNREAD_SWEEP_DAYS = "30"`. Items remain queryable post-sweep — only the `unread` label is removed, so all read paths still surface them. Idempotent (rerun = no-op since the filter intersects with `unread`). Hard cap of 10k items per run with `capped: true` flag for big batches. 8 new tests covering cutoff math, the disable knob, label preservation, idempotence, and the cap. Live verified: 6 unread items currently, 0 older than 30 days, sweep is a no-op until items age (correct). #messaging #unread-sweep #cron
+
+---
+
 ## 2026-04-27 — Reading-list view (`recent.md`)
 
 User asked for a cross-publisher feed: "what's new since I last looked," in

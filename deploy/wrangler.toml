@@ -34,6 +34,13 @@ SENDER_ALIASES = "jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:
 # are rejected even if the sender is allowlisted.
 AUTO_CONFIRM_SENDERS = "*@substack.com,*@substackmail.com,*@convertkit.com,*@beehiiv.com,*@mailerlite.com,*@emailoctopus.com,*@uxdesign.cc,*@every.to"
 
+# Stale-unread sweep cadence — items older than this many days with the
+# `unread` label get auto-marked-read by the cron. Items remain queryable
+# (the label is the only thing removed). Set to "0" or unset to disable.
+# Recommended: "30" — newsletter mailrooms accumulate; the unread surface
+# is more useful as a "what's new" view than a long-term to-read list.
+UNREAD_SWEEP_DAYS = "30"
+
 # Worker owns smallstore.labspace.ai. The DNS record must exist in the
 # labspace.ai zone (orange-cloud / Proxied) before the first deploy — its
 # CNAME target is a fallback only; when the Worker is active, requests are

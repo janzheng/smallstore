@@ -53,6 +53,7 @@ import {
   registerMessagingRoutes,
   rssChannel,
   runMirror,
+  runUnreadSweep,
   InboxRegistry,
   type HookContext,
   type HookVerdict,
@@ -119,6 +120,14 @@ export interface Env {
    * become manual).
    */
   AUTO_CONFIRM_SENDERS?: string;
+  /**
+   * Days before stale unread items get auto-marked-read by the cron.
+   * Items with `received_at < (now - N days)` AND the `unread` label
+   * get the label removed. Set to `0` (or unset) to disable. Default
+   * when unset: disabled. Recommended: `30`. Items remain queryable
+   * post-sweep — only the `unread` label is removed.
+   */
+  UNREAD_SWEEP_DAYS?: string;
 }
 
 // ============================================================================
@@ -135,6 +144,11 @@ interface AppHandle {
   rssRunner: PullRunner;
   /** Trigger the cron mirror over every peer with `metadata.mirror_config`. */
   runMirror: () => ReturnType<typeof runMirror>;
+  /**
+   * Inbox registry — needed at the cron-handler scope so the unread-sweep
+   * can iterate registered inboxes without re-building the app.
+   */
+  registry: InboxRegistry;
 }
 
 let appHandle: AppHandle | null = null;
@@ -564,6 +578,7 @@ function buildApp(env: Env): AppHandle {
     peerStore,
     rssRunner,
     runMirror: runMirrorAll,
+    registry,
   };
 }
 
@@ -599,7 +614,7 @@ export default {
    * await directly for simpler error reporting.
    */
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    const { rssRunner, runMirror } = ensureApp(env);
+    const { rssRunner, runMirror, registry } = ensureApp(env);
 
     // RSS poll first — runs against external feeds, network-bound.
     const rssSummary = await rssRunner.pollAll();
@@ -637,5 +652,44 @@ export default {
     } catch (err) {
       console.error('[scheduled] mirror error', err);
     }
+
+    // Stale-unread sweep — best-effort cleanup so the unread surface
+    // stays useful as a "what's new" view. Disabled when
+    // UNREAD_SWEEP_DAYS is unset, "0", or non-numeric. Runs across every
+    // registered inbox; per-inbox failures are isolated and logged.
+    const sweepDays = parseSweepDays(env.UNREAD_SWEEP_DAYS);
+    if (sweepDays > 0) {
+      for (const name of registry.list()) {
+        const inbox = registry.get(name);
+        if (!inbox) continue;
+        try {
+          const result = await runUnreadSweep({ inbox, cutoffDays: sweepDays });
+          if (result.changed > 0 || result.matched > 0) {
+            console.log('[scheduled] unread-sweep', JSON.stringify({
+              inbox: name,
+              cutoff_days: sweepDays,
+              cutoff_iso: result.cutoff_iso,
+              matched: result.matched,
+              changed: result.changed,
+              capped: result.capped,
+            }));
+          }
+        } catch (err) {
+          console.error(`[scheduled] unread-sweep error for ${name}`, err);
+        }
+      }
+    }
   },
 };
+
+/**
+ * Parse the UNREAD_SWEEP_DAYS env var to a positive integer day count, or
+ * `0` to mean disabled. Treats unset / empty / non-numeric / negative as
+ * disabled — we only mark items read on an explicit, sensible threshold.
+ */
+function parseSweepDays(raw: string | undefined): number {
+  if (!raw) return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.floor(n);
+}

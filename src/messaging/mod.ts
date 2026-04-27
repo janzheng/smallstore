@@ -179,3 +179,8 @@ export {
   type MirrorRunResult,
   type RunMirrorOptions,
 } from './mirror.ts';
+export {
+  runUnreadSweep,
+  type UnreadSweepOptions,
+  type UnreadSweepResult,
+} from './unread-sweep.ts';
