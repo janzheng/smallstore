@@ -99,9 +99,11 @@ The `?text=` filter on `/inbox/:name` and `POST /query` searches across the whol
 **Per-newsletter notes — clean:**
 `GET /inbox/:name/newsletters/:slug/notes` is exactly what you want, just scoped to one slug.
 
-### What's missing
+### What's now live (since 2026-04-27)
 
-A first-class **cross-newsletter notes endpoint** with the same slim shape:
+The cross-newsletter notes endpoint described below is **shipped** as `GET /inbox/:name/notes` (deploy `2a67e4a8-3b21-4d79-8ae9-4c9d41bf932f`). MCP wrapper `sm_inbox_notes(inbox, text?, slug?, since?, order?, limit?)` is registered. The shape and behavior described in the rest of this section is what actually exists, not a proposal.
+
+### What it looks like
 
 ```
 GET /inbox/:name/notes
@@ -132,9 +134,7 @@ Returns:
 }
 ```
 
-**Cost:** ~15-20 min including tests. Reuses the existing slim projection from `/newsletters/:slug/notes` — same query, drop the slug filter, add an optional `?text=` that filters on `fields.forward_note` substring (case-insensitive). The markdown form would group by slug with a `## <publisher>` heading per group.
-
-MCP wrapper: `sm_inbox_notes(inbox, text?, slug?, since?, limit?)`.
+**Implementation note** (worth carrying forward): the filter path of `inbox.query()` honors `cursor` for pagination but **ignores `options.order`** — meaning queries with a `filter` arg always iterate the index in stored (insertion) order, never reversed. The cross-newsletter notes route works around this by hydrating items once (capped at 500 by the query call) then sorting in-memory by `received_at` before applying the user-requested limit. Same O(N) tradeoff as the rest of the cross-publisher routes; tracked as a future `inbox.query()` polish. Not blocking.
 
 ---
 
@@ -203,7 +203,7 @@ The whole system has one data primitive (`InboxItem.fields.forward_note`) with o
 
 ## Suggested next adds (in priority order)
 
-1. **`GET /inbox/:name/notes`** — cross-newsletter notes endpoint, ~20 min. Closes the "I want all my notes searchable" gap that motivated this brief.
-2. **`?text=` on the new notes endpoint** — substring filter over `forward_note` only (not body). Trivial once the endpoint exists.
-3. **`?format=markdown` on the new notes endpoint** — group by slug, one doc with all your notes. Mirrors the Phase 2a treatment.
-4. **`sm_inbox_set_note(mode: 'edit')`** — line-level diff for marking a single todo `[x]` done without overwriting the rest of the note. Defer until manual edits feel awkward.
+1. **`sm_inbox_set_note(mode: 'edit')`** — line-level diff for marking a single todo `[x]` done without overwriting the rest of the note. Defer until manual edits feel awkward.
+2. **`inbox.query()` order honoring** — fix the underlying limitation so the filter path respects `options.order` natively, removing the in-memory sort fallback in `/inbox/:name/notes`. Not user-visible; pure cleanup.
+3. **Phase 2b — peer-mediated tigerflare cron mirror** — already scoped in `.brief/notes-todos-and-mirror.md § Phase 2b`. With the markdown export endpoints (Phase 2a) and the new notes markdown view both shipped, the cron just renders + pushes per slug. ~60-90 min.
+4. **Note-length engagement signal per newsletter** — correlate aggregate note length with interest score; surface in the profile dashboard. Parked from the original forward-notes brief.

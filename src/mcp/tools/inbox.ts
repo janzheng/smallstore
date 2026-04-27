@@ -486,6 +486,23 @@ export const INBOX_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'sm_inbox_notes',
+    description:
+      'Cross-newsletter notes view — every item with a non-empty `forward_note`, regardless of slug. Returns a slim `{id, newsletter_slug, newsletter_display, original_sent_at, received_at, subject, from, note}` projection. Use when the user says "show all my notes", "search my notes for X", "what have I written about", "aggregate my notes", or wants to see / search annotations across every newsletter at once. `text` filter does case-insensitive substring match on the note text only (NOT body — that path uses `sm_inbox_query` with `text=`). For per-publisher reading-list semantics use `sm_newsletter_notes` instead — that defaults to chronological-by-original-send-date; this defaults to newest-by-received-date.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        text: { type: 'string', description: 'Optional substring filter on `forward_note` (case-insensitive).' },
+        slug: { type: 'string', description: 'Optional — scope to one newsletter slug. Equivalent to sm_newsletter_notes.' },
+        since: { type: 'string', description: 'Optional ISO timestamp — only items received after this.' },
+        order: { type: 'string', enum: ['newest', 'oldest'], description: 'Sort order. Default `newest` by received_at.' },
+        limit: { type: 'number', description: 'Max notes returned. Default 100, max 500.' },
+      },
+      required: ['inbox'],
+    },
+  },
+  {
     name: 'sm_inbox_replay_hook',
     description:
       'Retroactively re-run a registered hook (e.g. `forward-detect`) over existing items in an inbox, merging any new fields and labels into stored items. The system version of "running a backfill script" — generic over any hook the deploy registers. ALWAYS dry-run first (`dry_run: true`) to preview the field/label diffs before applying. Common use: a forward-detect upgrade adds new fields (e.g. `original_sent_at`) — replay populates them on items that landed before the upgrade. Identity (id, received_at, source) and the index are preserved.',
@@ -905,6 +922,21 @@ export async function handleInboxTool(
         `/inbox/${encName(inbox)}/todos${qs({ slug, since, limit })}`,
       );
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_todos failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_notes': {
+      const inbox = requireString(args, 'inbox');
+      const text = typeof args.text === 'string' ? args.text : undefined;
+      const slug = typeof args.slug === 'string' ? args.slug : undefined;
+      const since = typeof args.since === 'string' ? args.since : undefined;
+      const limit = typeof args.limit === 'number' ? args.limit : undefined;
+      const order = parseOrderArg(args.order, 'sm_inbox_notes');
+      const r = await http(
+        'GET',
+        `/inbox/${encName(inbox)}/notes${qs({ text, slug, since, limit, order })}`,
+      );
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_notes failed', r));
       return r.body;
     }
 

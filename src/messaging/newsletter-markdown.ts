@@ -193,9 +193,100 @@ export function renderNewsletterNotes(
   return lines.join('\n');
 }
 
+/**
+ * Cross-newsletter notes view — one markdown document with notes grouped
+ * by newsletter slug, each group an `## H2`. Used by
+ * `GET /inbox/:name/notes?format=markdown` to render "everything I've ever
+ * written" as a single browsable file.
+ *
+ * `filters` is the query that produced the slice — emitted as a metadata
+ * line so a saved file's provenance ("this is my notes about X since Y")
+ * stays self-describing.
+ */
+export function renderAllNotes(
+  inboxName: string,
+  notes: ReadonlyArray<{
+    id: string;
+    newsletter_slug?: string;
+    newsletter_display?: string;
+    original_sent_at?: string;
+    received_at?: string;
+    subject?: string;
+    from?: string;
+    note?: string;
+  }>,
+  origin: string,
+  filters: { text?: string; slug?: string; since?: string } = {},
+): string {
+  const lines: string[] = [];
+  lines.push(`# ${capitalize(inboxName)} — all notes`);
+  lines.push('');
+
+  const filterParts: string[] = [];
+  if (filters.text) filterParts.push(`text: \`${filters.text}\``);
+  if (filters.slug) filterParts.push(`slug: \`${filters.slug}\``);
+  if (filters.since) filterParts.push(`since: ${filters.since}`);
+  if (filterParts.length > 0) {
+    lines.push(`**Filters:** ${filterParts.join(' · ')}  `);
+  }
+  lines.push(`**Notes:** ${notes.length}`);
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+
+  if (notes.length === 0) {
+    lines.push('_No matching notes._');
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  // Group by slug while preserving the input order within each group.
+  const groups = new Map<string, typeof notes[number][]>();
+  for (const n of notes) {
+    const key = n.newsletter_slug ?? '(no-slug)';
+    const arr = groups.get(key) ?? [];
+    arr.push(n);
+    groups.set(key, arr);
+  }
+
+  for (const [slug, slugNotes] of groups) {
+    const display = slugNotes[0].newsletter_display
+      ? stripAngleAddrInline(slugNotes[0].newsletter_display)
+      : slug;
+    lines.push(`## ${display}`);
+    lines.push('');
+    lines.push(`**Slug:** \`${slug}\` · **Notes:** ${slugNotes.length}`);
+    lines.push('');
+
+    for (const n of slugNotes) {
+      const heading = n.original_sent_at
+        ? `### ${formatDate(n.original_sent_at)} — ${n.subject ?? '(no subject)'}`
+        : `### (date unknown) — ${n.subject ?? '(no subject)'}`;
+      lines.push(heading);
+      lines.push('');
+      const noteText = n.note ?? '';
+      for (const noteLine of noteText.split(/\r?\n/)) {
+        lines.push(noteLine.length > 0 ? `> ${noteLine}` : '>');
+      }
+      lines.push('');
+      if (origin) {
+        lines.push(`[View item →](${origin}/inbox/${inboxName}/items/${n.id})`);
+        lines.push('');
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
+
+function stripAngleAddrInline(raw: string): string {
+  const lt = raw.indexOf('<');
+  return lt === -1 ? raw.trim() : raw.slice(0, lt).trim().replace(/^["']|["']$/g, '');
+}
 
 function formatDate(iso: string | undefined): string {
   if (!iso) return '(unknown)';

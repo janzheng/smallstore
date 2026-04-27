@@ -59,6 +59,7 @@ Forwards are auto-grouped by `fields.newsletter_slug` (derived from sender displ
 | Read a publisher in chronological order (by upstream send date, NOT forward date) | `sm_newsletter_items` with `slug, order: "oldest"` (default) or `"newest"` |
 | Pull all my notes for one publisher (slim shape, LLM-ready) | `sm_newsletter_notes` with `slug` |
 | What action items did I write into my notes? | `sm_inbox_todos` (optionally `slug` to scope, `since` to filter by forward date) — surfaces lines like "remind me to...", `- [ ] ...`, "TODO: ...", "sub me to..." |
+| Show / search all my notes across newsletters | `sm_inbox_notes` (optionally `text` for substring match on note text only, `slug` to scope) |
 
 Slugs are visible via `sm_newsletters_list` — common ones today: `internet-pipes`, `sidebar-io`. Fields populated on every forward: `original_sent_at`, `original_message_id`, `newsletter_slug`, `forward_note` (anything the user typed before the forwarded block).
 

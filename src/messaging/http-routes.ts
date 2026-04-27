@@ -53,6 +53,7 @@ import { listQuarantined, restoreItem } from './quarantine.ts';
 import { verifyHmac, webhookChannel, type WebhookConfig } from './channels/webhook.ts';
 import { scanNoteForTodos } from './todos.ts';
 import {
+  renderAllNotes,
   renderNewsletterIndex,
   renderNewsletterNotes,
   renderNewsletterProfile,
@@ -628,6 +629,91 @@ export function registerMessagingRoutes(
     }
 
     return c.json({ inbox: name, slug, count: notes.length, total: result.total, notes });
+  });
+
+  /**
+   * Cross-newsletter notes — every item with a non-empty `forward_note`,
+   * regardless of slug. The aggregation primitive: "give me all the things
+   * I've written about anything." Same slim projection as the per-slug
+   * notes route; pairs with `?text=` for free-text search across everything
+   * I've ever annotated.
+   *
+   * GET /inbox/:name/notes
+   *   ?text=<keyword>          Substring filter (case-insensitive) on forward_note.
+   *   ?slug=<newsletter-slug>  Optional scope. (Equivalent to /newsletters/:slug/notes.)
+   *   ?since=<iso>             Filter by received_at.
+   *   ?order=newest|oldest     Sort order. Default newest (cross-publisher; "what did I write recently").
+   *   ?limit=<n>               Default 100, max 500.
+   *   ?format=markdown         Render as one markdown document grouped by slug.
+   *
+   * For per-publisher reading-list semantics (chronological by `original_sent_at`),
+   * use `/inbox/:name/newsletters/:slug/notes` instead — different default sort
+   * because the use case is "read this publisher in order" vs "what have I been
+   * thinking about lately."
+   */
+  app.get('/inbox/:name/notes', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const text = c.req.query('text');
+    const slug = c.req.query('slug');
+    const since = c.req.query('since');
+    const limit = parseLimit(c.req.query('limit')) ?? 100;
+    const order = c.req.query('order') === 'oldest' ? 'oldest' : 'newest';
+
+    const fieldsRegex: Record<string, string> = { forward_note: '.+' };
+    if (slug) fieldsRegex.newsletter_slug = `^${escapeRegex(slug)}$`;
+
+    const result = await inbox.query(
+      {
+        fields_regex: fieldsRegex,
+        ...(since ? { since } : {}),
+      },
+      { limit: 500 },
+    );
+
+    const allNotes = result.items.map((item) => ({
+      id: item.id,
+      newsletter_slug: item.fields?.newsletter_slug as string | undefined,
+      newsletter_display: (item.fields?.original_from_addr ?? item.fields?.from_addr) as
+        | string
+        | undefined,
+      original_sent_at: item.fields?.original_sent_at as string | undefined,
+      received_at: item.received_at,
+      subject: (item.fields?.original_subject ?? item.summary) as string | undefined,
+      from: item.fields?.original_from_addr as string | undefined,
+      note: item.fields?.forward_note as string | undefined,
+    }));
+
+    // Sort by received_at — the filter path of inbox.query() honors index
+    // order but ignores `order`, so we apply the sort here on the hydrated
+    // slim shape. Same O(N) tradeoff as the rest of the cross-publisher
+    // routes; bounded by the 500-item query cap above.
+    allNotes.sort((a, b) => {
+      const av = a.received_at ?? '';
+      const bv = b.received_at ?? '';
+      if (av === bv) return 0;
+      return order === 'newest' ? (av < bv ? 1 : -1) : (av < bv ? -1 : 1);
+    });
+
+    // Substring filter on forward_note only (NOT body — that's what the
+    // existing `?text=` on /query already covers, and it's noisier).
+    const filtered = text
+      ? allNotes.filter((n) => (n.note ?? '').toLowerCase().includes(text.toLowerCase()))
+      : allNotes;
+
+    const notes = filtered.slice(0, limit);
+
+    if (c.req.query('format') === 'markdown') {
+      const origin = new URL(c.req.url).origin;
+      return new Response(renderAllNotes(name, notes, origin, { text, slug, since }), {
+        status: 200,
+        headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+      });
+    }
+
+    return c.json({ inbox: name, count: notes.length, total: filtered.length, notes });
   });
 
   /**

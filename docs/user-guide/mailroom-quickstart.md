@@ -308,7 +308,33 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Items missing the chosen sort field always tail. Cursor pagination is disabled in non-default sort modes (use `limit` alone). For inboxes < ~10K items the in-memory sort is fine; the scaling cliff is the same `_index` blob caveat tracked in TASKS-MESSAGING.
 
-### 1.14 Extract todos from your notes
+### 1.14 Search across all your notes (cross-newsletter)
+
+The per-newsletter notes route (§ 1.13) is great when you know the publisher. When you don't — "what have I written about pivots?", "show me everything I noted last month", "give me all my notes for an LLM" — use the cross-newsletter endpoint:
+
+```bash
+# Every note across every newsletter (newest received first)
+curl -H "Authorization: Bearer $TOKEN" "$BASE/inbox/mailroom/notes" | jq
+
+# Text search inside notes only (NOT body — that path uses /query with ?text=)
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/notes?text=pivot" | jq
+
+# Recent only
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/notes?since=2026-04-01T00:00:00Z" | jq
+
+# Markdown — one document, grouped by publisher with H2 headings, notes
+# inlined as blockquotes. Pipe to a file for Obsidian/tigerflare:
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/notes?format=markdown" > all-my-notes.md
+```
+
+Slim shape per note: `{id, newsletter_slug, newsletter_display, original_sent_at, received_at, subject, from, note}` — LLM-ready. `text` filter is case-insensitive substring match on `forward_note` only (not the publisher's body content).
+
+For per-publisher reading-list semantics (chronological by `original_sent_at`) use § 1.13's `/newsletters/:slug/notes` instead — different default sort because the use case is "read this publisher in order" vs "what have I been thinking about lately."
+
+### 1.15 Extract todos from your notes
 
 When you forward something with a note like *"reminder to self: sub mailroom to rosieland"*, that's a real action item buried in free text. The `/todos` endpoint scans every `forward_note` for action-shaped lines via a small regex set:
 
@@ -338,7 +364,7 @@ Patterns matched (first-match-wins, case-insensitive):
 
 A note with multiple matching lines emits multiple todos. Each todo includes `matched_pattern` (which rule fired) and `full_note` (the entire note for context). Lines that start with `>` (quoted reply) are skipped. `[x]` (checked) lines are skipped — that's the "done" form.
 
-### 1.15 Add or revise a note after the fact
+### 1.16 Add or revise a note after the fact
 
 When a forward landed without a note, or you want to revise an existing one. Pairs with § 1.13 — the note immediately surfaces in `/inbox/:name/newsletters/:slug/notes`.
 
@@ -365,7 +391,7 @@ curl -H "Authorization: Bearer $TOKEN" -X POST \
 
 Identity (id, received_at, source, summary, body, labels) and the inbox index entry are preserved — the annotation only touches `fields.forward_note` and stamps `fields.note_updated_at`. So a late annotation never re-orders your inbox or duplicates the item.
 
-### 1.16 Backfill a new field across existing items (hook replay)
+### 1.17 Backfill a new field across existing items (hook replay)
 
 When a new forward-detect field ships (e.g. you start extracting `original_sent_at` after some items already exist without it), run the hook over the historical items via `POST /admin/inboxes/:name/replay`. This is the generalized form of `apply_retroactive` for rules.
 
