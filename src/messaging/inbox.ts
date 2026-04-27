@@ -128,12 +128,20 @@ export class Inbox implements InboxInterface {
       return this.listSortedByField(index.entries, filter, options);
     }
 
+    // The default index is stored newest-first (most-recent ingest at index 0).
+    // `order: 'oldest'` reverses iteration; cursor's `startIndex` finds by id so
+    // it works on either direction. (Pre-2026-04-27 the filter path silently
+    // ignored `options.order`; cross-newsletter routes worked around that with
+    // an in-memory sort post-hydration. Now native.)
+    const order = options.order ?? 'newest';
+    const orderedEntries = order === 'newest' ? index.entries : [...index.entries].reverse();
+
     const matching: IndexEntry[] = [];
     const limit = options.limit ?? 50;
-    const startIdx = startIndex(index.entries, decodeCursor(options.cursor));
+    const startIdx = startIndex(orderedEntries, decodeCursor(options.cursor));
 
-    for (let i = startIdx; i < index.entries.length; i++) {
-      const entry = index.entries[i];
+    for (let i = startIdx; i < orderedEntries.length; i++) {
+      const entry = orderedEntries[i];
       const item = await this.storage.items.get(this.itemKey(entry.id)) as InboxItem | null;
       if (!item) continue;
       if (!evaluateFilter(filter, item)) continue;

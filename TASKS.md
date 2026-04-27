@@ -14,8 +14,6 @@ All three deliverable phases of `.brief/notes-todos-and-mirror.md` are live. The
 
 ### Stretch / parked
 
-- [?] **`inbox.query()` order honoring** — fix the underlying limitation so the filter path respects `options.order` natively, removing the in-memory sort fallback in `/inbox/:name/notes`. Not user-visible; pure cleanup. #cleanup #inbox-query-order
-- [?] **Note-length engagement signal per newsletter** — correlate aggregate note length with interest score; surface in profile dashboard. From original forward-notes brief. #messaging #interest-signal
 - [?] **Cross-newsletter topic threading (LLM-extracted from notes)** — `/inbox/:name/topics`. Needs an LLM call path. From original forward-notes brief. #messaging #cross-newsletter-tags
 - [?] **Phase 3 — newsletter-level meta-notes — DEFERRED.** `POST /inbox/:name/newsletters/:slug/note` (separate from per-issue). Per-issue notes already aggregate well; revisit only if writing a meta-note feels awkward in practice. Detail: `.brief/notes-todos-and-mirror.md § Phase 3`. #messaging #newsletter-meta-note
 

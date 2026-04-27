@@ -134,6 +134,39 @@ Deno.test('inbox — query honors cursor pagination', async () => {
   assertEquals(page2.items.length, 2);
 });
 
+Deno.test('inbox — query honors order=oldest in filter path (2026-04-27 fix)', async () => {
+  const inbox = freshInbox();
+  await inbox._ingest(makeItem('a', '2026-04-22T10:00:00Z', { tag: 'match' }));
+  await inbox._ingest(makeItem('b', '2026-04-22T11:00:00Z', { tag: 'match' }));
+  await inbox._ingest(makeItem('c', '2026-04-22T12:00:00Z', { tag: 'match' }));
+
+  const newest = await inbox.query({ fields: { tag: 'match' } });
+  assertEquals(newest.items.map((i) => i.id), ['c', 'b', 'a']);
+
+  const oldest = await inbox.query({ fields: { tag: 'match' } }, { order: 'oldest' });
+  assertEquals(oldest.items.map((i) => i.id), ['a', 'b', 'c']);
+});
+
+Deno.test('inbox — query order=oldest works with cursor pagination', async () => {
+  const inbox = freshInbox();
+  for (let i = 0; i < 5; i++) {
+    await inbox._ingest(makeItem(`m${i}`, `2026-04-22T12:0${i}:00Z`, { tag: 'match' }));
+  }
+
+  const page1 = await inbox.query(
+    { fields: { tag: 'match' } },
+    { limit: 2, order: 'oldest' },
+  );
+  assertEquals(page1.items.map((i) => i.id), ['m0', 'm1']);
+  assertExists(page1.next_cursor);
+
+  const page2 = await inbox.query(
+    { fields: { tag: 'match' } },
+    { limit: 2, order: 'oldest', cursor: page1.next_cursor },
+  );
+  assertEquals(page2.items.map((i) => i.id), ['m2', 'm3']);
+});
+
 Deno.test('inbox — cursor() returns the head watermark', async () => {
   const inbox = freshInbox();
   const empty = await inbox.cursor();

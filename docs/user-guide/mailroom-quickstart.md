@@ -281,6 +281,8 @@ curl -H "Authorization: Bearer $TOKEN" \
   | your-llm-summarizer
 ```
 
+Each entry now also carries an **engagement signal** — `notes_count` (how many issues you wrote about) and `total_note_chars` (aggregate characters across all your notes). The per-publisher profile dashboard adds `avg_note_chars` (per-noted-issue average; `0`, not `NaN`, when no notes exist). Markdown renders this as a one-line `**Engagement:** N chars across M notes (avg X/note)` header. Useful for "which newsletters do I actually engage with vs. just pile up?"
+
 **Get any of the above as markdown** — append `?format=markdown` to render an Obsidian/tigerflare-friendly view:
 
 ```bash

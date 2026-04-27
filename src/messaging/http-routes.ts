@@ -481,11 +481,17 @@ export function registerMessagingRoutes(
       { fields_regex: { newsletter_slug: '.+' } },
       { limit: 10_000 },
     );
-    const counts = new Map<string, { count: number; latest_at?: string; display?: string }>();
+    const counts = new Map<string, {
+      count: number;
+      latest_at?: string;
+      display?: string;
+      total_note_chars: number;
+      notes_count: number;
+    }>();
     for (const item of result.items) {
       const slug = String(item.fields?.newsletter_slug ?? '');
       if (!slug) continue;
-      const cur = counts.get(slug) ?? { count: 0 };
+      const cur = counts.get(slug) ?? { count: 0, total_note_chars: 0, notes_count: 0 };
       cur.count++;
       const at = (item.fields?.original_sent_at as string | undefined) ?? item.received_at;
       if (!cur.latest_at || at > cur.latest_at) {
@@ -493,10 +499,22 @@ export function registerMessagingRoutes(
         const addr = item.fields?.original_from_addr as string | undefined;
         if (addr) cur.display = stripAngleAddr(addr);
       }
+      const note = item.fields?.forward_note as string | undefined;
+      if (typeof note === 'string' && note.trim().length > 0) {
+        cur.notes_count++;
+        cur.total_note_chars += note.length;
+      }
       counts.set(slug, cur);
     }
     const newsletters = [...counts.entries()]
-      .map(([slug, v]) => ({ slug, count: v.count, latest_at: v.latest_at, display: v.display }))
+      .map(([slug, v]) => ({
+        slug,
+        count: v.count,
+        latest_at: v.latest_at,
+        display: v.display,
+        notes_count: v.notes_count,
+        total_note_chars: v.total_note_chars,
+      }))
       .sort((a, b) => (b.latest_at ?? '').localeCompare(a.latest_at ?? ''));
 
     if (c.req.query('format') === 'markdown') {
@@ -524,6 +542,7 @@ export function registerMessagingRoutes(
     let lastAt: string | undefined;
     let lastNote: { text: string; at: string; subject?: string } | undefined;
     let notesCount = 0;
+    let totalNoteChars = 0;
     let display: string | undefined;
     for (const item of result.items) {
       const at = (item.fields?.original_sent_at as string | undefined) ?? item.received_at;
@@ -536,6 +555,7 @@ export function registerMessagingRoutes(
       const note = item.fields?.forward_note as string | undefined;
       if (typeof note === 'string' && note.trim().length > 0) {
         notesCount++;
+        totalNoteChars += note.length;
         if (!lastNote || at > lastNote.at) {
           lastNote = {
             text: note,
@@ -545,6 +565,10 @@ export function registerMessagingRoutes(
         }
       }
     }
+    // Aggregate engagement signal: total chars I've written about this
+    // publisher. Higher = more engaged. Per-issue average is the second-
+    // useful number — `0` when no notes exist (not NaN).
+    const avgNoteChars = notesCount > 0 ? Math.round(totalNoteChars / notesCount) : 0;
 
     const profile = {
       slug,
@@ -553,6 +577,8 @@ export function registerMessagingRoutes(
       first_seen_at: firstAt,
       last_seen_at: lastAt,
       notes_count: notesCount,
+      total_note_chars: totalNoteChars,
+      avg_note_chars: avgNoteChars,
     };
 
     if (c.req.query('format') === 'markdown') {
@@ -676,12 +702,15 @@ export function registerMessagingRoutes(
     const fieldsRegex: Record<string, string> = { forward_note: '.+' };
     if (slug) fieldsRegex.newsletter_slug = `^${escapeRegex(slug)}$`;
 
+    // `inbox.query()` now honors `options.order` in the filter path natively
+    // (fixed 2026-04-27), so we let the storage layer do the sort. Hydrate up
+    // to 500 then post-filter for `?text=` substring match on forward_note.
     const result = await inbox.query(
       {
         fields_regex: fieldsRegex,
         ...(since ? { since } : {}),
       },
-      { limit: 500 },
+      { limit: 500, order },
     );
 
     const allNotes = result.items.map((item) => ({
@@ -696,17 +725,6 @@ export function registerMessagingRoutes(
       from: item.fields?.original_from_addr as string | undefined,
       note: item.fields?.forward_note as string | undefined,
     }));
-
-    // Sort by received_at — the filter path of inbox.query() honors index
-    // order but ignores `order`, so we apply the sort here on the hydrated
-    // slim shape. Same O(N) tradeoff as the rest of the cross-publisher
-    // routes; bounded by the 500-item query cap above.
-    allNotes.sort((a, b) => {
-      const av = a.received_at ?? '';
-      const bv = b.received_at ?? '';
-      if (av === bv) return 0;
-      return order === 'newest' ? (av < bv ? 1 : -1) : (av < bv ? -1 : 1);
-    });
 
     // Substring filter on forward_note only (NOT body — that's what the
     // existing `?text=` on /query already covers, and it's noisier).

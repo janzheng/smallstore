@@ -305,3 +305,95 @@ Deno.test('GET /inbox/:name?order_by=original_sent_at — sorts the whole inbox'
   const body = await res.json();
   assertEquals(body.items.map((i: InboxItem) => i.id), ['a', 'b', 'c']);
 });
+
+// ============================================================================
+// Engagement signal — total_note_chars + avg_note_chars
+// ============================================================================
+
+Deno.test('GET /inbox/:name/newsletters — index includes total_note_chars + notes_count per slug', async () => {
+  const fx = buildFixture();
+  await ingestForwards(fx.inbox, [
+    makeForward({ id: 'a', slug: 'engaged', forward_note: 'a long thoughtful note about this issue' }), // 39 chars
+    makeForward({ id: 'b', slug: 'engaged', forward_note: 'short' }), // 5 chars
+    makeForward({ id: 'c', slug: 'silent' }), // no note
+    makeForward({ id: 'd', slug: 'silent' }),
+  ]);
+
+  const res = await fx.fetch('/inbox/mailroom/newsletters');
+  const body = await res.json();
+  const engaged = body.newsletters.find((n: { slug: string }) => n.slug === 'engaged');
+  const silent = body.newsletters.find((n: { slug: string }) => n.slug === 'silent');
+
+  assertEquals(engaged.notes_count, 2);
+  assertEquals(engaged.total_note_chars, 44);
+  assertEquals(silent.notes_count, 0);
+  assertEquals(silent.total_note_chars, 0);
+});
+
+Deno.test('GET /inbox/:name/newsletters/:slug — profile dashboard returns total_note_chars + avg_note_chars', async () => {
+  const fx = buildFixture();
+  await ingestForwards(fx.inbox, [
+    makeForward({ id: 'a', slug: 'pub', forward_note: 'a' .repeat(40) }),
+    makeForward({ id: 'b', slug: 'pub', forward_note: 'b' .repeat(60) }),
+    makeForward({ id: 'c', slug: 'pub' }), // no note — doesn't count toward avg
+  ]);
+
+  const res = await fx.fetch('/inbox/mailroom/newsletters/pub');
+  const body = await res.json();
+
+  assertEquals(body.notes_count, 2);
+  assertEquals(body.total_note_chars, 100);
+  assertEquals(body.avg_note_chars, 50); // 100 / 2 noted issues, not 100 / 3 total
+});
+
+Deno.test('GET /inbox/:name/newsletters/:slug — avg_note_chars is 0 (not NaN) when notes_count is 0', async () => {
+  const fx = buildFixture();
+  await ingestForwards(fx.inbox, [
+    makeForward({ id: 'a', slug: 'never-noted' }),
+    makeForward({ id: 'b', slug: 'never-noted' }),
+  ]);
+
+  const res = await fx.fetch('/inbox/mailroom/newsletters/never-noted');
+  const body = await res.json();
+
+  assertEquals(body.notes_count, 0);
+  assertEquals(body.total_note_chars, 0);
+  assertEquals(body.avg_note_chars, 0);
+});
+
+Deno.test('GET /inbox/:name/newsletters/:slug?format=markdown — Engagement line appears when notes exist', async () => {
+  const fx = buildFixture();
+  await ingestForwards(fx.inbox, [
+    makeForward({
+      id: 'a',
+      slug: 'pub',
+      forward_note: 'thinking about this',
+      original_sent_at: '2026-04-26T10:00:00Z',
+    }),
+  ]);
+
+  const res = await fx.fetch('/inbox/mailroom/newsletters/pub?format=markdown');
+  const body = await res.text();
+
+  // "**Engagement:** 19 chars across 1 notes (avg 19/note)"
+  if (!body.includes('**Engagement:**')) {
+    throw new Error(`expected Engagement line in markdown, got:\n${body}`);
+  }
+  if (!body.includes('19 chars')) {
+    throw new Error(`expected "19 chars" in markdown, got:\n${body}`);
+  }
+});
+
+Deno.test('GET /inbox/:name/newsletters/:slug?format=markdown — no Engagement line when zero notes', async () => {
+  const fx = buildFixture();
+  await ingestForwards(fx.inbox, [
+    makeForward({ id: 'a', slug: 'pub', original_sent_at: '2026-04-26T10:00:00Z' }),
+  ]);
+
+  const res = await fx.fetch('/inbox/mailroom/newsletters/pub?format=markdown');
+  const body = await res.text();
+
+  if (body.includes('**Engagement:**')) {
+    throw new Error(`Engagement line should be omitted when notes_count=0:\n${body}`);
+  }
+});

@@ -233,6 +233,7 @@ function buildProfile(slug: string, items: ReadonlyArray<InboxItem>): Newsletter
   let lastAt: string | undefined;
   let display: string | undefined;
   let notesCount = 0;
+  let totalNoteChars = 0;
   for (const item of items) {
     const at = (item.fields?.original_sent_at as string | undefined) ?? item.received_at;
     if (!firstAt || at < firstAt) firstAt = at;
@@ -242,7 +243,10 @@ function buildProfile(slug: string, items: ReadonlyArray<InboxItem>): Newsletter
       if (addr) display = stripAngle(addr);
     }
     const note = item.fields?.forward_note as string | undefined;
-    if (typeof note === 'string' && note.trim().length > 0) notesCount++;
+    if (typeof note === 'string' && note.trim().length > 0) {
+      notesCount++;
+      totalNoteChars += note.length;
+    }
   }
   return {
     slug,
@@ -251,6 +255,8 @@ function buildProfile(slug: string, items: ReadonlyArray<InboxItem>): Newsletter
     first_seen_at: firstAt,
     last_seen_at: lastAt,
     notes_count: notesCount,
+    total_note_chars: totalNoteChars,
+    avg_note_chars: notesCount > 0 ? Math.round(totalNoteChars / notesCount) : 0,
   };
 }
 

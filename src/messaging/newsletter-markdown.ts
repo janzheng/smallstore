@@ -36,6 +36,10 @@ export interface NewsletterProfile {
   first_seen_at?: string;
   last_seen_at?: string;
   notes_count: number;
+  /** Total characters across all `forward_note` entries — engagement proxy. */
+  total_note_chars?: number;
+  /** Per-noted-issue average; `0` when notes_count is 0. */
+  avg_note_chars?: number;
 }
 
 /**
@@ -93,6 +97,12 @@ export function renderNewsletterProfile(
   lines.push(`**Last seen:** ${formatDate(profile.last_seen_at)}  `);
   lines.push(`**Issues:** ${profile.count}  `);
   lines.push(`**Notes:** ${profile.notes_count}`);
+  if (profile.total_note_chars !== undefined && profile.total_note_chars > 0) {
+    const avg = profile.avg_note_chars ?? 0;
+    lines.push(
+      `**Engagement:** ${profile.total_note_chars} chars across ${profile.notes_count} notes (avg ${avg}/note)`,
+    );
+  }
   lines.push('');
   lines.push('---');
   lines.push('');

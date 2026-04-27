@@ -4,6 +4,15 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ---
 
+## 2026-04-27 — Wrap-up: query() order fix + engagement signal
+
+Two small items from the brief's "next adds" list, shipped to close out the day. Total ~30 min including tests + deploy + verify. 769/769 messaging suite green.
+
+- [x] [done 2026-04-27, deploy `7420fa65`] **`inbox.query()` filter path honors `options.order` natively** — pre-fix, the cursor-aware filter path in `inbox.query()` ignored `order: 'oldest'`, so cross-publisher routes like `/inbox/:name/notes` workaround-sorted in memory post-hydration. Now reverses the entries array before iterating; `startIndex` finds cursor entries by id so it works in either direction. The `/inbox/:name/notes` route's in-memory sort fallback dropped in the same commit. 2 new tests in `tests/messaging-inbox.test.ts` (newest/oldest in filter path; oldest with cursor pagination). #cleanup #inbox-query-order
+- [x] [done 2026-04-27, deploy `e467258a-3341-4077-9fc2-b3c562eef857`] **Note-length engagement signal** — `total_note_chars` + `notes_count` on `/inbox/:name/newsletters` index entries; `total_note_chars` + `avg_note_chars` on the per-publisher profile dashboard. `avg_note_chars` correctly returns `0` (not `NaN`) when `notes_count` is 0, and only counts noted issues (not total issues). Markdown export gets a one-line `**Engagement:** N chars across M notes (avg X/note)` header — only renders when `total_note_chars > 0` so silent newsletters stay clean. `NewsletterProfile` type extended in `newsletter-markdown.ts`; `mirror.ts buildProfile()` updated alongside (so the cron-mirror's tigerflare files also carry the Engagement line). 5 new tests in `tests/messaging-newsletters.test.ts`. Live verified: rosieland shows `116 chars across 1 notes (avg 116/note)` (the [x]-marked completion line); internet-pipes shows `0` across the board (24 issues, no notes yet). #messaging #interest-signal
+
+---
+
 ## 2026-04-27 — Notes → todos + browsable mirror + done-state primitive
 
 Big day. Shipped Phase 1 (todo extraction) + Phase 2a (markdown export) of the notes-todos brief, then went past it: cross-newsletter notes endpoint, edit-mode for `sm_inbox_set_note` (closes the todo done-state gap), Ghost confirm-detect support, and the public-manifest lockdown. 751/751 messaging tests green by EOD; +73 new tests across 5 new test files. Brief: `.brief/api-access-and-notes.md` (the unified mental-model explainer written this day).

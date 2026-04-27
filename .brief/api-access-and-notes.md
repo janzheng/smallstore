@@ -218,10 +218,13 @@ The whole system has one data primitive (`InboxItem.fields.forward_note`) with o
 
 ---
 
-## Suggested next adds (in priority order)
+## Suggested next adds
 
-1. **`inbox.query()` order honoring** — fix the underlying limitation so the filter path respects `options.order` natively, removing the in-memory sort fallback in `/inbox/:name/notes`. Not user-visible; pure cleanup.
-2. **Note-length engagement signal per newsletter** — correlate aggregate note length with interest score; surface in the profile dashboard. Parked from the original forward-notes brief.
-3. **Cross-newsletter topic threading (LLM)** — extract topics from notes across publishers; surface as `/inbox/:name/topics`. Parked from the original forward-notes brief; needs an LLM call path that doesn't exist yet.
+Most of the items previously on this list shipped 2026-04-27. The only real remaining stretch is:
 
-(Phase 2b tigerflare cron mirror shipped 2026-04-27 — see `.brief/notes-todos-and-mirror.md § Phase 2b` for the implementation notes; live deploy `a7374c1a-7fc2-444e-b6f5-87407bb98872`.)
+1. **Cross-newsletter topic threading (LLM)** — extract topics from notes across publishers; surface as `/inbox/:name/topics`. Parked from the original forward-notes brief; needs an LLM call path that doesn't exist yet.
+
+Shipped same-day to close the list:
+- ✅ Phase 2b tigerflare cron mirror (`a7374c1a`) + `sm_inbox_mirror` MCP wrapper (`84eea5b3`)
+- ✅ `inbox.query()` order honoring fix (`7420fa65`) — workaround dropped in `/inbox/:name/notes`
+- ✅ Note-length engagement signal (`e467258a`) — `total_note_chars` on index + profile, `avg_note_chars` on profile, Engagement line in markdown
