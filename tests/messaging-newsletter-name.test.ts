@@ -81,14 +81,15 @@ Deno.test('extractDisplayName — whitespace-only display name → null', () => 
 // applyNewsletterName
 // ============================================================================
 
-Deno.test('applyNewsletterName — happy path: newsletter label + display name', () => {
+Deno.test('applyNewsletterName — happy path: newsletter label + display name + slug field', () => {
   const item = makeItem({ from_addr: '"Sidebar.io" <hello@uxdesign.cc>' });
   const r = applyNewsletterName(item);
   assertEquals(r.name, 'Sidebar.io');
   assertEquals(r.label, 'newsletter:sidebar-io');
+  assertEquals(r.slug, 'sidebar-io');
 });
 
-Deno.test('applyNewsletterName — no newsletter label → null result', () => {
+Deno.test('applyNewsletterName — no newsletter label → all null', () => {
   const item = makeItem(
     { from_addr: '"Sidebar.io" <hello@uxdesign.cc>' },
     { labels: [] }, // no newsletter label
@@ -96,26 +97,77 @@ Deno.test('applyNewsletterName — no newsletter label → null result', () => {
   const r = applyNewsletterName(item);
   assertEquals(r.name, null);
   assertEquals(r.label, null);
+  assertEquals(r.slug, null);
 });
 
-Deno.test('applyNewsletterName — no from_addr → null result', () => {
+Deno.test('applyNewsletterName — no from_addr → null name/label, but slug from email domain', () => {
   const item = makeItem({ from_email: 'hello@uxdesign.cc' }); // missing from_addr
   const r = applyNewsletterName(item);
   assertEquals(r.name, null);
   assertEquals(r.label, null);
+  // domain fallback gives the mirror something to group on
+  assertEquals(r.slug, 'uxdesign-cc');
+});
+
+Deno.test('applyNewsletterName — filler-prefix display name → cleaner slug than label', () => {
+  // "Steph at Internet Pipes" → label slugifies whole string, slug strips prefix
+  const item = makeItem({ from_addr: '"Steph at Internet Pipes" <hi@example.com>' });
+  const r = applyNewsletterName(item);
+  assertEquals(r.name, 'Steph at Internet Pipes');
+  assertEquals(r.label, 'newsletter:steph-at-internet-pipes');
+  assertEquals(r.slug, 'internet-pipes');
 });
 
 // ============================================================================
 // createNewsletterNameHook
 // ============================================================================
 
-Deno.test('hook — happy path: adds newsletter:<slug> label + newsletter_name field', async () => {
+Deno.test('hook — happy path: adds newsletter:<slug> label + newsletter_name + newsletter_slug fields', async () => {
   const hook = createNewsletterNameHook();
   const item = makeItem({ from_addr: '"Sidebar.io" <hello@uxdesign.cc>' });
   const verdict = await hook(item, CTX);
   if (typeof verdict === 'string') throw new Error('expected mutated item');
   assert(verdict.labels?.includes('newsletter:sidebar-io'));
   assertEquals(verdict.fields.newsletter_name, 'Sidebar.io');
+  assertEquals(verdict.fields.newsletter_slug, 'sidebar-io');
+});
+
+Deno.test('hook — direct sub with display name → writes newsletter_slug for mirror grouping', async () => {
+  // Regression: before this hook wrote slug, direct subs (not forwarded) were
+  // missing fields.newsletter_slug, so the tigerflare mirror skipped them.
+  const hook = createNewsletterNameHook();
+  const item = makeItem({ from_addr: '"Every" <hello@every.to>', from_email: 'hello@every.to' });
+  const verdict = await hook(item, CTX);
+  if (typeof verdict === 'string') throw new Error('expected mutated item');
+  assertEquals(verdict.fields.newsletter_slug, 'every');
+});
+
+Deno.test('hook — preserves an existing newsletter_slug (forward-detect wins)', async () => {
+  // A forwarded item has newsletter_slug set by forward-detect (preIngest).
+  // newsletter-name (postClassify) must not overwrite it with the forwarder's slug.
+  const hook = createNewsletterNameHook({ skipIfSenderTagged: false });
+  const item = makeItem(
+    {
+      from_addr: '"Jan Zheng" <hello@janzheng.com>',
+      from_email: 'hello@janzheng.com',
+      newsletter_slug: 'internet-pipes', // already set upstream
+    },
+    { labels: ['newsletter'] },
+  );
+  const verdict = await hook(item, CTX);
+  if (typeof verdict === 'string') throw new Error('expected mutated item');
+  assertEquals(verdict.fields.newsletter_slug, 'internet-pipes'); // not overwritten
+});
+
+Deno.test('hook — bare angle-address with from_email → still populates slug from domain', async () => {
+  // No display name to label with, but mirror still gets a grouping handle.
+  const hook = createNewsletterNameHook();
+  const item = makeItem({ from_addr: '<hello@every.to>', from_email: 'hello@every.to' });
+  const verdict = await hook(item, CTX);
+  if (typeof verdict === 'string') throw new Error('expected mutated item');
+  // No newsletter:<slug> label (no display name), but slug field is set.
+  assertEquals(verdict.fields.newsletter_slug, 'every-to');
+  assert(!(verdict.labels ?? []).some((l) => l.startsWith('newsletter:')));
 });
 
 Deno.test('hook — skips when sender:* label already present (manual wins)', async () => {
@@ -139,14 +191,32 @@ Deno.test('hook — skipIfSenderTagged: false → overrides, adds newsletter:<sl
   assert(verdict.labels?.includes('newsletter:sidebar-io'));
 });
 
-Deno.test('hook — idempotent: skips when label already present', async () => {
+Deno.test('hook — idempotent: skips when label, name, and slug are all already present', async () => {
+  const hook = createNewsletterNameHook();
+  const item = makeItem(
+    {
+      from_addr: '"Sidebar.io" <hello@uxdesign.cc>',
+      newsletter_name: 'Sidebar.io',
+      newsletter_slug: 'sidebar-io',
+    },
+    { labels: ['newsletter', 'newsletter:sidebar-io'] },
+  );
+  const verdict = await hook(item, CTX);
+  assertEquals(verdict, 'accept');
+});
+
+Deno.test('hook — backfills missing newsletter_slug even when label is already set', async () => {
+  // Realistic backfill: items ingested before the slug-write change have the
+  // label but no slug field. Replay should fill it in on a re-run.
   const hook = createNewsletterNameHook();
   const item = makeItem(
     { from_addr: '"Sidebar.io" <hello@uxdesign.cc>' },
     { labels: ['newsletter', 'newsletter:sidebar-io'] },
   );
   const verdict = await hook(item, CTX);
-  assertEquals(verdict, 'accept');
+  if (typeof verdict === 'string') throw new Error('expected mutated item');
+  assertEquals(verdict.fields.newsletter_slug, 'sidebar-io');
+  assertEquals(verdict.fields.newsletter_name, 'Sidebar.io');
 });
 
 Deno.test('hook — non-newsletter mail → accept (pass-through)', async () => {

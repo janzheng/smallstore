@@ -34,6 +34,7 @@
  *   is worse than no tag.
  */
 
+import { deriveNewsletterSlug } from './forward-detect.ts';
 import { slugifySenderName } from './sender-aliases.ts';
 import type {
   HookContext,
@@ -51,6 +52,14 @@ export interface NewsletterNameResult {
   name: string | null;
   /** `newsletter:<slug>` label to merge, or null. */
   label: string | null;
+  /**
+   * Slug for `fields.newsletter_slug`, derived via `deriveNewsletterSlug` so
+   * direct subs share the same slug shape as forwarded items (filler prefixes
+   * stripped, domain fallback). May differ from the slug embedded in `label`
+   * (which uses `slugifySenderName` for backward-compat with existing labels).
+   * Null when no slug-worthy input exists.
+   */
+  slug: string | null;
 }
 
 export interface NewsletterNameOptions {
@@ -121,16 +130,20 @@ export function extractDisplayName(fromAddr: string | undefined | null): string 
  */
 export function applyNewsletterName(item: InboxItem): NewsletterNameResult {
   const labels = item.labels ?? [];
-  if (!labels.includes('newsletter')) return { name: null, label: null };
+  if (!labels.includes('newsletter')) return { name: null, label: null, slug: null };
 
   const fromAddr = item.fields?.from_addr;
+  const fromEmail = item.fields?.from_email;
   const name = extractDisplayName(fromAddr);
-  if (!name) return { name: null, label: null };
 
-  const slug = slugifySenderName(name);
-  if (!slug) return { name: null, label: null };
+  const fieldSlug = deriveNewsletterSlug(fromAddr, fromEmail) ?? null;
 
-  return { name, label: `newsletter:${slug}` };
+  if (!name) return { name: null, label: null, slug: fieldSlug };
+
+  const labelSlug = slugifySenderName(name);
+  if (!labelSlug) return { name, label: null, slug: fieldSlug };
+
+  return { name, label: `newsletter:${labelSlug}`, slug: fieldSlug };
 }
 
 // ============================================================================
@@ -160,17 +173,33 @@ export function createNewsletterNameHook(
     }
 
     const result = applyNewsletterName(item);
-    if (!result.label) return 'accept';
 
+    // Determine what (if anything) needs to change. We may add a label, a
+    // newsletter_name field, or a newsletter_slug field — independently.
     const existing = item.labels ?? [];
-    if (existing.includes(result.label)) return 'accept'; // idempotent
+    const existingFields = item.fields ?? {};
+
+    const labelToAdd = result.label && !existing.includes(result.label)
+      ? result.label
+      : null;
+    const nameToWrite = result.name && existingFields.newsletter_name !== result.name
+      ? result.name
+      : null;
+    // Don't overwrite a slug already set by forward-detect (forwards keep
+    // the original-sender slug, not the forwarder's).
+    const slugToWrite = result.slug && !existingFields.newsletter_slug
+      ? result.slug
+      : null;
+
+    if (!labelToAdd && !nameToWrite && !slugToWrite) return 'accept';
 
     return {
       ...item,
-      labels: [...existing, result.label],
+      labels: labelToAdd ? [...existing, labelToAdd] : existing,
       fields: {
-        ...(item.fields ?? {}),
-        newsletter_name: result.name,
+        ...existingFields,
+        ...(nameToWrite ? { newsletter_name: nameToWrite } : {}),
+        ...(slugToWrite ? { newsletter_slug: slugToWrite } : {}),
       },
     };
   };

@@ -13,9 +13,10 @@
  *   - "View item" links are absolute — built from a passed-in origin so
  *     the markdown is portable (the same content can be rendered from
  *     local dev, prod, or a tigerflare mirror).
- *   - Items missing `original_sent_at` sort to the tail of the list and
- *     render with a `(date unknown)` heading — same semantic as the JSON
- *     items route's missing-field-tails behavior.
+ *   - Items use `fields.original_sent_at` when set (forwarded items) and
+ *     fall back to top-level `sent_at` (the email's Date header, present
+ *     on every inbound). Items missing both sort to the tail and render
+ *     with a `(date unknown)` heading.
  *   - Display name is stripped of any angle-bracketed address — the JSON
  *     profile route already does this, so renderers receive the clean form.
  */
@@ -107,10 +108,13 @@ export function renderNewsletterProfile(
   lines.push('---');
   lines.push('');
 
-  // Sort: oldest first by original_sent_at, missing dates tail.
+  // Sort: oldest first by best available send date, missing dates tail.
+  // `original_sent_at` is set by forward-detect on forwarded items; falls
+  // back to `sent_at` (the email's Date header) so direct-sub items aren't
+  // all stuck at the bottom labeled "(date unknown)".
   const sorted = [...items].sort((a, b) => {
-    const av = (a.fields?.original_sent_at as string | undefined) ?? '';
-    const bv = (b.fields?.original_sent_at as string | undefined) ?? '';
+    const av = pickItemSentAt(a) ?? '';
+    const bv = pickItemSentAt(b) ?? '';
     if (!av && !bv) return 0;
     if (!av) return 1;
     if (!bv) return -1;
@@ -118,7 +122,7 @@ export function renderNewsletterProfile(
   });
 
   for (const item of sorted) {
-    const sentAt = item.fields?.original_sent_at as string | undefined;
+    const sentAt = pickItemSentAt(item);
     const subject = (item.fields?.original_subject as string | undefined) ??
       item.summary ??
       '(no subject)';
@@ -296,6 +300,20 @@ export function renderAllNotes(
 function stripAngleAddrInline(raw: string): string {
   const lt = raw.indexOf('<');
   return lt === -1 ? raw.trim() : raw.slice(0, lt).trim().replace(/^["']|["']$/g, '');
+}
+
+/**
+ * Best-effort upstream send date for an inbox item. Prefers
+ * `fields.original_sent_at` (set by forward-detect on forwards) and falls
+ * back to top-level `sent_at` (set from the email's Date header on every
+ * inbound). Returns undefined if neither is set so callers can render a
+ * "(date unknown)" sentinel.
+ */
+function pickItemSentAt(item: InboxItem): string | undefined {
+  const original = item.fields?.original_sent_at;
+  if (typeof original === 'string' && original.length > 0) return original;
+  if (typeof item.sent_at === 'string' && item.sent_at.length > 0) return item.sent_at;
+  return undefined;
 }
 
 function formatDate(iso: string | undefined): string {

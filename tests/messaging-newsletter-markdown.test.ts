@@ -203,6 +203,61 @@ Deno.test('renderNewsletterProfile: chronological order, dates missing tail', ()
   assertStringIncludes(md, '## (date unknown) — Item with no original_sent_at');
 });
 
+Deno.test('renderNewsletterProfile: falls back to top-level sent_at when original_sent_at is missing', () => {
+  // Direct subs (not forwarded) don't get original_sent_at populated by
+  // forward-detect. Mirror should still show the email's Date header.
+  const items: InboxItem[] = [
+    {
+      id: 'forwarded',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00.000Z',
+      summary: 'Forwarded',
+      fields: {
+        original_sent_at: '2026-04-26T08:00:00.000Z',
+        original_subject: 'Forwarded item',
+      },
+    },
+    {
+      id: 'direct-sub',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-25T10:00:00.000Z',
+      sent_at: '2026-04-25T07:30:00.000Z', // top-level fallback
+      summary: 'Direct sub item',
+      fields: {},
+    },
+  ];
+  const md = renderNewsletterProfile('mailroom', 'p', { slug: 'p', count: 2, notes_count: 0 }, items, '');
+  // Direct sub renders with its sent_at date — not "(date unknown)".
+  assertStringIncludes(md, '## 2026-04-25 — Direct sub item');
+  // And sorts before the forwarded item (oldest first).
+  const directIdx = md.indexOf('Direct sub item');
+  const forwardedIdx = md.indexOf('Forwarded item');
+  assert(directIdx > 0 && directIdx < forwardedIdx);
+});
+
+Deno.test('renderNewsletterProfile: prefers original_sent_at over sent_at when both present', () => {
+  // Forwarded items: forward-detect's original_sent_at (upstream send)
+  // wins over the top-level sent_at (when the user forwarded).
+  const items: InboxItem[] = [
+    {
+      id: 'forwarded',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-27T10:00:00.000Z',
+      sent_at: '2026-04-27T09:00:00.000Z', // forward time
+      summary: 'Forwarded',
+      fields: {
+        original_sent_at: '2024-09-01T08:00:00.000Z', // upstream send time
+        original_subject: 'Old IP digest',
+      },
+    },
+  ];
+  const md = renderNewsletterProfile('mailroom', 'p', { slug: 'p', count: 1, notes_count: 0 }, items, '');
+  assertStringIncludes(md, '## 2024-09-01 — Old IP digest');
+});
+
 Deno.test('renderNewsletterProfile: multi-line note → one `>` per line', () => {
   const items: InboxItem[] = [
     {
