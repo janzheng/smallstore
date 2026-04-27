@@ -39,6 +39,16 @@ interface MockedFetchCall {
  */
 function buildMockFetcher(opts: {
   errorPaths?: Set<string>;
+  /**
+   * Existing files at the destination — what `GET <prefix>` returns when
+   * the prune path lists the directory. Each entry becomes a
+   * `{ name, path, isDirectory: false }` record. Default: empty (nothing
+   * to prune). Pass an array of filenames to simulate previously-pushed
+   * orphans the prune step should clean up.
+   */
+  existingFiles?: string[];
+  /** When true, GET to directory paths returns 404 instead of empty list. */
+  dirNotFound?: boolean;
 } = {}): { fetcher: typeof fetch; calls: MockedFetchCall[] } {
   const calls: MockedFetchCall[] = [];
   const fetcher = (async (
@@ -47,6 +57,7 @@ function buildMockFetcher(opts: {
   ): Promise<Response> => {
     const url = typeof input === 'string' ? input : input.toString();
     const method = init?.method ?? 'GET';
+    const pathname = new URL(url).pathname;
     const headers: Record<string, string> = {};
     if (init?.headers) {
       const h = init.headers as Record<string, string>;
@@ -54,8 +65,21 @@ function buildMockFetcher(opts: {
     }
     const body = typeof init?.body === 'string' ? init.body : '';
     calls.push({ url, method, headers, body });
-    if (opts.errorPaths?.has(new URL(url).pathname)) {
+    if (opts.errorPaths?.has(pathname)) {
       return new Response('boom', { status: 500, statusText: 'Internal Server Error' });
+    }
+    // Directory listing — used by the prune step to find orphans.
+    if (method === 'GET' && pathname.endsWith('/')) {
+      if (opts.dirNotFound) return new Response('not found', { status: 404 });
+      const entries = (opts.existingFiles ?? []).map((name) => ({
+        name,
+        path: `${pathname}${name}`,
+        isDirectory: false,
+      }));
+      return new Response(JSON.stringify(entries), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     return new Response('ok', { status: 200 });
   }) as typeof fetch;
@@ -140,7 +164,7 @@ Deno.test('mirror: skips disabled peers even with mirror_config', async () => {
   await f.registerPeer({
     name: 'tf-disabled',
     disabled: true,
-    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
   });
   const { fetcher, calls } = buildMockFetcher();
 
@@ -160,12 +184,12 @@ Deno.test('mirror: peer_name filter restricts to one peer', async () => {
   await f.seed({ fields: { newsletter_slug: 'pub', forward_note: 'note' } });
   await f.registerPeer({
     name: 'tf-a',
-    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
   });
   await f.registerPeer({
     name: 'tf-b',
     url: 'https://tf-b.example.com',
-    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
   });
   const { fetcher } = buildMockFetcher();
 
@@ -189,7 +213,7 @@ Deno.test('mirror: skip reason when source_inbox not registered', async () => {
   const f = await buildFixture();
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'no-such-inbox' } },
+    metadata: { mirror_config: { source_inbox: 'no-such-inbox', prune_orphans: false } },
   });
   const { fetcher, calls } = buildMockFetcher();
 
@@ -211,7 +235,7 @@ Deno.test('mirror: skip reason when auth env var missing', async () => {
   await f.seed({ fields: { newsletter_slug: 'pub', forward_note: 'note' } });
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
   });
   const { fetcher, calls } = buildMockFetcher();
 
@@ -255,7 +279,7 @@ Deno.test('mirror: PUTs one file per newsletter slug', async () => {
   });
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
   });
   const { fetcher, calls } = buildMockFetcher();
 
@@ -298,7 +322,7 @@ Deno.test('mirror: include_index emits index.md alongside per-slug files', async
   await f.registerPeer({
     name: 'tf',
     metadata: {
-      mirror_config: { source_inbox: 'mailroom', include_index: true },
+      mirror_config: { source_inbox: 'mailroom', include_index: true, prune_orphans: false },
     },
   });
   const { fetcher, calls } = buildMockFetcher();
@@ -333,8 +357,7 @@ Deno.test('mirror: target_path_prefix overrides default', async () => {
     metadata: {
       mirror_config: {
         source_inbox: 'mailroom',
-        target_path_prefix: '/scratch/mailroom-mirror/',
-      },
+        target_path_prefix: '/scratch/mailroom-mirror/', prune_orphans: false },
     },
   });
   const { fetcher, calls } = buildMockFetcher();
@@ -355,7 +378,7 @@ Deno.test('mirror: target_path_prefix without trailing slash gets normalized', a
   await f.registerPeer({
     name: 'tf',
     metadata: {
-      mirror_config: { source_inbox: 'mailroom', target_path_prefix: '/folder' },
+      mirror_config: { source_inbox: 'mailroom', target_path_prefix: '/folder', prune_orphans: false },
     },
   });
   const { fetcher, calls } = buildMockFetcher();
@@ -386,8 +409,7 @@ Deno.test('mirror: link_origin propagates to "View item →" links', async () =>
     metadata: {
       mirror_config: {
         source_inbox: 'mailroom',
-        link_origin: 'https://smallstore.labspace.ai',
-      },
+        link_origin: 'https://smallstore.labspace.ai', prune_orphans: false },
     },
   });
   const { fetcher, calls } = buildMockFetcher();
@@ -416,7 +438,7 @@ Deno.test('mirror: one bad slug does not tank others', async () => {
   await f.seed({ id: 'c', fields: { newsletter_slug: 'pub-c', forward_note: 'c' } });
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
   });
   const { fetcher, calls } = buildMockFetcher({
     errorPaths: new Set(['/tf/pub-b.md']), // simulate per-slug failure
@@ -436,4 +458,173 @@ Deno.test('mirror: one bad slug does not tank others', async () => {
   assertStringIncludes(results[0].failed[0].error, '500');
   // All three were attempted
   assertEquals(calls.length, 3);
+});
+
+// ---------------------------------------------------------------------
+// Prune (orphan garbage collection) — default-on cleanup
+// ---------------------------------------------------------------------
+
+Deno.test('prune: deletes orphan .md files at the destination', async () => {
+  const f = await buildFixture();
+  await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom' } }, // prune defaults on
+  });
+  // Destination already has two stale files from a prior run.
+  const { fetcher, calls } = buildMockFetcher({
+    existingFiles: ['pub-a.md', 'old-pub.md', 'gone-pub.md'],
+  });
+
+  const results = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  // pub-a is active → not pruned. The other two have no live items → deleted.
+  assertEquals(results[0].pruned?.sort(), ['gone-pub.md', 'old-pub.md']);
+  const deletes = calls.filter((c) => c.method === 'DELETE').map((c) => new URL(c.url).pathname);
+  assertEquals(deletes.sort(), ['/tf/gone-pub.md', '/tf/old-pub.md']);
+});
+
+Deno.test('prune: preserves index.md when include_index is set', async () => {
+  const f = await buildFixture();
+  await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom', include_index: true } },
+  });
+  const { fetcher } = buildMockFetcher({
+    existingFiles: ['pub-a.md', 'index.md', 'orphan.md'],
+  });
+
+  const results = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  // index.md stays, orphan goes
+  assertEquals(results[0].pruned, ['orphan.md']);
+});
+
+Deno.test('prune: deletes index.md as orphan when include_index is NOT set', async () => {
+  // Edge case: a previous mirror run had include_index, then config changed.
+  // The leftover index.md becomes an orphan and should be cleaned.
+  const f = await buildFixture();
+  await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom' } }, // no include_index
+  });
+  const { fetcher } = buildMockFetcher({
+    existingFiles: ['pub-a.md', 'index.md'],
+  });
+
+  const results = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  assertEquals(results[0].pruned, ['index.md']);
+});
+
+Deno.test('prune: opt-out via prune_orphans: false', async () => {
+  const f = await buildFixture();
+  await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+  });
+  const { fetcher, calls } = buildMockFetcher({
+    existingFiles: ['pub-a.md', 'orphan.md'],
+  });
+
+  const results = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  assertEquals(results[0].pruned, undefined); // didn't run
+  // No GET on the directory, no DELETE on anything.
+  assertEquals(calls.filter((c) => c.method === 'DELETE').length, 0);
+  assertEquals(calls.filter((c) => c.method === 'GET').length, 0);
+});
+
+Deno.test('prune: ignores non-.md files at the destination', async () => {
+  // The mirror only owns .md files; binary or other content in the same
+  // directory is left alone.
+  const f = await buildFixture();
+  await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+  });
+  const { fetcher, calls } = buildMockFetcher({
+    existingFiles: ['pub-a.md', 'shopping.list', 'image.png', 'README.txt'],
+  });
+
+  const results = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  assertEquals(results[0].pruned, []); // nothing to prune
+  assertEquals(calls.filter((c) => c.method === 'DELETE').length, 0);
+});
+
+Deno.test('prune: 404 on listing → skipped gracefully (first run, no dir yet)', async () => {
+  const f = await buildFixture();
+  await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+  });
+  const { fetcher } = buildMockFetcher({ dirNotFound: true });
+
+  const results = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  // Push still happens; prune ran but found an empty directory.
+  assertEquals(results[0].pushed, 1);
+  assertEquals(results[0].pruned, []);
+  assertEquals(results[0].prune_error, undefined);
+});
+
+Deno.test('prune: failed delete recorded in failed[], does not tank push', async () => {
+  const f = await buildFixture();
+  await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+  });
+  const { fetcher } = buildMockFetcher({
+    existingFiles: ['pub-a.md', 'cursed.md'],
+    errorPaths: new Set(['/tf/cursed.md']), // DELETE returns 500
+  });
+
+  const results = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  assertEquals(results[0].pushed, 1);
+  assertEquals(results[0].pruned, []); // delete failed, not counted as pruned
+  assertEquals(results[0].failed.length, 1);
+  assertStringIncludes(results[0].failed[0].slug, '__prune:cursed.md');
 });

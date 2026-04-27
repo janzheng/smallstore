@@ -56,6 +56,16 @@ export interface MirrorConfig {
    * Worker's public URL to make the mirrored markdown self-link back.
    */
   link_origin?: string;
+  /**
+   * When true, after pushing per-newsletter pages, list the destination
+   * directory and DELETE any `*.md` files that no longer correspond to
+   * an active slug (orphans from items deleted in smallstore). Skips
+   * `index.md`. Default: `true` — without this, deleting a newsletter's
+   * last item leaves a stale `.md` lingering on the peer until manually
+   * cleaned up. Disable to opt out (e.g. when sharing a directory with
+   * non-mirror content).
+   */
+  prune_orphans?: boolean;
 }
 
 /** Per-peer summary returned from `runMirror`. */
@@ -67,6 +77,16 @@ export interface MirrorRunResult {
   pushed: number;
   /** Per-slug failures (other slugs still attempted). */
   failed: Array<{ slug: string; error: string }>;
+  /**
+   * Orphan files deleted from the peer when `prune_orphans` is enabled —
+   * `.md` files that existed at the destination but no longer correspond
+   * to an active slug in the source inbox. Set only when prune ran
+   * (omitted entirely otherwise so you can tell "didn't run" from "ran
+   * and found nothing to prune").
+   */
+  pruned?: string[];
+  /** Set when prune ran but the listing call failed; filled with the error. */
+  prune_error?: string;
 }
 
 export interface RunMirrorOptions {
@@ -149,6 +169,7 @@ export async function runMirror(opts: RunMirrorOptions): Promise<MirrorRunResult
     }
 
     // Per-newsletter pages.
+    const activeFilenames = new Set<string>();
     for (const [slug, items] of groups) {
       try {
         // Hydrate bodies so the rendered markdown is self-contained
@@ -171,8 +192,37 @@ export async function runMirror(opts: RunMirrorOptions): Promise<MirrorRunResult
         const md = renderNewsletterProfile(config.source_inbox, slug, profile, fullItems, linkOrigin);
         await pushFile(peer, auth.headers, fetcher, `${prefix}${slug}.md`, md);
         result.pushed++;
+        activeFilenames.add(`${slug}.md`);
       } catch (e) {
         result.failed.push({ slug, error: errorMessage(e) });
+      }
+    }
+
+    // Garbage-collect orphan .md files. Without this, deleting a
+    // newsletter's last item leaves a stale file on the peer until
+    // manual cleanup. We list the destination prefix, diff against the
+    // active set (plus index.md), and DELETE the orphans. Tigerflare
+    // returns a JSON array of `{ name, path, isDirectory }` from
+    // `GET <prefix>` — caller is responsible for dir-trailing-slash.
+    const prune = config.prune_orphans !== false;
+    if (prune) {
+      result.pruned = [];
+      try {
+        const listing = await listDirectory(peer, auth.headers, fetcher, prefix);
+        if (config.include_index) activeFilenames.add('index.md');
+        const orphans = listing
+          .filter((entry) => !entry.isDirectory && entry.name.endsWith('.md'))
+          .filter((entry) => !activeFilenames.has(entry.name));
+        for (const orphan of orphans) {
+          try {
+            await deleteFile(peer, auth.headers, fetcher, orphan.path);
+            result.pruned.push(orphan.name);
+          } catch (e) {
+            result.failed.push({ slug: `__prune:${orphan.name}`, error: errorMessage(e) });
+          }
+        }
+      } catch (e) {
+        result.prune_error = errorMessage(e);
       }
     }
 
@@ -209,6 +259,56 @@ async function pushFile(
   });
   if (!res.ok) {
     throw new Error(`PUT ${path} → ${res.status} ${res.statusText}`);
+  }
+}
+
+/** Directory entry shape returned by tigerflare's `GET <prefix>/`. */
+interface DirEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+}
+
+/**
+ * GET a directory listing from the peer at `prefix` (must end with `/`).
+ * Returns an array of `{ name, path, isDirectory }` — the shape
+ * tigerflare emits. A 404 means the directory doesn't exist yet (e.g.,
+ * first mirror run with no prior pushes), which we treat as an empty
+ * listing — nothing to prune.
+ */
+async function listDirectory(
+  peer: Peer,
+  authHeaders: Record<string, string>,
+  fetcher: typeof fetch,
+  prefix: string,
+): Promise<DirEntry[]> {
+  const url = new URL(prefix, peer.url).toString();
+  const res = await fetcher(url, {
+    method: 'GET',
+    headers: { ...authHeaders, Accept: 'application/json' },
+  });
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    throw new Error(`GET ${prefix} → ${res.status} ${res.statusText}`);
+  }
+  const body = await res.json().catch(() => null);
+  if (!Array.isArray(body)) {
+    throw new Error(`GET ${prefix} → expected JSON array, got ${typeof body}`);
+  }
+  return body as DirEntry[];
+}
+
+/** DELETE a single file from the peer. Caller passes the absolute path. */
+async function deleteFile(
+  peer: Peer,
+  authHeaders: Record<string, string>,
+  fetcher: typeof fetch,
+  path: string,
+): Promise<void> {
+  const url = new URL(path, peer.url).toString();
+  const res = await fetcher(url, { method: 'DELETE', headers: authHeaders });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`DELETE ${path} → ${res.status} ${res.statusText}`);
   }
 }
 

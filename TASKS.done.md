@@ -4,6 +4,22 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ---
 
+## 2026-04-27 — Mirror garbage-collects orphans + welcome-email cleanup pass
+
+User pointed out the mirror was leaving stale `.md` files behind when items got
+deleted in smallstore (a publisher whose only item was a "Welcome to X" email
+turned into a dead file at the destination). Closed the loop with prune-on-by-default
+in the cron mirror; same engine now lists the destination after pushing and DELETEs
+any `.md` that no longer corresponds to an active slug. Plus a manual cleanup pass
+of all the welcome / "thanks for subscribing" / "confirm your subscription" emails
+that came in with the initial wave of newsletter signups. 810/810 messaging tests green.
+
+- [x] [done 2026-04-27, deploy `7f2452f1`] **Mirror prune step — garbage-collect orphan `.md` files** — `runMirror` now lists the target prefix via `GET <prefix>/` (tigerflare returns `[{name, path, isDirectory}]`), diffs against the active-slug filename set + `index.md`, and DELETEs the orphans. New `prune_orphans?: boolean` knob on `MirrorConfig` (defaults `true`). New `pruned: string[]` and `prune_error?: string` fields on `MirrorRunResult` so the API surfaces what got cleaned and any listing failures separately. Failed deletes go into `failed[]` with `slug: "__prune:<filename>"` so they're discoverable but don't tank the push. 7 new tests covering the happy path, index.md preservation, opt-out, non-`.md` files left alone, 404-on-listing graceful skip, failed-delete recording. Live verified end-to-end: dropped `orphan-test.md` at the destination via curl, ran `sm_inbox_mirror`, response showed `pruned: ["orphan-test.md"]`, post-flush listing confirmed it was gone. #messaging #mirror #garbage-collection
+- [x] [done 2026-04-27] **Welcome-email cleanup pass** — 13 deleted total. First sweep: 10 obvious welcomes ("Welcome to X", "Thanks for subscribing", "You're subscribed to X", "Thank you + vision", "Confirm your subscription to Sidebar.io"). Second sweep: 3 Every.to onboarding sequence emails (2/9–4/9 — the rest of the marketing series after deleting 1/9 in the first sweep). User explicitly chose to keep welcome cleanup manual — "in case a welcome email also has actual stuff" — so no auto-delete rule was added. Mirror flushed; orphan files for now-empty publishers cleaned up by the prune step in the same pass. #messaging #ops
+- [x] [done 2026-04-27] **launchd plist activated** — earlier session wrote `~/Library/LaunchAgents/com.smallstore.mailroom-sync.plist` but couldn't load it without explicit user approval. User approved; loaded via `launchctl bootstrap gui/$UID`. Process now running as PID 21579, state=running, auto-starts at login + restarts on non-zero exit. Initial post-load sync pulled the 11 fresh body-inlined files in one shot. Stop with `launchctl bootout gui/$UID com.smallstore.mailroom-sync`. #ops #launchd
+
+---
+
 ## 2026-04-27 — Mirror is now self-contained (body inlining + slug polish)
 
 Follow-up to the same-day mirror coverage work — the user pointed out that the
