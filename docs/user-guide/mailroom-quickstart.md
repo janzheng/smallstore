@@ -290,7 +290,37 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Items missing the chosen sort field always tail. Cursor pagination is disabled in non-default sort modes (use `limit` alone). For inboxes < ~10K items the in-memory sort is fine; the scaling cliff is the same `_index` blob caveat tracked in TASKS-MESSAGING.
 
-### 1.14 Add or revise a note after the fact
+### 1.14 Extract todos from your notes
+
+When you forward something with a note like *"reminder to self: sub mailroom to rosieland"*, that's a real action item buried in free text. The `/todos` endpoint scans every `forward_note` for action-shaped lines via a small regex set:
+
+```bash
+# All todos across the inbox
+curl -H "Authorization: Bearer $TOKEN" "$BASE/inbox/mailroom/todos" | jq
+
+# Just one publisher's todos
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/todos?slug=internet-pipes" | jq
+
+# Only fresh ones (received after a date)
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/todos?since=2026-04-01T00:00:00Z" | jq
+```
+
+Patterns matched (first-match-wins, case-insensitive):
+
+| Pattern | Catches |
+|---|---|
+| `unchecked-checkbox` | `- [ ] sub to rosieland`, `[ ] follow up` |
+| `todo-prefix` | `TODO: review part 2`, `todo: bookmark this` |
+| `action-prefix` | `Action: respond by Friday` |
+| `remind` | `remind me to ...`, `reminder to self`, `remember to ...` |
+| `subscribe` | `sub me to ...`, `sub mailroom to X`, `subscribe me to ...` |
+| `follow-up` | `follow up`, `followup`, `follow-up` |
+
+A note with multiple matching lines emits multiple todos. Each todo includes `matched_pattern` (which rule fired) and `full_note` (the entire note for context). Lines that start with `>` (quoted reply) are skipped. `[x]` (checked) lines are skipped — that's the "done" form.
+
+### 1.15 Add or revise a note after the fact
 
 When a forward landed without a note, or you want to revise an existing one. Pairs with § 1.13 — the note immediately surfaces in `/inbox/:name/newsletters/:slug/notes`.
 
@@ -317,7 +347,7 @@ curl -H "Authorization: Bearer $TOKEN" -X POST \
 
 Identity (id, received_at, source, summary, body, labels) and the inbox index entry are preserved — the annotation only touches `fields.forward_note` and stamps `fields.note_updated_at`. So a late annotation never re-orders your inbox or duplicates the item.
 
-### 1.15 Backfill a new field across existing items (hook replay)
+### 1.16 Backfill a new field across existing items (hook replay)
 
 When a new forward-detect field ships (e.g. you start extracting `original_sent_at` after some items already exist without it), run the hook over the historical items via `POST /admin/inboxes/:name/replay`. This is the generalized form of `apply_retroactive` for rules.
 

@@ -471,6 +471,21 @@ export const INBOX_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'sm_inbox_todos',
+    description:
+      'Derived todo view — scans every item with a `forward_note` for action-shaped lines via a small regex set (markdown unchecked checkboxes, `TODO:` / `Action:` prefixes, "remind/remember", "sub me to", "follow up"). Pure read-side, no schema change. Use when the user says "what do I need to do", "show my todos", "action items from my notes", or wants to triage things they wrote in forwarded newsletters. Each todo includes `matched_pattern` (which rule fired) and `full_note` (entire note for context). Multiple matching lines per note → multiple todos. Skips quoted-reply lines and checked checkboxes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        slug: { type: 'string', description: 'Optional — scope to one newsletter slug.' },
+        since: { type: 'string', description: 'Optional ISO timestamp — only items received after this.' },
+        limit: { type: 'number', description: 'Max todos returned. Default 100, max 500.' },
+      },
+      required: ['inbox'],
+    },
+  },
+  {
     name: 'sm_inbox_replay_hook',
     description:
       'Retroactively re-run a registered hook (e.g. `forward-detect`) over existing items in an inbox, merging any new fields and labels into stored items. The system version of "running a backfill script" — generic over any hook the deploy registers. ALWAYS dry-run first (`dry_run: true`) to preview the field/label diffs before applying. Common use: a forward-detect upgrade adds new fields (e.g. `original_sent_at`) — replay populates them on items that landed before the upgrade. Identity (id, received_at, source) and the index are preserved.',
@@ -877,6 +892,19 @@ export async function handleInboxTool(
         `/inbox/${encName(inbox)}/newsletters/${encodeURIComponent(slug)}/notes${qs({ limit, order })}`,
       );
       if (!r.ok) throw new Error(formatHttpError('sm_newsletter_notes failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_todos': {
+      const inbox = requireString(args, 'inbox');
+      const slug = typeof args.slug === 'string' ? args.slug : undefined;
+      const since = typeof args.since === 'string' ? args.since : undefined;
+      const limit = typeof args.limit === 'number' ? args.limit : undefined;
+      const r = await http(
+        'GET',
+        `/inbox/${encName(inbox)}/todos${qs({ slug, since, limit })}`,
+      );
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_todos failed', r));
       return r.body;
     }
 

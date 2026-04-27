@@ -51,6 +51,7 @@ import type { MailroomRule, RuleAction, RulesStore } from './rules.ts';
 import type { AutoConfirmSendersStore } from './auto-confirm-senders.ts';
 import { listQuarantined, restoreItem } from './quarantine.ts';
 import { verifyHmac, webhookChannel, type WebhookConfig } from './channels/webhook.ts';
+import { scanNoteForTodos } from './todos.ts';
 
 export type RequireAuth = (c: Context, next: Next) => Promise<Response | void> | Response | void;
 
@@ -578,6 +579,87 @@ export function registerMessagingRoutes(
       note: item.fields?.forward_note,
     }));
     return c.json({ inbox: name, slug, count: notes.length, total: result.total, notes });
+  });
+
+  /**
+   * Derived todo view — scans every item with `forward_note` for action-shaped
+   * lines via a small regex set (markdown unchecked checkbox, `TODO:` /
+   * `Action:` prefixes, "remind/remember", "sub me to", "follow up").
+   *
+   * GET /inbox/:name/todos
+   *   ?slug=<newsletter-slug>     Scope to one publisher.
+   *   ?since=<iso>                Only items received after this timestamp.
+   *   ?limit=<n>                  Max todos to return. Default 100, max 500.
+   *
+   * Pure read-side — no schema change, no LLM. A note with multiple matching
+   * lines emits multiple todos. Skips quoted-reply lines (`> ...`) and
+   * checked checkboxes (`[x]`). Each todo includes `matched_pattern` (the
+   * rule that fired) and `full_note` (entire forward_note for context).
+   *
+   * Pattern set + extension guidance: `.brief/notes-todos-and-mirror.md`
+   * and `src/messaging/todos.ts`.
+   */
+  app.get('/inbox/:name/todos', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const slug = c.req.query('slug');
+    const since = c.req.query('since');
+    const limit = parseLimit(c.req.query('limit')) ?? 100;
+
+    // Items must have a non-empty forward_note. Optionally scoped to one slug.
+    const fieldsRegex: Record<string, string> = { forward_note: '.+' };
+    if (slug) {
+      fieldsRegex.newsletter_slug = `^${escapeRegex(slug)}$`;
+    }
+
+    // Hydrate a generous batch — todo emit is bounded by `limit` below.
+    const result = await inbox.query(
+      {
+        fields_regex: fieldsRegex,
+        ...(since ? { since } : {}),
+      },
+      { limit: 500, order: 'newest' },
+    );
+
+    const todos: Array<{
+      item_id: string;
+      newsletter_slug: string | undefined;
+      newsletter_display: string | undefined;
+      subject: string | undefined;
+      original_sent_at: string | undefined;
+      received_at: string;
+      matched_line: string;
+      matched_pattern: string;
+      full_note: string;
+    }> = [];
+
+    for (const item of result.items) {
+      const note = (item.fields as Record<string, unknown> | undefined)?.forward_note;
+      if (typeof note !== 'string' || note.length === 0) continue;
+
+      const matches = scanNoteForTodos(note);
+      for (const m of matches) {
+        todos.push({
+          item_id: item.id,
+          newsletter_slug: item.fields?.newsletter_slug as string | undefined,
+          newsletter_display: (item.fields?.original_from_addr ?? item.fields?.from_addr) as
+            | string
+            | undefined,
+          subject: (item.fields?.original_subject ?? item.summary) as string | undefined,
+          original_sent_at: item.fields?.original_sent_at as string | undefined,
+          received_at: item.received_at,
+          matched_line: m.line,
+          matched_pattern: m.pattern,
+          full_note: note,
+        });
+        if (todos.length >= limit) break;
+      }
+      if (todos.length >= limit) break;
+    }
+
+    return c.json({ inbox: name, count: todos.length, todos });
   });
 
   /**
