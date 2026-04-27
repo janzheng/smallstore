@@ -514,6 +514,22 @@ export const INBOX_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'sm_inbox_mirror',
+    description:
+      "Trigger the cron-driven markdown mirror on demand. Same engine the scheduled() cron runs every 30 minutes; use this when the user wants the mirror to flush right now (e.g. just after annotating a note and wanting it reflected in tigerflare immediately). Pushes per-newsletter markdown to every peer registered with `metadata.mirror_config`, optionally scoped to one peer. Per-peer skip reasons (auth missing, inbox not registered) and per-slug failures are reported in the response without throwing. Pure outbound write — does NOT mutate inbox state. Use when the user says \"flush the mirror\", \"sync to tigerflare now\", \"push notes to obsidian\", \"refresh the mirror\", \"update the markdown export\".",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name (e.g. "mailroom").' },
+        peer: {
+          type: 'string',
+          description: 'Optional — restrict to one peer name. Default: all peers with mirror_config.',
+        },
+      },
+      required: ['inbox'],
+    },
+  },
+  {
     name: 'sm_inbox_replay_hook',
     description:
       'Retroactively re-run a registered hook (e.g. `forward-detect`) over existing items in an inbox, merging any new fields and labels into stored items. The system version of "running a backfill script" — generic over any hook the deploy registers. ALWAYS dry-run first (`dry_run: true`) to preview the field/label diffs before applying. Common use: a forward-detect upgrade adds new fields (e.g. `original_sent_at`) — replay populates them on items that landed before the upgrade. Identity (id, received_at, source) and the index are preserved.',
@@ -961,6 +977,17 @@ export async function handleInboxTool(
         `/inbox/${encName(inbox)}/notes${qs({ text, slug, since, limit, order })}`,
       );
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_notes failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_mirror': {
+      const inbox = requireString(args, 'inbox');
+      const peer = typeof args.peer === 'string' ? args.peer : undefined;
+      const path = peer
+        ? `/admin/inboxes/${encName(inbox)}/mirror/${encName(peer)}`
+        : `/admin/inboxes/${encName(inbox)}/mirror`;
+      const r = await http('POST', path, {});
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_mirror failed', r));
       return r.body;
     }
 

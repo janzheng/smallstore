@@ -63,6 +63,21 @@ Forwards are auto-grouped by `fields.newsletter_slug` (derived from sender displ
 
 Slugs are visible via `sm_newsletters_list` — common ones today: `internet-pipes`, `sidebar-io`. Fields populated on every forward: `original_sent_at`, `original_message_id`, `newsletter_slug`, `forward_note` (anything the user typed before the forwarded block).
 
+## Mirror notes to tigerflare (cron-driven, on-demand flush available)
+
+The mailroom corpus is mirrored to tigerflare as markdown every 30 minutes (same cron as RSS pull). Each newsletter gets its own `.md` file (chronological items + notes inlined as blockquotes); optional `index.md` lists all newsletters. Smallstore stays the source of truth — mirror is one-way, idempotent.
+
+Configured via `tigerflare-demo` peer's `metadata.mirror_config` (currently writes to `tf://scratch/mailroom-mirror/`).
+
+| Goal | Tool / curl |
+|---|---|
+| Flush mirror right now (don't wait for cron) | `sm_inbox_mirror` with `inbox: "mailroom"` (optionally `peer: "tigerflare-demo"`) |
+| Pause mirror | `sm_peers_update` with `disabled: true` |
+| Change destination path | `sm_peers_update` patching `metadata.mirror_config.target_path_prefix` |
+| See where it's going | `sm_peers_get` and read `metadata.mirror_config` |
+
+The `sm_inbox_mirror` response shows per-peer summary: `{pushed, failed: [...]}` plus per-peer `skipped: <reason>` if anything blocked the push.
+
 ## Backfill new fields onto historical items (rare, admin-side)
 
 If the Worker just shipped a new forward-detect field and existing items don't have it yet, use `sm_inbox_replay_hook` — generalized retroactive backfill. **Always dry-run first.**
