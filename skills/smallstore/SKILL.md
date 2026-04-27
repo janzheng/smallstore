@@ -1,6 +1,6 @@
 ---
 name: smallstore
-description: "Canonical access surface for agents — read/write Notion/Airtable/Sheets/Upstash/R2/SQLite (sm_* core tools), operate the mailroom inbox (sm_inbox_* — list/query/export/bookmark/archive/unsubscribe/rules/restore), and browse/query external data sources via the peer registry (sm_peers_* — tigerflare, sheetlogs, other smallstores, webdav). Use when the user says: \"use smallstore\", \"read from Notion\", \"read from Airtable\", \"read from sheets\", \"write to a sheet\", \"sync between adapters\", \"check mailroom\", \"bookmark this newsletter\", \"archive this sender\", \"list my rules\", \"show my peers\", \"fetch from tigerflare\", \"what data sources do I have\", \"smallstore MCP\", or wants to hit any external storage, mailroom inbox, or registered peer through a single API surface. Peer to TigerFlare — TF is agent memory/filesystem, Smallstore is external service I/O + mailroom + peer atlas."
+description: "Canonical access surface for agents — read/write Notion/Airtable/Sheets/Upstash/R2/SQLite (sm_* core tools), operate the mailroom inbox (sm_inbox_* — list/query/export/bookmark/archive/unsubscribe/rules/restore), browse newsletters chronologically with per-publisher notes (sm_newsletters_*), backfill new fields retroactively (sm_inbox_replay_hook), and browse/query external data sources via the peer registry (sm_peers_* — tigerflare, sheetlogs, other smallstores, webdav). Use when the user says: \"use smallstore\", \"read from Notion\", \"read from Airtable\", \"read from sheets\", \"write to a sheet\", \"sync between adapters\", \"check mailroom\", \"bookmark this newsletter\", \"archive this sender\", \"list my rules\", \"what newsletters have I forwarded\", \"read this newsletter in order\", \"show my notes for X newsletter\", \"backfill new fields onto old items\", \"replay forward-detect\", \"show my peers\", \"fetch from tigerflare\", \"what data sources do I have\", \"smallstore MCP\", or wants to hit any external storage, mailroom inbox, or registered peer through a single API surface. Peer to TigerFlare — TF is agent memory/filesystem, Smallstore is external service I/O + mailroom + peer atlas."
 ---
 
 # Smallstore
@@ -160,11 +160,17 @@ Call mcp__smallstore__sm_append with collection: "sheets/Sheet1", items: [
 Operate the live mailroom inbox (bookmarks, auto-archive, export, rules). The inbox is a specific kind of smallstore collection with classifier labels, forward-detection, and a rules engine. Design: `.brief/mailroom-curation.md`. Full HTTP recipes: `docs/user-guide/mailroom-quickstart.md § Part 1`.
 
 **Reading:**
-- `sm_inbox_list(inbox, cursor?, limit?, order?)` — list newest-first by default.
+- `sm_inbox_list(inbox, cursor?, limit?, order?, order_by?)` — list newest-first by default. `order_by`: `received_at` (default, cursor-aware) | `sent_at` | `original_sent_at` (in-memory sort, missing-field-tails, cursor disabled).
 - `sm_inbox_read(inbox, id, full?)` — single item; `full: true` inflates body_ref from blobs adapter.
-- `sm_inbox_query(inbox, filter, cursor?, limit?)` — filter DSL supports `labels`, `fields`, `fields_regex`, `text`, `text_regex`, `headers`, `since`, `until`.
+- `sm_inbox_query(inbox, filter, cursor?, limit?, order_by?)` — filter DSL supports `labels`, `fields`, `fields_regex`, `text`, `text_regex`, `headers`, `since`, `until`.
 - `sm_inbox_export(inbox, filter?, include?, limit?)` — bulk download as JSON array. `include=body` inflates bodies. For streaming JSONL, hit the HTTP endpoint directly (MCP can't stream).
 - `sm_inbox_quarantine_list(inbox, cursor?, limit?, label?)` — list items in quarantine.
+
+**Newsletter views** (forwards grouped by `fields.newsletter_slug` — auto-derived from sender display name on ingest):
+- `sm_newsletters_list(inbox, limit?)` — every newsletter slug with count + latest_at + display name. Latest-first.
+- `sm_newsletter_get(inbox, slug)` — profile dashboard (count, first/last seen, notes count, latest note).
+- `sm_newsletter_items(inbox, slug, order?, limit?)` — chronological reading list. `order: oldest` (default) | `newest`. Sorts by `original_sent_at` (when the publisher sent it), not by when you forwarded it.
+- `sm_newsletter_notes(inbox, slug, limit?)` — slim shape `{id, original_sent_at, received_at, subject, from, note}` — pipe straight into an LLM.
 
 **Tagging / mutation:**
 - `sm_inbox_tag(inbox, id, add?, remove?)` — add/remove labels on one item. Use for "changed my mind" corrections.
@@ -180,6 +186,9 @@ Operate the live mailroom inbox (bookmarks, auto-archive, export, rules). The in
 - `sm_inbox_rules_update(inbox, id, patch)` — partial update (disable/rename/change action).
 - `sm_inbox_rules_delete(inbox, id)` — remove (already-tagged items stay tagged).
 - `sm_inbox_rules_apply_retroactive(inbox, id)` — re-run retroactive tagging on an existing rule. **Only tag-style actions mutate retroactively** — drop/quarantine are no-ops with an error message.
+
+**Replay hooks (admin-side retroactive backfill — generalized form of rule retroactive):**
+- `sm_inbox_replay_hook(inbox, hook, filter?, dry_run?, limit?)` — re-run a registered hook over filtered items to backfill new fields onto historical items. Always pass `dry_run: true` first — returns up to 10 sample diffs without writing. Hooks registered for `mailroom`: `forward-detect`, `sender-aliases`, `plus-addr`, `newsletter-name`. Preserves identity (id/received_at/source) + index entry; only shallow-merges new `fields` keys + unions `labels`. Real precedent: 2026-04-26 backfilled 24 IP Digest forwards with `newsletter_slug` + `original_sent_at` after the field shipped.
 
 **Typical workflow:**
 ```

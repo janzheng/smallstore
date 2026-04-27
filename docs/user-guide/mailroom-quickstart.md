@@ -46,7 +46,12 @@ To: mailroom+bookmark@labspace.ai
 What you get automatically:
 - `forwarded` + `manual` labels (forward-detection recognizes you forwarded)
 - `bookmark` label (plus-addressing intent, or whitelist rule if present)
-- `fields.original_from_email` + `fields.original_from_addr` + `fields.original_subject` extracted from forwarded body
+- Original-message extraction from the forwarded body:
+  - `fields.original_from_email` + `fields.original_from_addr` + `fields.original_subject`
+  - `fields.original_sent_at` — when the upstream sender actually sent it (parses Gmail/Outlook/RFC-5322/ISO date headers); enables chronological reading list (§ 1.13).
+  - `fields.original_message_id` + `fields.original_reply_to` — for cross-mailbox threading.
+  - `fields.newsletter_slug` — derived from the display name (`X at Y` → `y`, `X by Z` → `x`, slugified). Groups forwards from the same publisher into a single newsletter profile (§ 1.13).
+- Anything you typed before the forwarded block is captured as `fields.forward_note` — that becomes your aggregate notes per newsletter.
 - Plus any classifier labels (`newsletter`, `list`, `bounce`, etc.) based on headers
 
 ### 1.3 List what's in the inbox
@@ -236,6 +241,89 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" \
 | Rule `action: archive` | I like it, just not in my main view — **back-burner keep** |
 | Tag remove | A specific item got mislabeled |
 | Hard delete | One-off cleanup |
+
+### 1.13 Browse newsletters chronologically + extract notes per newsletter
+
+Forwards land grouped under `fields.newsletter_slug` (auto-derived from sender display name). Four read-only routes turn that into a real reading-list / notes-per-publisher view — useful when you've forwarded a batch of issues out of order, or want to dump everything you've ever said about a publisher into an LLM.
+
+**List all newsletters you've ever forwarded:**
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "$BASE/inbox/mailroom/newsletters" | jq
+# → {"newsletters": [{slug, count, latest_at, display}, ...]} (latest-first)
+```
+
+**Profile dashboard for one newsletter** (count, first/last seen, notes count, latest note):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/newsletters/internet-pipes" | jq
+```
+
+**Read it in order** — chronological by `original_sent_at` (when the publisher actually sent it, NOT when you forwarded it):
+
+```bash
+# Default oldest-first
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/newsletters/internet-pipes/items?limit=30" | jq
+
+# Newest-first if you want the freshest issue
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/newsletters/internet-pipes/items?order=newest" | jq
+```
+
+**Pull all your notes for one newsletter** — slim shape `{id, original_sent_at, received_at, subject, from, note}` so you can pipe straight into an LLM:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/newsletters/internet-pipes/notes" \
+  | jq '.notes' \
+  | your-llm-summarizer
+```
+
+**Sort any inbox query by original send date** — `order_by=received_at|sent_at|original_sent_at` works on `GET /inbox/:name` and `POST /inbox/:name/query`:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom?order_by=original_sent_at&limit=50" | jq
+```
+
+Items missing the chosen sort field always tail. Cursor pagination is disabled in non-default sort modes (use `limit` alone). For inboxes < ~10K items the in-memory sort is fine; the scaling cliff is the same `_index` blob caveat tracked in TASKS-MESSAGING.
+
+### 1.14 Backfill a new field across existing items (hook replay)
+
+When a new forward-detect field ships (e.g. you start extracting `original_sent_at` after some items already exist without it), run the hook over the historical items via `POST /admin/inboxes/:name/replay`. This is the generalized form of `apply_retroactive` for rules.
+
+**Always dry-run first** — returns up to 10 sample diffs without writing:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" -X POST \
+  -H "Content-Type: application/json" \
+  -d '{
+    "hook": "forward-detect",
+    "filter": {"fields_regex": {"subject": "IP Digest|Pipes "}},
+    "dry_run": true,
+    "limit": 50
+  }' \
+  "$BASE/admin/inboxes/mailroom/replay" | jq
+# → {scanned, matched, samples: [{id, item, added_fields}, ...]}
+```
+
+**Then live-run** (drop `dry_run`):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"hook": "forward-detect", "filter": {"fields_regex": {"subject": "IP Digest|Pipes "}}}' \
+  "$BASE/admin/inboxes/mailroom/replay" | jq
+# → {scanned, matched, applied, errors: []}
+```
+
+**Hooks registered as replayable for `mailroom`:** `forward-detect`, `sender-aliases`, `plus-addr`, `newsletter-name`. Adding a new replayable hook is one line in `deploy/src/index.ts → replayHookFor()`.
+
+**What it preserves:** identity (`id`, `received_at`, `source`, `source_version`), index entry, blobs/refs. It only shallow-merges new `fields` keys (existing values win on collision unless the hook explicitly overwrites) and unions `labels`. Drop / quarantine actions during replay are skipped (replays add fields, they don't curate).
+
+Real precedent: 2026-04-26 backfilled 24/26 IP Digest forwards with `newsletter_slug` + `original_sent_at`, enabling § 1.13's chronological view against historical data.
 
 Mental model: **archive is aspirational keeping, CF-drop is declared non-existence.**
 
@@ -592,6 +680,8 @@ Not yet configurable via HTTP — this would be a code change in `deploy/src/ind
   - `.brief/mailroom-pipeline.md` — Sink abstraction + hook pipeline + filter DSL foundation
   - `.brief/mailroom-curation.md` — bookmarks / archive / rules / removal taxonomy
   - `.brief/peer-registry.md` — peers as symlinks, auth model, L1/L2/L3 roadmap
+  - `.brief/forward-notes-and-newsletter-profiles.md` — newsletter slug + chronological view + replay-hook system (§ 1.13 / 1.14)
+  - `.brief/deploy-gotchas.md` — operational hazards (yarn `link:..` vs `file:..`, etc.)
 - **Sprint narratives (if you want to see the how-we-got-here):**
   - `.brief/2026-04-24-mailroom-sprint.md`
   - `.brief/2026-04-25-curation-sprint.md`

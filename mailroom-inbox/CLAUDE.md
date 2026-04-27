@@ -33,7 +33,7 @@ If any items come back, surface them as a separate callout (not buried in the ge
 
 | Goal | Tool |
 |---|---|
-| List recent items | `sm_inbox_list` |
+| List recent items | `sm_inbox_list` (pass `order_by: original_sent_at` to sort by upstream send date instead of when it landed) |
 | Filter by labels/sender/date | `sm_inbox_query` |
 | Read full item | `sm_inbox_read` |
 | Click a confirm link | `sm_inbox_confirm` |
@@ -46,6 +46,37 @@ If any items come back, surface them as a separate callout (not buried in the ge
 | Restore from quarantine | `sm_inbox_restore` |
 | Export | `sm_inbox_export` |
 | List/create/edit rules | `sm_inbox_rules_*` |
+
+## Newsletter views — chronological + per-publisher notes
+
+Forwards are auto-grouped by `fields.newsletter_slug` (derived from sender display name). Use these when the user wants to read a publisher in order or pull aggregate notes.
+
+| Goal | Tool |
+|---|---|
+| What newsletters have I forwarded? | `sm_newsletters_list` |
+| Profile for one publisher (count, first/last seen, notes count) | `sm_newsletter_get` with `slug` |
+| Read a publisher in chronological order (by upstream send date, NOT forward date) | `sm_newsletter_items` with `slug, order: "oldest"` (default) or `"newest"` |
+| Pull all my notes for one publisher (slim shape, LLM-ready) | `sm_newsletter_notes` with `slug` |
+
+Slugs are visible via `sm_newsletters_list` — common ones today: `internet-pipes`, `sidebar-io`. Fields populated on every forward: `original_sent_at`, `original_message_id`, `newsletter_slug`, `forward_note` (anything the user typed before the forwarded block).
+
+## Backfill new fields onto historical items (rare, admin-side)
+
+If the Worker just shipped a new forward-detect field and existing items don't have it yet, use `sm_inbox_replay_hook` — generalized retroactive backfill. **Always dry-run first.**
+
+```
+sm_inbox_replay_hook {
+  inbox: "mailroom",
+  hook: "forward-detect",
+  filter: {fields_regex: {subject: "IP Digest|Pipes "}},
+  dry_run: true
+}
+// → {scanned, matched, samples: [{id, item, added_fields}, ...]}
+
+// If samples look right, drop dry_run for the real run.
+```
+
+Hooks registered for replay on `mailroom`: `forward-detect`, `sender-aliases`, `plus-addr`, `newsletter-name`. Preserves identity + index entry; only shallow-merges new `fields`.
 
 ## Auto-confirm allowlist (runtime ops)
 
