@@ -27,6 +27,10 @@ Per `.brief/forward-notes-and-newsletter-profiles.md`. All three phases live on 
 
 - [x] **`file:../dist` → `link:../dist` in `deploy/package.json` — SHIPPED 2026-04-26.** Yarn 1's `link:` form symlinks the dep instead of copying, so `deno task build:npm` is visible to wrangler immediately with no reinstall step. Verified end-to-end: deploy `96fd9c9f-88cf-4ba8-8be2-6aa5b15ca6c4`, marker test confirmed dist→node_modules propagation is instant. Replaces the wipe-and-reinstall workaround surfaced in the morning's deploy. Detail: `.brief/deploy-gotchas.md § 1`. #deploy #yarn-file-dep-staleness
 
+### 2026-04-27 — Ghost confirm-detect support
+
+- [x] **Ghost / Rosieland confirmation pattern — SHIPPED 2026-04-27.** User signed up to rosieland.com with `mailroom@labspace.ai`; confirmation landed but went unflagged because Ghost says "Complete your sign up" instead of the existing patterns. Extended `src/messaging/confirm-detect.ts`: new subject pattern `\bcomplete\s+(?:your\s+)?sign[\s-]?up\b`, anchor phrases `complete the signup` / `complete your sign up` / `tap the link below`, path hint `action=signup` (Ghost's `/members/?token=...&action=signup&r=...` query shape). 7 new tests covering the exact rosieland subject + body. 727/727 messaging suite green. Deploy: `c91e0166-f0a4-47ec-a34e-ab9ab8657418`. Then added `*@ghost.io` to auto-confirm allowlist via runtime API at 2026-04-27T02:00Z so future Ghost signups auto-fire. CLAUDE.md updated to reflect the addition. #messaging #confirm-detect #ghost #auto-confirm
+
 ### Stretch — forward-notes follow-ups
 
 From `.brief/forward-notes-and-newsletter-profiles.md`:

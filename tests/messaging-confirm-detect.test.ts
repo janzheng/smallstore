@@ -305,3 +305,73 @@ Deno.test('hook — does not mutate input', async () => {
   await hook(item, CTX);
   assertEquals(JSON.stringify(item), snapshot);
 });
+
+// ============================================================================
+// Ghost — "Complete your sign up to <Publisher>" + /members/?token=...&action=signup
+// (added 2026-04-27 after the rosieland.com signup landed unflagged)
+// ============================================================================
+
+Deno.test('subject — Ghost "🙌 Complete your sign up to Rosieland!" → true', () => {
+  assert(isConfirmationSubject('🙌 Complete your sign up to Rosieland!'));
+});
+
+Deno.test('subject — "Complete your signup" (no space) → true', () => {
+  assert(isConfirmationSubject('Complete your signup'));
+});
+
+Deno.test('subject — "Complete sign-up" → true', () => {
+  assert(isConfirmationSubject('Complete sign-up'));
+});
+
+Deno.test('subject — "Complete your project" → false (not a signup)', () => {
+  assertEquals(isConfirmationSubject('Complete your project'), false);
+});
+
+Deno.test('url — Ghost shape: "tap the link below to complete the signup process" anchor + URL on next line', () => {
+  const body = `Hey there,
+
+Tap the link below to complete the signup process for Rosieland, and be automatically signed in:
+
+https://rosie.land/members/?token=McJmN3f731hwGuW0I72tJ-ClOQnzUj7j&action=signup&r=https%3A%2F%2Frosie.land%2F
+
+For your security, the link will expire in 24 hours time.
+
+See you soon!`;
+  const url = extractConfirmUrl(body);
+  assertEquals(
+    url,
+    'https://rosie.land/members/?token=McJmN3f731hwGuW0I72tJ-ClOQnzUj7j&action=signup&r=https%3A%2F%2Frosie.land%2F',
+  );
+});
+
+Deno.test('url — Ghost shape: action=signup query param alone is enough via PATH_HINTS', () => {
+  // No anchor phrases — extraction should still succeed via path-hint fallback.
+  const body = 'Welcome! https://example.com/members/?token=abc&action=signup';
+  const url = extractConfirmUrl(body);
+  assert(url !== null);
+  assertEquals(url!.includes('action=signup'), true);
+});
+
+Deno.test('hook — full Ghost flow tags needs-confirm + extracts the signup URL', async () => {
+  const hook = createConfirmDetectHook();
+  const item = makeItem(
+    {
+      subject: '🙌 Complete your sign up to Rosieland!',
+      from_email: 'rosieland@ghost.io',
+      body_text: `Hey there,
+
+Tap the link below to complete the signup process for Rosieland, and be automatically signed in:
+
+https://rosie.land/members/?token=McJmN3f731hwGuW0I72tJ-ClOQnzUj7j&action=signup&r=https%3A%2F%2Frosie.land%2F
+
+For your security, the link will expire in 24 hours time.`,
+    },
+    { labels: ['newsletter'] },
+  );
+  const verdict = await hook(item, CTX);
+  if (typeof verdict === 'string') throw new Error('expected mutated item');
+  assert(verdict.labels?.includes('needs-confirm'));
+  const confirmUrl = verdict.fields?.confirm_url as string | undefined;
+  assert(confirmUrl?.includes('action=signup'), `expected signup URL, got ${confirmUrl}`);
+  assert(confirmUrl?.includes('rosie.land/members'));
+});

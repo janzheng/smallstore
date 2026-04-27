@@ -98,6 +98,8 @@ const SUBJECT_PATTERNS: RegExp[] = [
   /\bsubscription\s+confirmation\b/i,
   /\bone\s+more\s+step\b/i, // Substack pattern
   /^confirm(ing)?\b/i,
+  // Ghost pattern: "🙌 Complete your sign up to <Publisher>!"
+  /\bcomplete\s+(?:your\s+)?sign[\s-]?up\b/i,
 ];
 
 export function isConfirmationSubject(subject: string | undefined | null): boolean {
@@ -129,6 +131,13 @@ const ANCHOR_PHRASES = [
   'click to confirm',
   'please click',
   "i'm in",
+  // Ghost — "Tap the link below to complete the signup process for X"
+  'complete the signup',
+  'complete the sign-up',
+  'complete the sign up',
+  'complete your signup',
+  'complete your sign up',
+  'tap the link below',
 ];
 
 /**
@@ -143,6 +152,8 @@ const PATH_HINTS = [
   'double-opt-in',
   'confirmsubscription',
   'optin',
+  // Ghost — /members/?token=...&action=signup&r=...
+  'action=signup',
 ];
 
 const URL_RE = /https?:\/\/[^\s<>"'`)]+/gi;

@@ -29,7 +29,7 @@ curl -sS -H "Authorization: Bearer $SMALLSTORE_TOKEN" \
 
 If any items come back, surface them as a separate callout (not buried in the general list). Offer to batch-confirm via the endpoint or the `sm_inbox_confirm` MCP tool. For manual clicks: show the URL first so the user stays in the loop.
 
-**Auto-confirm is active for allowlisted senders.** Patterns are stored in D1 (`mailroom_auto_confirm` table) and editable at runtime via `/admin/auto-confirm/senders` or the `sm_auto_confirm_*` MCP tools — no redeploy needed. The `AUTO_CONFIRM_SENDERS` env var in `wrangler.toml` (currently `*@substack.com`, `*@substackmail.com`, `*@convertkit.com`, `*@beehiiv.com`, `*@mailerlite.com`, `*@emailoctopus.com`, `*@uxdesign.cc`, `*@every.to`) seeds the store on first ever boot only — patterns deleted via the API stay deleted (sentinel-tracked).
+**Auto-confirm is active for allowlisted senders.** Patterns are stored in D1 (`mailroom_auto_confirm` table) and editable at runtime via `/admin/auto-confirm/senders` or the `sm_auto_confirm_*` MCP tools — no redeploy needed. The `AUTO_CONFIRM_SENDERS` env var in `wrangler.toml` (currently `*@substack.com`, `*@substackmail.com`, `*@convertkit.com`, `*@beehiiv.com`, `*@mailerlite.com`, `*@emailoctopus.com`, `*@uxdesign.cc`, `*@every.to`) seeds the store on first ever boot only — patterns deleted via the API stay deleted (sentinel-tracked). `*@ghost.io` was added at runtime on 2026-04-27 alongside the confirm-detect Ghost patch.
 
 ```sh
 # List active patterns
