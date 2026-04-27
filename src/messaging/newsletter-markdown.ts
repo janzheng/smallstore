@@ -21,7 +21,15 @@
  *     profile route already does this, so renderers receive the clean form.
  */
 
-import type { InboxItem } from './types.ts';
+import type { InboxItem, InboxItemFull } from './types.ts';
+import { htmlToText, truncateAtBoundary } from './html-to-text.ts';
+
+/**
+ * Cap on inlined body text per item in the per-publisher mirror file.
+ * Newsletter HTML stripped to text typically lands well under this; the
+ * cap is a safety net so a runaway item can't blow up the .md file.
+ */
+const INLINE_BODY_MAX_CHARS = 20_000;
 
 export interface NewsletterIndexEntry {
   slug: string;
@@ -85,7 +93,7 @@ export function renderNewsletterProfile(
   inboxName: string,
   slug: string,
   profile: NewsletterProfile,
-  items: ReadonlyArray<InboxItem>,
+  items: ReadonlyArray<InboxItem | InboxItemFull>,
   origin: string,
 ): string {
   const lines: string[] = [];
@@ -139,7 +147,17 @@ export function renderNewsletterProfile(
         lines.push(noteLine.length > 0 ? `> ${noteLine}` : '>');
       }
       lines.push('');
-    } else {
+    }
+
+    // Inline body content so the mirror file is self-contained reading
+    // material — the "View item →" link below requires auth, so the user
+    // can't click through to read. Body is HTML-stripped, capped, and
+    // gracefully no-ops when the item lacks inflated content.
+    const bodyMd = extractRenderableBody(item);
+    if (bodyMd) {
+      lines.push(bodyMd);
+      lines.push('');
+    } else if (!note || note.trim().length === 0) {
       lines.push('_(no note)_');
       lines.push('');
     }
@@ -164,6 +182,8 @@ export function renderNewsletterNotes(
   notes: ReadonlyArray<{
     id: string;
     original_sent_at?: string;
+    /** Top-level sent_at — fallback for direct subs that lack original_sent_at. */
+    sent_at?: string;
     received_at?: string;
     subject?: string;
     from?: string;
@@ -189,8 +209,9 @@ export function renderNewsletterNotes(
 
   for (const n of notes) {
     if (!n.note || n.note.trim().length === 0) continue;
-    const heading = n.original_sent_at
-      ? `## ${formatDate(n.original_sent_at)} — ${n.subject ?? '(no subject)'}`
+    const sentAt = n.original_sent_at ?? n.sent_at;
+    const heading = sentAt
+      ? `## ${formatDate(sentAt)} — ${n.subject ?? '(no subject)'}`
       : `## (date unknown) — ${n.subject ?? '(no subject)'}`;
     lines.push(heading);
     lines.push('');
@@ -224,6 +245,8 @@ export function renderAllNotes(
     newsletter_slug?: string;
     newsletter_display?: string;
     original_sent_at?: string;
+    /** Top-level sent_at — fallback for direct subs that lack original_sent_at. */
+    sent_at?: string;
     received_at?: string;
     subject?: string;
     from?: string;
@@ -273,8 +296,9 @@ export function renderAllNotes(
     lines.push('');
 
     for (const n of slugNotes) {
-      const heading = n.original_sent_at
-        ? `### ${formatDate(n.original_sent_at)} — ${n.subject ?? '(no subject)'}`
+      const sentAt = n.original_sent_at ?? n.sent_at;
+      const heading = sentAt
+        ? `### ${formatDate(sentAt)} — ${n.subject ?? '(no subject)'}`
         : `### (date unknown) — ${n.subject ?? '(no subject)'}`;
       lines.push(heading);
       lines.push('');
@@ -314,6 +338,43 @@ function pickItemSentAt(item: InboxItem): string | undefined {
   if (typeof original === 'string' && original.length > 0) return original;
   if (typeof item.sent_at === 'string' && item.sent_at.length > 0) return item.sent_at;
   return undefined;
+}
+
+/**
+ * Pull renderable body text out of an inbox item for inlining in the
+ * mirror's per-publisher markdown. Resolution order:
+ *   1. `body_inflated` (fetched from blob storage by the mirror runner)
+ *   2. `body` (small text bodies are inlined at ingest)
+ * If the source is HTML (body_ref points to .html), we strip it to plain
+ * text via `htmlToText`. Caps the result at INLINE_BODY_MAX_CHARS and
+ * appends a marker when truncated. Returns empty string when no body
+ * content is available — caller handles the "(no note)" fallback.
+ */
+function extractRenderableBody(item: InboxItem | InboxItemFull): string {
+  const inflated = (item as InboxItemFull).body_inflated;
+  const raw = (typeof inflated === 'string' && inflated.length > 0)
+    ? inflated
+    : (typeof item.body === 'string' && item.body.length > 0 ? item.body : '');
+  if (!raw) return '';
+
+  const looksLikeHtml = item.body_ref?.endsWith('.html') ||
+    /<\s*(html|body|p|div|h[1-6]|table)\b/i.test(raw.slice(0, 500));
+  const text = looksLikeHtml ? htmlToText(raw) : raw.trim();
+  if (!text) return '';
+
+  // Strip preheader-padding cruft: emails pad the preview with invisible
+  // characters (zero-width spaces, combining grapheme joiners, soft
+  // hyphens). They survive HTML stripping and clutter the markdown.
+  const cleaned = text
+    .replace(/[​-‍﻿͏­⁠]+/g, '')
+    .replace(/ /g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!cleaned) return '';
+
+  const { text: capped, truncated } = truncateAtBoundary(cleaned, INLINE_BODY_MAX_CHARS);
+  return truncated ? `${capped}\n\n_…body truncated. Open the source for the full content._` : capped;
 }
 
 function formatDate(iso: string | undefined): string {

@@ -185,9 +185,13 @@ export function createNewsletterNameHook(
     const nameToWrite = result.name && existingFields.newsletter_name !== result.name
       ? result.name
       : null;
-    // Don't overwrite a slug already set by forward-detect (forwards keep
-    // the original-sender slug, not the forwarder's).
-    const slugToWrite = result.slug && !existingFields.newsletter_slug
+    // Always re-derive the slug. Newsletter-name only fires on items the
+    // classifier tagged `newsletter`; forwarded items lack that label
+    // (forward-detect runs preIngest before classification but doesn't add
+    // it), so this hook never competes with forward-detect for the slug
+    // field. Overwriting is safe AND lets the replay path pick up better
+    // slug derivation as the filler-prefix patterns evolve.
+    const slugToWrite = result.slug && existingFields.newsletter_slug !== result.slug
       ? result.slug
       : null;
 

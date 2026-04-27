@@ -588,9 +588,18 @@ export function parseForwardDate(raw: string): string | undefined {
  * trim and lose identity. The fallback is "slug the whole display name."
  */
 const NEWSLETTER_FILLER_PREFIXES: RegExp[] = [
-  /^.*?\s+at\s+(.+)$/i, // "Steph at Internet Pipes" → "Internet Pipes"
-  /^(.+)\s+by\s+.+$/i, // "Stratechery by Ben Thompson" → "Stratechery"
-  /^(.+)\s+from\s+.+$/i, // "Updates from FooCo" → matched but conservative
+  // Parenthesized publisher: "Fabricio (from Sidebar.io)" → "Sidebar.io".
+  // Tried first because it's the most specific shape and would otherwise
+  // get clobbered by `slugifySenderName` of the full string.
+  /^.+?\s*[(\[]\s*(?:from|at|by)\s+(.+?)\s*[)\]]\s*$/i,
+  // "Steph at Internet Pipes" → "Internet Pipes" (publisher after "at").
+  /^.*?\s+at\s+(.+)$/i,
+  // "Stratechery by Ben Thompson" → "Stratechery" (the brand precedes "by").
+  /^(.+)\s+by\s+.+$/i,
+  // "Updates from FooCo" / "Daily News from Acme" → "FooCo" / "Acme"
+  // (publisher follows "from"). Captures the right half — the part after
+  // "from" is the brand; the part before is filler ("Updates", "Daily News").
+  /^.+\s+from\s+(.+)$/i,
 ];
 
 /**

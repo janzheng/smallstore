@@ -237,6 +237,81 @@ Deno.test('renderNewsletterProfile: falls back to top-level sent_at when origina
   assert(directIdx > 0 && directIdx < forwardedIdx);
 });
 
+Deno.test('renderNewsletterProfile: inlines body_inflated when present (HTML stripped)', () => {
+  const items: InboxItem[] = [
+    {
+      id: 'a',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00.000Z',
+      summary: 'Issue 1',
+      body: null,
+      body_ref: 'html/a.html',
+      body_inflated: '<h2>Hello</h2><p>Some <a href="https://x.com">link</a> here.</p>',
+      fields: { original_sent_at: '2026-04-26T08:00:00.000Z', original_subject: 'Issue 1' },
+    } as InboxItem,
+  ];
+  const md = renderNewsletterProfile('mailroom', 'p', { slug: 'p', count: 1, notes_count: 0 }, items, '');
+  assertStringIncludes(md, '## Hello'); // HTML h2 → markdown
+  assertStringIncludes(md, '[link](https://x.com)');
+  // No "(no note)" placeholder when body is present.
+  assertEquals(md.includes('_(no note)_'), false);
+});
+
+Deno.test('renderNewsletterProfile: inlines plain-text body when no body_inflated', () => {
+  const items: InboxItem[] = [
+    {
+      id: 'a',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00.000Z',
+      summary: 'Plain issue',
+      body: 'This is plain text content.\n\nWith two paragraphs.',
+      fields: { original_sent_at: '2026-04-26T08:00:00.000Z', original_subject: 'Plain issue' },
+    },
+  ];
+  const md = renderNewsletterProfile('mailroom', 'p', { slug: 'p', count: 1, notes_count: 0 }, items, '');
+  assertStringIncludes(md, 'This is plain text content.');
+  assertStringIncludes(md, 'With two paragraphs.');
+});
+
+Deno.test('renderNewsletterProfile: shows note AND body together when both exist', () => {
+  const items: InboxItem[] = [
+    {
+      id: 'a',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00.000Z',
+      summary: 'Annotated',
+      body: 'Newsletter body here.',
+      fields: {
+        original_sent_at: '2026-04-26T08:00:00.000Z',
+        original_subject: 'Annotated',
+        forward_note: 'My take: this is great.',
+      },
+    },
+  ];
+  const md = renderNewsletterProfile('mailroom', 'p', { slug: 'p', count: 1, notes_count: 1 }, items, '');
+  assertStringIncludes(md, '> My take: this is great.');
+  assertStringIncludes(md, 'Newsletter body here.');
+});
+
+Deno.test('renderNewsletterProfile: missing body keeps "(no note)" fallback when there is no note either', () => {
+  const items: InboxItem[] = [
+    {
+      id: 'a',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00.000Z',
+      summary: 'Empty',
+      body: null,
+      fields: { original_sent_at: '2026-04-26T08:00:00.000Z', original_subject: 'Empty' },
+    },
+  ];
+  const md = renderNewsletterProfile('mailroom', 'p', { slug: 'p', count: 1, notes_count: 0 }, items, '');
+  assertStringIncludes(md, '_(no note)_');
+});
+
 Deno.test('renderNewsletterProfile: prefers original_sent_at over sent_at when both present', () => {
   // Forwarded items: forward-detect's original_sent_at (upstream send)
   // wins over the top-level sent_at (when the user forwarded).

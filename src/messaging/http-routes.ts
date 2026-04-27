@@ -637,6 +637,7 @@ export function registerMessagingRoutes(
     const notes = result.items.map((item) => ({
       id: item.id,
       original_sent_at: item.fields?.original_sent_at as string | undefined,
+      sent_at: item.sent_at,
       received_at: item.received_at,
       subject: (item.fields?.original_subject ?? item.summary) as string | undefined,
       from: item.fields?.original_from_addr as string | undefined,
@@ -720,6 +721,7 @@ export function registerMessagingRoutes(
         | string
         | undefined,
       original_sent_at: item.fields?.original_sent_at as string | undefined,
+      sent_at: item.sent_at,
       received_at: item.received_at,
       subject: (item.fields?.original_subject ?? item.summary) as string | undefined,
       from: item.fields?.original_from_addr as string | undefined,

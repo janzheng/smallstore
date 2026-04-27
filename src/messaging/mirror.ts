@@ -26,7 +26,7 @@
 
 import type { Peer, PeerStore } from '../peers/types.ts';
 import { resolvePeerAuth } from '../peers/proxy.ts';
-import type { Inbox, InboxItem } from './types.ts';
+import type { Inbox, InboxItem, InboxItemFull } from './types.ts';
 import type { InboxRegistry } from './registry.ts';
 import {
   renderNewsletterIndex,
@@ -151,8 +151,24 @@ export async function runMirror(opts: RunMirrorOptions): Promise<MirrorRunResult
     // Per-newsletter pages.
     for (const [slug, items] of groups) {
       try {
-        const profile = buildProfile(slug, items);
-        const md = renderNewsletterProfile(config.source_inbox, slug, profile, items, linkOrigin);
+        // Hydrate bodies so the rendered markdown is self-contained
+        // reading material — the "View item →" link below requires the
+        // bearer token, which a user opening the .md in Finder/Obsidian
+        // doesn't have. O(N) R2 reads per slug; acceptable at current
+        // scale (cron is every 30 min). On read failure we keep the
+        // slim item — the renderer falls back to "(no note)" gracefully.
+        const fullItems: InboxItemFull[] = await Promise.all(
+          items.map(async (item) => {
+            try {
+              const full = await inbox.read(item.id, { full: true });
+              return full ?? (item as InboxItemFull);
+            } catch {
+              return item as InboxItemFull;
+            }
+          }),
+        );
+        const profile = buildProfile(slug, fullItems);
+        const md = renderNewsletterProfile(config.source_inbox, slug, profile, fullItems, linkOrigin);
         await pushFile(peer, auth.headers, fetcher, `${prefix}${slug}.md`, md);
         result.pushed++;
       } catch (e) {

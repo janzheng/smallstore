@@ -596,6 +596,24 @@ Deno.test('deriveNewsletterSlug — both undefined → undefined', () => {
   assertEquals(deriveNewsletterSlug(undefined, undefined), undefined);
 });
 
+Deno.test('deriveNewsletterSlug — "Fabricio (from Sidebar.io)" → sidebar-io (parenthesized publisher)', () => {
+  const slug = deriveNewsletterSlug(
+    'Fabricio (from Sidebar.io) <hello@uxdesign.cc>',
+    'hello@uxdesign.cc',
+  );
+  assertEquals(slug, 'sidebar-io');
+});
+
+Deno.test('deriveNewsletterSlug — "Daily News from Acme" → acme (publisher after "from")', () => {
+  const slug = deriveNewsletterSlug('Daily News from Acme <hi@acme.com>', 'hi@acme.com');
+  assertEquals(slug, 'acme');
+});
+
+Deno.test('deriveNewsletterSlug — "Jane [from BrandCo]" → brandco (bracketed publisher)', () => {
+  const slug = deriveNewsletterSlug('Jane [from BrandCo] <jane@example.com>', 'jane@example.com');
+  assertEquals(slug, 'brandco');
+});
+
 Deno.test('detectForward — extracts original_sent_at from Gmail-shape body', () => {
   const body = [
     '---------- Forwarded message ---------',

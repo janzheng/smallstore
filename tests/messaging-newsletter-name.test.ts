@@ -142,21 +142,39 @@ Deno.test('hook — direct sub with display name → writes newsletter_slug for 
   assertEquals(verdict.fields.newsletter_slug, 'every');
 });
 
-Deno.test('hook — preserves an existing newsletter_slug (forward-detect wins)', async () => {
-  // A forwarded item has newsletter_slug set by forward-detect (preIngest).
-  // newsletter-name (postClassify) must not overwrite it with the forwarder's slug.
-  const hook = createNewsletterNameHook({ skipIfSenderTagged: false });
+Deno.test('hook — re-derives slug to pick up improved filler-prefix logic on replay', async () => {
+  // Replay scenario: an existing item had a "fabricio-from-sidebar-io"
+  // slug from before the bracketed-publisher pattern shipped. After the
+  // pattern fix lands, replaying should produce "sidebar-io" — overwrite
+  // is safe because newsletter-name only fires on items with the
+  // `newsletter` label, which forwarded items don't carry, so this hook
+  // never competes with forward-detect.
+  const hook = createNewsletterNameHook();
   const item = makeItem(
     {
-      from_addr: '"Jan Zheng" <hello@janzheng.com>',
-      from_email: 'hello@janzheng.com',
-      newsletter_slug: 'internet-pipes', // already set upstream
+      from_addr: '"Fabricio (from Sidebar.io)" <hello@uxdesign.cc>',
+      newsletter_slug: 'fabricio-from-sidebar-io', // stale slug from old derivation
     },
-    { labels: ['newsletter'] },
   );
   const verdict = await hook(item, CTX);
   if (typeof verdict === 'string') throw new Error('expected mutated item');
-  assertEquals(verdict.fields.newsletter_slug, 'internet-pipes'); // not overwritten
+  assertEquals(verdict.fields.newsletter_slug, 'sidebar-io');
+});
+
+Deno.test('hook — same slug already set → idempotent (no diff)', async () => {
+  // The "no overwrite when slug already matches what we'd derive" path:
+  // the hook should not produce a diff in this case.
+  const hook = createNewsletterNameHook();
+  const item = makeItem(
+    {
+      from_addr: '"Sidebar.io" <hello@uxdesign.cc>',
+      newsletter_name: 'Sidebar.io',
+      newsletter_slug: 'sidebar-io',
+    },
+    { labels: ['newsletter', 'newsletter:sidebar-io'] },
+  );
+  const verdict = await hook(item, CTX);
+  assertEquals(verdict, 'accept');
 });
 
 Deno.test('hook — bare angle-address with from_email → still populates slug from domain', async () => {
