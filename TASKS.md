@@ -32,9 +32,17 @@ Per `.brief/forward-notes-and-newsletter-profiles.md`. All three phases live on 
 From `.brief/forward-notes-and-newsletter-profiles.md`:
 
 - [x] **`POST /inbox/:name/items/:id/note` — SHIPPED 2026-04-26.** After-the-fact annotation. Body `{note: string, mode?: 'replace'|'append'}`. `replace` (default) overwrites; `append` joins via `\n\n---\n\n`; empty string clears. Stamps `fields.note_updated_at` (ISO). Uses `IngestOptions.fields_only` so identity (id/received_at/source/summary/body/labels) and the inbox index are preserved. New MCP tool `sm_inbox_set_note`. 13 new tests in `tests/messaging-annotation.test.ts`; 676/676 messaging suite green. Verified live on prod (deploy `cc96815b-fe29-4206-91cf-e238bcd9ac72`) including replace/append/clear flows. #messaging #annotation-endpoint
-- [?] `GET /newsletters/:slug/notes?format=markdown` — second-brain export to Obsidian/tigerflare #messaging #notes-md-export
 - [?] Note-length aggregation as engagement signal per newsletter #messaging #interest-signal
 - [?] Cross-newsletter topic threading (LLM-extracted from notes) #messaging #cross-newsletter-tags
+
+### Notes → todos + browsable mirror — IN BRIEF (design: `.brief/notes-todos-and-mirror.md`)
+
+User trigger 2026-04-27: forwarded a Rosieland newsletter with `forward_note: "reminder to self: sub mailroom to rosieland"` — a real action item buried inside a free-text note. Two distinct asks fell out: surface the action items as a workable list, and mirror the whole notes corpus into a browsable markdown surface (tigerflare). Detail in brief; phase breakdown in `TASKS-MESSAGING.md § Notes → todos + mirror`.
+
+- [ ] **Phase 1 — `/inbox/:name/todos` + `sm_inbox_todos`** — derived view, regex-pattern scan over `forward_note`. ~45 min. #messaging #notes-todos #phase1
+- [ ] **Phase 2a — markdown export endpoints** — `?format=markdown` on the three newsletter routes (index + per-slug + notes). Pure read-side, no new dependencies. ~45 min. #messaging #markdown-export #phase2a
+- [ ] **Phase 2b — peer-mediated tigerflare cron mirror** — extend `scheduled()` handler to render markdown via Phase 2a path and push to tigerflare via the peer registry. Configurable target via peer metadata. ~60-90 min. #messaging #tigerflare-mirror #phase2b
+- [?] **Phase 3 — newsletter-level meta-notes — DEFERRED.** `POST /inbox/:name/newsletters/:slug/note`. Per-issue notes already aggregate well; revisit only if writing a meta-note feels awkward in practice. Storage shape (synthetic item with `id: __meta__:<slug>` + `_meta_` label) captured in brief. #messaging #newsletter-meta-note
 
 ### Polish session — SHIPPED 2026-04-24
 

@@ -189,9 +189,26 @@ Turn forwards into a real curation primitive. Capture original-date + newsletter
 
 **Stretch (defer until v1 ships):**
 - [x] **`POST /inbox/:name/items/:id/note` — SHIPPED 2026-04-26.** After-the-fact annotation. Body `{note, mode?}` with `replace` (default) / `append` (joins via thematic break) / empty-string-clears semantics. Stamps `fields.note_updated_at`. Uses `IngestOptions.fields_only` for identity-preserving merge — labels, summary, body, received_at, index entry all untouched. Annotated note immediately surfaces in `/inbox/:name/newsletters/:slug/notes`. New MCP `sm_inbox_set_note(inbox, id, note, mode?)`. 13 new tests; 676/676 messaging suite green. Live verified on prod (`cc96815b-fe29-4206-91cf-e238bcd9ac72`). #messaging #annotation-endpoint
-- [?] `GET /newsletters/:slug/notes?format=markdown` — second-brain export (Obsidian/tigerflare) #messaging #notes-md-export
+- [?] `GET /newsletters/:slug/notes?format=markdown` — promoted into Phase 2a of the notes-todos brief below.
 - [?] Note-length aggregation as engagement signal per newsletter #messaging #interest-signal
 - [?] Cross-newsletter topic threading (LLM-extracted topics from notes) #messaging #cross-newsletter-tags
+
+### Notes → todos + browsable mirror (design: `.brief/notes-todos-and-mirror.md`)
+
+User trigger 2026-04-27: forwarded a Rosieland newsletter with `forward_note: "reminder to self: sub mailroom to rosieland"` — a real action item buried inside a free-text note. Two distinct asks separated cleanly: surface action items as a workable list, and mirror the notes corpus into a browsable markdown surface. Three phases; each independently shippable.
+
+**Phase 1 — todo view (cheapest, ship first):**
+- [ ] **`GET /inbox/:name/todos`** — pure derived endpoint scanning `forward_note` for action-shaped lines. Six pattern shapes (markdown unchecked checkbox, `TODO:` prefix, `Action:` prefix, `remind/remember to`, `sub me to`, `follow up`); each returns `matched_pattern` for UI introspection. Optional `?slug=` / `?since=` filters. Skips quoted-reply lines (`> ...`) and checked checkboxes (`[x]`). No schema change, no extraction-at-ingest, no LLM. Test file `tests/messaging-todos.test.ts` should cover all six patterns + multi-line + quoted-reply skip + checked-skip + slug filter + since filter. ~45 min build. #messaging #notes-todos-endpoint
+- [ ] **`sm_inbox_todos(inbox, slug?, since?, limit?)`** MCP tool — same shape as the HTTP route. Add to `src/mcp/tools/inbox.ts` schema list + dispatch. #messaging #notes-todos-mcp
+
+**Phase 2a — markdown export endpoints (pure read-side):**
+- [ ] **`?format=markdown` on the three newsletter routes** — `GET /inbox/:name/newsletters` (index page with publisher table), `GET /inbox/:name/newsletters/:slug` (full publisher view: profile metadata + chronological items + notes inlined), `GET /inbox/:name/newsletters/:slug/notes` (notes-only slim version). `Content-Type: text/markdown; charset=utf-8`. Renders the same data as the JSON variants — no new state, no new ingest path. Markdown shape spec'd in `.brief/notes-todos-and-mirror.md § Phase 2a`. ~45 min. #messaging #markdown-export
+
+**Phase 2b — peer-mediated tigerflare cron mirror:**
+- [ ] **Extend `scheduled()` handler with optional mirror task.** Reuses Phase 2a's markdown rendering. Pushes per-publisher markdown to a tigerflare peer registered with `metadata.mirror_config = { source_inbox, target_space, include_index? }`. Auth via the peer's `auth.token_env` (existing peer-registry pattern); no smallstore-side TF token. Idempotent — re-rendering the same markdown is a no-op write. Per-slug failure logs and skips; doesn't tank the run. ~60-90 min. #messaging #tigerflare-mirror
+
+**Phase 3 — newsletter-level meta-notes (DEFERRED, not building):**
+- [?] **`POST /inbox/:name/newsletters/:slug/note`** — separate from per-issue notes. Per-issue notes already aggregate well (see `/newsletters/:slug/notes`); marginal value of a separate primitive unclear until someone actually tries to write one. Recommended storage when promoted: synthetic item with `id: __meta__:<slug>` + `_meta_` label that the default mainViewFilter excludes. Detail: brief § Phase 3. #messaging #newsletter-meta-note
 
 ### Mailroom pipeline — remaining after curation sprint
 
