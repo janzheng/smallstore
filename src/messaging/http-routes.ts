@@ -52,6 +52,11 @@ import type { AutoConfirmSendersStore } from './auto-confirm-senders.ts';
 import { listQuarantined, restoreItem } from './quarantine.ts';
 import { verifyHmac, webhookChannel, type WebhookConfig } from './channels/webhook.ts';
 import { scanNoteForTodos } from './todos.ts';
+import {
+  renderNewsletterIndex,
+  renderNewsletterNotes,
+  renderNewsletterProfile,
+} from './newsletter-markdown.ts';
 
 export type RequireAuth = (c: Context, next: Next) => Promise<Response | void> | Response | void;
 
@@ -482,6 +487,12 @@ export function registerMessagingRoutes(
       .map(([slug, v]) => ({ slug, count: v.count, latest_at: v.latest_at, display: v.display }))
       .sort((a, b) => (b.latest_at ?? '').localeCompare(a.latest_at ?? ''));
 
+    if (c.req.query('format') === 'markdown') {
+      return new Response(renderNewsletterIndex(name, newsletters), {
+        status: 200,
+        headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+      });
+    }
     return c.json({ inbox: name, newsletters });
   });
 
@@ -523,14 +534,29 @@ export function registerMessagingRoutes(
       }
     }
 
-    return c.json({
-      inbox: name,
+    const profile = {
       slug,
       display,
       count: result.items.length,
       first_seen_at: firstAt,
       last_seen_at: lastAt,
       notes_count: notesCount,
+    };
+
+    if (c.req.query('format') === 'markdown') {
+      const origin = new URL(c.req.url).origin;
+      return new Response(
+        renderNewsletterProfile(name, slug, profile, result.items, origin),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+        },
+      );
+    }
+
+    return c.json({
+      inbox: name,
+      ...profile,
       last_note: lastNote,
     });
   });
@@ -572,12 +598,35 @@ export function registerMessagingRoutes(
     // Project down to a slim notes-only shape for cheap LLM summarization.
     const notes = result.items.map((item) => ({
       id: item.id,
-      original_sent_at: item.fields?.original_sent_at,
+      original_sent_at: item.fields?.original_sent_at as string | undefined,
       received_at: item.received_at,
-      subject: item.fields?.original_subject ?? item.summary,
-      from: item.fields?.original_from_addr,
-      note: item.fields?.forward_note,
+      subject: (item.fields?.original_subject ?? item.summary) as string | undefined,
+      from: item.fields?.original_from_addr as string | undefined,
+      note: item.fields?.forward_note as string | undefined,
     }));
+
+    if (c.req.query('format') === 'markdown') {
+      // Derive a slim profile for the markdown header — display name from
+      // the most-recent note, count from the notes themselves.
+      const display = notes.length > 0 && notes[0].from
+        ? stripAngleAddr(notes[0].from)
+        : undefined;
+      const profile = {
+        slug,
+        display,
+        count: notes.length,
+        notes_count: notes.length,
+      };
+      const origin = new URL(c.req.url).origin;
+      return new Response(
+        renderNewsletterNotes(name, slug, profile, notes, origin),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+        },
+      );
+    }
+
     return c.json({ inbox: name, slug, count: notes.length, total: result.total, notes });
   });
 

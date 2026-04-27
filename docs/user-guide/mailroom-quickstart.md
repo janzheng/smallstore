@@ -281,6 +281,24 @@ curl -H "Authorization: Bearer $TOKEN" \
   | your-llm-summarizer
 ```
 
+**Get any of the above as markdown** — append `?format=markdown` to render an Obsidian/tigerflare-friendly view:
+
+```bash
+# Index page — table of every newsletter linking to per-publisher .md files
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/newsletters?format=markdown"
+
+# Full publisher view — profile header + chronological issues + notes inlined
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/newsletters/internet-pipes?format=markdown" > internet-pipes.md
+
+# Notes-only — slim version (skips items without notes)
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/inbox/mailroom/newsletters/internet-pipes/notes?format=markdown"
+```
+
+`Content-Type: text/markdown; charset=utf-8`. Notes are rendered as blockquotes (preserves your markdown verbatim, visually separates your voice from the publisher's). Items missing `original_sent_at` tail with a `(date unknown)` heading. The index uses relative links (`./<slug>.md`) so a folder of these files browses naturally without an absolute URL.
+
 **Sort any inbox query by original send date** — `order_by=received_at|sent_at|original_sent_at` works on `GET /inbox/:name` and `POST /inbox/:name/query`:
 
 ```bash

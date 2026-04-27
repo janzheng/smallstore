@@ -173,6 +173,8 @@ Operate the live mailroom inbox (bookmarks, auto-archive, export, rules). The in
 - `sm_newsletter_notes(inbox, slug, limit?)` — slim shape `{id, original_sent_at, received_at, subject, from, note}` — pipe straight into an LLM.
 - `sm_inbox_todos(inbox, slug?, since?, limit?)` — derived todo view: scans every `forward_note` for action-shaped lines (`- [ ]`, `TODO:`, `Action:`, `remind/remember`, `sub me to`, `follow up`). Each todo carries `matched_pattern` + `full_note` for context. Multi-line note → multi-todo. Skips quoted-reply (`>`) and checked (`[x]`) lines. Use when the user says "what do I need to do", "show my todos", "action items from my notes".
 
+**Markdown export** — the three newsletter routes all accept `?format=markdown` over HTTP for Obsidian/tigerflare-friendly rendering: `GET /inbox/:name/newsletters?format=markdown` (index), `GET /inbox/:name/newsletters/:slug?format=markdown` (full publisher view: profile header + chronological issues + notes inlined as blockquotes), `GET /inbox/:name/newsletters/:slug/notes?format=markdown` (notes-only). No MCP wrapper — markdown is for humans, JSON is for agents. Use the markdown form when the user asks to "browse my newsletters", "export to obsidian", "save this as a markdown file".
+
 **Tagging / mutation:**
 - `sm_inbox_tag(inbox, id, add?, remove?)` — add/remove labels on one item. Use for "changed my mind" corrections.
 - `sm_inbox_set_note(inbox, id, note, mode?)` — set or update `fields.forward_note` after the fact. `mode: 'replace'` (default) overwrites; `'append'` joins to existing note via thematic break. Empty string clears. Stamps `fields.note_updated_at`. Identity + labels preserved. The note immediately surfaces in `sm_newsletter_notes`.
