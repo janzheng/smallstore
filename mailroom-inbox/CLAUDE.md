@@ -39,6 +39,7 @@ If any items come back, surface them as a separate callout (not buried in the ge
 | Click a confirm link | `sm_inbox_confirm` |
 | Hard-delete (spent codes, spam) | `sm_inbox_delete` |
 | Bookmark | `sm_inbox_tag` with `add: ["bookmark"]` |
+| Add/update a note on a past forward | `sm_inbox_set_note` with `note` (or `mode: "append"` to stack thoughts) |
 | Archive (soft, queryable) | `sm_inbox_tag` with `add: ["archived"]` |
 | Mark read / unread | `sm_inbox_mark_read` / `sm_inbox_mark_unread` |
 | Unsubscribe | `sm_inbox_unsubscribe` |

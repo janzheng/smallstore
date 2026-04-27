@@ -31,7 +31,7 @@ Per `.brief/forward-notes-and-newsletter-profiles.md`. All three phases live on 
 
 From `.brief/forward-notes-and-newsletter-profiles.md`:
 
-- [?] `POST /inbox/:name/items/:id/note` — after-the-fact annotation (forward without note, add note later) #messaging #annotation-endpoint
+- [x] **`POST /inbox/:name/items/:id/note` — SHIPPED 2026-04-26.** After-the-fact annotation. Body `{note: string, mode?: 'replace'|'append'}`. `replace` (default) overwrites; `append` joins via `\n\n---\n\n`; empty string clears. Stamps `fields.note_updated_at` (ISO). Uses `IngestOptions.fields_only` so identity (id/received_at/source/summary/body/labels) and the inbox index are preserved. New MCP tool `sm_inbox_set_note`. 13 new tests in `tests/messaging-annotation.test.ts`; 676/676 messaging suite green. Verified live on prod (deploy `cc96815b-fe29-4206-91cf-e238bcd9ac72`) including replace/append/clear flows. #messaging #annotation-endpoint
 - [?] `GET /newsletters/:slug/notes?format=markdown` — second-brain export to Obsidian/tigerflare #messaging #notes-md-export
 - [?] Note-length aggregation as engagement signal per newsletter #messaging #interest-signal
 - [?] Cross-newsletter topic threading (LLM-extracted from notes) #messaging #cross-newsletter-tags

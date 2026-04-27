@@ -43,7 +43,7 @@
  */
 
 import type { Context, Hono, Next } from 'hono';
-import type { InboxConfig, InboxFilter, ListOptions } from './types.ts';
+import type { InboxConfig, InboxFilter, InboxItem, ListOptions } from './types.ts';
 import { listChannels, type InboxRegistry } from './registry.ts';
 import type { SenderIndex } from './sender-index.ts';
 import { unsubscribeSender } from './unsubscribe.ts';
@@ -661,6 +661,70 @@ export function registerMessagingRoutes(
 
     // force: true bypasses content-hash dedup so the label mutation persists.
     const saved = await inbox._ingest(updated, { force: true });
+    return c.json({ inbox: name, item: saved });
+  });
+
+  /**
+   * After-the-fact annotation — set or update `fields.forward_note` on an
+   * already-stored item. Pairs with the forward-note flow: forwards landing
+   * via email get `forward_note` populated automatically (anything typed
+   * before the forwarded block); this endpoint covers the case where the
+   * forward had no note OR where the user wants to revise the note later.
+   *
+   * POST /inbox/:name/items/:id/note
+   * Body: { note: string, mode?: 'replace' | 'append' }
+   *
+   * - `note` is required and must be a string (empty string clears).
+   * - `mode` defaults to `replace`. With `mode: 'append'`, joins to the
+   *   existing note via `\n\n---\n\n` (markdown thematic break) so multiple
+   *   thoughts over time read as a stack of dated entries.
+   * - Stamps `fields.note_updated_at` (ISO) every call — useful for "what
+   *   have I annotated recently" queries and for sorting notes views.
+   * - Identity (id, received_at, source, source_version, summary, body_ref)
+   *   and labels are preserved; only `fields` change.
+   *
+   * Returns `{ inbox, item }` or 404 if id not found.
+   */
+  app.post('/inbox/:name/items/:id/note', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    const body = await readJson(c);
+    if (!body || typeof body !== 'object') {
+      return badRequest(c, 'body must be { note: string, mode?: "replace" | "append" }');
+    }
+    const note = (body as { note?: unknown }).note;
+    if (typeof note !== 'string') {
+      return badRequest(c, 'note must be a string (use "" to clear)');
+    }
+    const mode = (body as { mode?: unknown }).mode ?? 'replace';
+    if (mode !== 'replace' && mode !== 'append') {
+      return badRequest(c, 'mode must be "replace" or "append"');
+    }
+
+    const existing = await inbox.read(id);
+    if (!existing) return notFound(c, `item "${id}" not in inbox "${name}"`);
+
+    let nextNote = note;
+    if (mode === 'append' && note.length > 0) {
+      const prev = (existing.fields as Record<string, unknown> | undefined)?.forward_note;
+      if (typeof prev === 'string' && prev.length > 0) {
+        nextNote = `${prev}\n\n---\n\n${note}`;
+      }
+    }
+
+    const saved = await inbox._ingest({
+      id,
+      source: existing.source,
+      received_at: existing.received_at,
+      fields: {
+        forward_note: nextNote,
+        note_updated_at: new Date().toISOString(),
+      },
+    } as InboxItem, { fields_only: true });
+
     return c.json({ inbox: name, item: saved });
   });
 

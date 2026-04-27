@@ -290,7 +290,34 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Items missing the chosen sort field always tail. Cursor pagination is disabled in non-default sort modes (use `limit` alone). For inboxes < ~10K items the in-memory sort is fine; the scaling cliff is the same `_index` blob caveat tracked in TASKS-MESSAGING.
 
-### 1.14 Backfill a new field across existing items (hook replay)
+### 1.14 Add or revise a note after the fact
+
+When a forward landed without a note, or you want to revise an existing one. Pairs with § 1.13 — the note immediately surfaces in `/inbox/:name/newsletters/:slug/notes`.
+
+```bash
+# Replace (default) — overwrites whatever was there
+curl -H "Authorization: Bearer $TOKEN" -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"note":"This issue made me rethink supply chain ops."}' \
+  "$BASE/inbox/mailroom/items/<id>/note"
+
+# Append — joins to the existing note via a thematic break (good for multiple
+# thoughts over time, e.g. "I came back to this a month later and noticed...")
+curl -H "Authorization: Bearer $TOKEN" -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"note":"Followup thought.","mode":"append"}' \
+  "$BASE/inbox/mailroom/items/<id>/note"
+
+# Clear — pass empty string
+curl -H "Authorization: Bearer $TOKEN" -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"note":""}' \
+  "$BASE/inbox/mailroom/items/<id>/note"
+```
+
+Identity (id, received_at, source, summary, body, labels) and the inbox index entry are preserved — the annotation only touches `fields.forward_note` and stamps `fields.note_updated_at`. So a late annotation never re-orders your inbox or duplicates the item.
+
+### 1.15 Backfill a new field across existing items (hook replay)
 
 When a new forward-detect field ships (e.g. you start extracting `original_sent_at` after some items already exist without it), run the hook over the historical items via `POST /admin/inboxes/:name/replay`. This is the generalized form of `apply_retroactive` for rules.
 

@@ -132,6 +132,25 @@ export const INBOX_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'sm_inbox_set_note',
+    description:
+      "Set or update `fields.forward_note` on an already-stored item — the after-the-fact annotation flow. Use this when you forwarded an email without a note and want to add one later, or to revise an existing note. Mode `replace` (default) overwrites; `append` joins to the existing note via a markdown thematic break so multiple thoughts over time read as a stack. Stamps `fields.note_updated_at` (ISO) every call. Identity, received_at, source, summary, body, and labels are preserved. The note then surfaces in `sm_newsletter_notes` and the `/newsletters/:slug/notes` route automatically.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        id: { type: 'string', description: 'Item id to annotate.' },
+        note: { type: 'string', description: 'Note text. Use empty string to clear.' },
+        mode: {
+          type: 'string',
+          enum: ['replace', 'append'],
+          description: '`replace` (default) overwrites; `append` joins to the existing note with a thematic break.',
+        },
+      },
+      required: ['inbox', 'id', 'note'],
+    },
+  },
+  {
     name: 'sm_inbox_unsubscribe',
     description:
       'Run the unsubscribe flow for a sender — looks up List-Unsubscribe headers via the inbox sender index and actions them. Returns 501 if the inbox has no sender index wired. Pass `skip_call: true` to log what would happen without firing the HTTP unsubscribe call.',
@@ -615,6 +634,24 @@ export async function handleInboxTool(
       const id = requireString(args, 'id');
       const r = await http('DELETE', `/inbox/${encName(inbox)}/items/${encId(id)}`);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_delete failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_set_note': {
+      const inbox = requireString(args, 'inbox');
+      const id = requireString(args, 'id');
+      if (typeof args.note !== 'string') {
+        throw new Error('sm_inbox_set_note: `note` must be a string (use "" to clear)');
+      }
+      const body: { note: string; mode?: 'replace' | 'append' } = { note: args.note };
+      if (args.mode !== undefined) {
+        if (args.mode !== 'replace' && args.mode !== 'append') {
+          throw new Error('sm_inbox_set_note: `mode` must be "replace" or "append"');
+        }
+        body.mode = args.mode;
+      }
+      const r = await http('POST', `/inbox/${encName(inbox)}/items/${encId(id)}/note`, body);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_set_note failed', r));
       return r.body;
     }
 
