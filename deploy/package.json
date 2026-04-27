@@ -12,7 +12,7 @@
     "r2:create": "wrangler r2 bucket create mailroom"
   },
   "dependencies": {
-    "@yawnxyz/smallstore": "file:../dist",
+    "@yawnxyz/smallstore": "link:../dist",
     "fast-xml-parser": "^4.5.0",
     "hono": "^4.10.3",
     "postal-mime": "^2.4.4"

@@ -23,16 +23,18 @@ Per `.brief/forward-notes-and-newsletter-profiles.md`. All three phases live on 
 - [x] **Phase 3 — retroactive backfill — SHIPPED 2026-04-26.** New `IngestOptions.fields_only` (shallow-merge fields, union labels, preserve identity, skip index). New `POST /admin/inboxes/:name/replay` endpoint generic over any registered hook (mailroom registers forward-detect / sender-aliases / plus-addr / newsletter-name today). New `sm_inbox_replay_hook` MCP tool. Dry-run-first contract: returns up to 10 diffs without writing. 10 new tests including the IP Digest backfill end-to-end scenario. 663/663 messaging suite green. Detail: `TASKS-MESSAGING.md § Forward notes + newsletter profiles § Phase 3`
 - [x] **IP Digest backfill — VALIDATED 2026-04-26.** Live run scanned 26 / matched 26 / applied 24 / errored 0. `/inbox/mailroom/newsletters/internet-pipes/items` returns Aug 2024 → Apr 2026 in chronological order. Notes route returns the empty list correctly (no notes on these forwards). System fully exercised. Detail: `TASKS-MESSAGING.md § Forward notes § Phase 3 § IP Digest backfill`
 
-### Deploy hardening — open
+### Deploy hardening — SHIPPED 2026-04-26
 
-Surfaced during the 2026-04-26 deploy when the first three `yarn deploy` runs shipped stale code. Workaround captured in `CLAUDE.md § Deploy gotcha` and `.brief/deploy-gotchas.md`; structural fix below.
+- [x] **`file:../dist` → `link:../dist` in `deploy/package.json` — SHIPPED 2026-04-26.** Yarn 1's `link:` form symlinks the dep instead of copying, so `deno task build:npm` is visible to wrangler immediately with no reinstall step. Verified end-to-end: deploy `96fd9c9f-88cf-4ba8-8be2-6aa5b15ca6c4`, marker test confirmed dist→node_modules propagation is instant. Replaces the wipe-and-reinstall workaround surfaced in the morning's deploy. Detail: `.brief/deploy-gotchas.md § 1`. #deploy #yarn-file-dep-staleness
 
-- [ ] **Auto-invalidate `@yawnxyz/smallstore` on predeploy.** `deploy/package.json` predeploy hook should `rm -rf node_modules/@yawnxyz` (or bump a synthetic version in `dist/package.json`) before `wrangler deploy`. Today's flow relies on the operator remembering to wipe — easy to forget, silently ships stale code. Either approach is ~one line. #deploy #yarn-file-dep-staleness
-- [?] **Stretch — forward-notes follow-ups** (from `.brief/forward-notes-and-newsletter-profiles.md`):
-  - [?] `POST /inbox/:name/items/:id/note` — after-the-fact annotation (forward without note, add note later) #messaging #annotation-endpoint
-  - [?] `GET /newsletters/:slug/notes?format=markdown` — second-brain export to Obsidian/tigerflare #messaging #notes-md-export
-  - [?] Note-length aggregation as engagement signal per newsletter #messaging #interest-signal
-  - [?] Cross-newsletter topic threading (LLM-extracted from notes) #messaging #cross-newsletter-tags
+### Stretch — forward-notes follow-ups
+
+From `.brief/forward-notes-and-newsletter-profiles.md`:
+
+- [?] `POST /inbox/:name/items/:id/note` — after-the-fact annotation (forward without note, add note later) #messaging #annotation-endpoint
+- [?] `GET /newsletters/:slug/notes?format=markdown` — second-brain export to Obsidian/tigerflare #messaging #notes-md-export
+- [?] Note-length aggregation as engagement signal per newsletter #messaging #interest-signal
+- [?] Cross-newsletter topic threading (LLM-extracted from notes) #messaging #cross-newsletter-tags
 
 ### Polish session — SHIPPED 2026-04-24
 

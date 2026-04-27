@@ -70,23 +70,16 @@ claude mcp add smallstore -s user \
 - Tests: `deno test --allow-all tests/messaging-*.test.ts` (412+ green as of annotation-layer ship)
 - `deno check mod.ts` is the production typecheck gate; some tests have pre-existing type errors that are not blocking
 
-### ⚠️ Deploy gotcha — yarn won't refresh `file:../dist` automatically
+### ✅ Deploy is symlink-backed (fixed 2026-04-26)
 
-**TL;DR — when shipping unreleased smallstore code, always wipe + reinstall before deploy:**
+`deploy/package.json` uses `"@yawnxyz/smallstore": "link:../dist"` (yarn 1's symlink form, NOT `file:`). `deploy/node_modules/@yawnxyz/smallstore` is a symlink to `../../../dist`, so any `deno task build:npm` is visible to wrangler immediately — no reinstall needed.
 
 ```sh
-deno task build:npm
-cd deploy
-rm -rf node_modules/@yawnxyz   # force yarn to repopulate from the freshly-built dist/
-yarn install --check-files
-yarn deploy
+$ ls -la deploy/node_modules/@yawnxyz/
+smallstore -> ../../../dist
 ```
 
-**Why:** `yarn install` dedupes by version, not content. Since `dist/`'s package.json never changes versions, yarn happily reuses whatever copy of `@yawnxyz/smallstore` is already in `deploy/node_modules/` — even if `dist/` was just rebuilt seconds ago. The `predeploy` hook rebuilds `dist/` but doesn't reinstall, so wrangler then uploads stale code.
-
-**How to spot it:** New routes return 404, new fields don't populate, hooks behave like the old version. Check the wrangler "Total Upload" line — if it didn't grow when you expected it to, the install didn't take. Also can grep `deploy/node_modules/@yawnxyz/smallstore/esm/src/messaging/http-routes.js` for a known new symbol; if it's missing, force-reinstall.
-
-**First seen:** 2026-04-26 deploy of webhook channel + forward-notes Phase 1/2/3 — first attempt shipped the Apr 24 build; wipe-and-reinstall fixed it.
+**Don't switch this back to `file:`.** With `file:`, yarn 1 caches by package version (which `dnt` writes as a stable string), so rebuilds with the same version silently get skipped and wrangler uploads stale code. Verified end-to-end on 2026-04-26 — the staleness incident that motivated the swap is documented in `.brief/deploy-gotchas.md § 1`.
 
 ## Env vars on the Worker
 

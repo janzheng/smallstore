@@ -6,37 +6,33 @@ The canonical deploy command is `deno task build:npm && cd deploy && yarn deploy
 
 ---
 
-## 1. yarn won't refresh `file:../dist` on rebuild — first seen 2026-04-26
+## 1. yarn won't refresh `file:../dist` on rebuild — first seen 2026-04-26, FIXED same day
 
-**Symptom:** Deploy succeeds, wrangler reports "Uploaded smallstore", new routes return 404, new fields don't populate. `dist/` on disk is fresh but the Worker is still serving the previous version.
+**Status: structurally fixed.** `deploy/package.json` switched from `"file:../dist"` → `"link:../dist"` (verified 2026-04-26, deploy `96fd9c9f-88cf-4ba8-8be2-6aa5b15ca6c4`). Section preserved as the canonical record because the trap is sneaky and someone might revert the dep spec without realizing why.
 
-**Why:** `yarn install` dedupes by `package.json` version, not file contents. `dist/package.json` declares a stable version (it's the same library on every build), so yarn treats the already-installed copy in `deploy/node_modules/@yawnxyz/smallstore/` as up-to-date and skips reinstall. The Apr 24 copy got reused through three Apr 26 deploys before the staleness was noticed.
+**Symptom (when it bit us):** Deploy succeeds, wrangler reports "Uploaded smallstore", new routes return 404, new fields don't populate. `dist/` on disk is fresh but the Worker is still serving the previous version.
 
-**Detection:**
-- Wrangler "Total Upload" line doesn't grow when it should (a meaningful code change should bump bytes).
-- Grep the installed copy for a symbol you know is new:
-  ```sh
-  grep -l "<new-symbol-or-route>" deploy/node_modules/@yawnxyz/smallstore/esm/src/messaging/*.js
-  ```
-- Compare timestamps:
-  ```sh
-  ls -la dist/esm/src/messaging/http-routes.js \
-        deploy/node_modules/@yawnxyz/smallstore/esm/src/messaging/http-routes.js
-  ```
-  If the installed one is older than the dist one, you're about to ship stale code.
+**Why it happened:** `yarn install` (yarn 1) dedupes `file:` deps by `package.json` version, not file contents. `dist/package.json` declares a stable version (`dnt` writes the same string on every build), so yarn treats the already-installed copy in `deploy/node_modules/@yawnxyz/smallstore/` as up-to-date and skips reinstall. The Apr 24 copy got reused through three Apr 26 deploys before the staleness was caught. `link:` doesn't have this problem — yarn replaces the directory with a symlink to the source path, so any rebuild is visible instantly with zero install step.
 
-**Fix (immediate):**
+**Why we don't normally see this:** npm-registry deps have unique versions per publish, yarn/pnpm workspaces symlink already, fresh CI checkouts have empty `node_modules`, and most CF Worker projects bundle source directly without a separate `dist/` step. The `deno → dnt → file:.. → wrangler` pipeline is the unusual seam.
+
+**If someone reverts the dep spec:** symptom is fast — wrangler "Total Upload" doesn't grow when a meaningful code change should bump it. Quick checks:
 ```sh
+# Should be a symlink. If it's a directory, the dep got reverted to file:.
+ls -la deploy/node_modules/@yawnxyz/smallstore
+
+# Smoke test — append a marker, rebuild, expect zero matches:
+echo "// MARKER" >> dist/esm/src/messaging/http-routes.js
 deno task build:npm
-cd deploy
-rm -rf node_modules/@yawnxyz
-yarn install --check-files
-yarn deploy
+grep MARKER deploy/node_modules/@yawnxyz/smallstore/esm/src/messaging/http-routes.js  # should print nothing
 ```
 
-**Fix (long-term, not yet implemented):** make `predeploy` always wipe + reinstall the smallstore package before `wrangler deploy`, or bump a synthetic version in `dist/package.json` on every build so yarn invalidates.
+**Three other fixes that would also work** (if `link:` ever proves insufficient):
+1. Bump a synthetic content-hash version in `dist/package.json` on every `build-npm.ts` run.
+2. Have predeploy `rm -rf node_modules/@yawnxyz` before install.
+3. Switch the whole project to pnpm or bun (both content-hash local deps).
 
-**Verify after deploy:** hit a known new route immediately, confirm non-404. If new MCP tools were added, the Claude Code session needs to be restarted before they're callable (separate gotcha — see CLAUDE.md "MCP caveat").
+**MCP caveat (related but separate):** new MCP tool changes need a Claude Code restart before they're callable — see CLAUDE.md "MCP caveat".
 
 ---
 

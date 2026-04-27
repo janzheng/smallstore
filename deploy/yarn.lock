@@ -382,10 +382,9 @@
   resolved "https://registry.npmjs.org/@speed-highlight/core/-/core-1.2.15.tgz"
   integrity sha512-BMq1K3DsElxDWawkX6eLg9+CKJrTVGCBAWVuHXVUV2u0s2711qiChLSId6ikYPfxhdYocLNt3wWwSvDiTvFabw==
 
-"@yawnxyz/smallstore@file:../dist":
-  version "0.2.0"
-  optionalDependencies:
-    "@zvec/zvec" "^0.2.1"
+"@yawnxyz/smallstore@link:../dist":
+  version "0.0.0"
+  uid ""
 
 "@zvec/bindings-darwin-arm64@0.2.3":
   version "0.2.3"
