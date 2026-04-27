@@ -4,6 +4,17 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ---
 
+## 2026-04-27 — Reading-list view (`recent.md`)
+
+User asked for a cross-publisher feed: "what's new since I last looked," in
+one file, instead of bouncing between 8 publisher `.md` files. Shipped same
+shape as the per-publisher render — body inlined, newest-first, with each
+item showing the publisher and a relative link back to its full archive.
+
+- [x] [done 2026-04-27, deploy `cc44a64c`] **`recent.md` cross-publisher reading list** — new `renderRecentFeed` in `newsletter-markdown.ts` aggregates every item with a usable date (`fields.original_sent_at` ?? top-level `sent_at`) within the last `recent_window_days` days, sorted newest-first. Same body-inlining + 20KB cap + preheader-cruft scrub as the per-publisher render. Each item has a `**Publisher:** [Display](./slug.md)` line so the user can jump to the full archive in one click. Empty-window emits a friendly placeholder so the file doesn't disappear on quiet days. Two new `MirrorConfig` knobs: `include_recent` (default `true`) and `recent_window_days` (default `7`). The mirror engine reuses the bodies already hydrated by the per-publisher loop — no double R2 reads. Prune protected (`recent.md` added to active filename set so GC doesn't delete it). 5 new render tests + 3 new mirror integration tests. Live verified: 7 items across 7 publishers landed in `recent.md` (Substack notes digest, Every "You Are the Most Expensive Model", Sidebar "Alignment is the bottleneck", etc). 818/818 messaging tests green. #messaging #mirror #reading-list
+
+---
+
 ## 2026-04-27 — Mirror garbage-collects orphans + welcome-email cleanup pass
 
 User pointed out the mirror was leaving stale `.md` files behind when items got

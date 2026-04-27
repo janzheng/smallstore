@@ -333,6 +333,153 @@ Deno.test('renderNewsletterProfile: prefers original_sent_at over sent_at when b
   assertStringIncludes(md, '## 2024-09-01 — Old IP digest');
 });
 
+// ============================================================================
+// renderRecentFeed
+// ============================================================================
+
+Deno.test('renderRecentFeed: filters items by window, sorts newest-first', async () => {
+  const { renderRecentFeed } = await import('../src/messaging/newsletter-markdown.ts');
+  const items: InboxItem[] = [
+    {
+      id: 'old',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-01-01T10:00:00Z',
+      summary: 'Ancient',
+      sent_at: '2026-01-01T10:00:00Z',
+      fields: { newsletter_slug: 'pub-a', original_subject: 'Ancient' },
+    },
+    {
+      id: 'mid',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-25T10:00:00Z',
+      summary: 'Recent',
+      sent_at: '2026-04-25T10:00:00Z',
+      fields: { newsletter_slug: 'pub-a', original_subject: 'Recent' },
+    },
+    {
+      id: 'new',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-27T10:00:00Z',
+      summary: 'Newest',
+      sent_at: '2026-04-27T10:00:00Z',
+      fields: { newsletter_slug: 'pub-b', original_subject: 'Newest' },
+    },
+  ];
+  const now = Date.parse('2026-04-27T12:00:00Z');
+  const md = renderRecentFeed('mailroom', items, '', 7, now);
+
+  // Newest first; old item excluded by 7-day window.
+  assertStringIncludes(md, '## 2026-04-27 — Newest');
+  assertStringIncludes(md, '## 2026-04-25 — Recent');
+  assertEquals(md.includes('Ancient'), false);
+  // Newest appears before mid in the document.
+  assert(md.indexOf('Newest') < md.indexOf('Recent'));
+});
+
+Deno.test('renderRecentFeed: empty window emits a friendly placeholder', async () => {
+  const { renderRecentFeed } = await import('../src/messaging/newsletter-markdown.ts');
+  const items: InboxItem[] = [
+    {
+      id: 'old',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-01-01T10:00:00Z',
+      summary: 'Ancient',
+      sent_at: '2026-01-01T10:00:00Z',
+      fields: { newsletter_slug: 'pub', original_subject: 'Ancient' },
+    },
+  ];
+  const now = Date.parse('2026-04-27T12:00:00Z');
+  const md = renderRecentFeed('mailroom', items, '', 7, now);
+  assertStringIncludes(md, 'Nothing landed in the last 7 days');
+  assertEquals(md.includes('Ancient'), false);
+});
+
+Deno.test('renderRecentFeed: shows publisher with relative .md link', async () => {
+  const { renderRecentFeed } = await import('../src/messaging/newsletter-markdown.ts');
+  const items: InboxItem[] = [
+    {
+      id: 'a',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00Z',
+      summary: 'Issue',
+      sent_at: '2026-04-26T10:00:00Z',
+      fields: {
+        newsletter_slug: 'sidebar-io',
+        newsletter_name: 'Sidebar.io',
+        original_subject: 'Issue',
+      },
+    },
+  ];
+  const now = Date.parse('2026-04-27T12:00:00Z');
+  const md = renderRecentFeed('mailroom', items, '', 7, now);
+  assertStringIncludes(md, '**Publisher:** [Sidebar.io](./sidebar-io.md)');
+});
+
+Deno.test('renderRecentFeed: items without dates are excluded entirely', async () => {
+  const { renderRecentFeed } = await import('../src/messaging/newsletter-markdown.ts');
+  const items: InboxItem[] = [
+    {
+      id: 'undated',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00Z',
+      summary: 'No date',
+      // no sent_at, no original_sent_at
+      fields: { newsletter_slug: 'pub', original_subject: 'Undated' },
+    },
+  ];
+  const now = Date.parse('2026-04-27T12:00:00Z');
+  const md = renderRecentFeed('mailroom', items, '', 7, now);
+  assertStringIncludes(md, 'Nothing landed in the last 7 days');
+  assertEquals(md.includes('Undated'), false);
+});
+
+Deno.test('renderRecentFeed: includes header counts (items, publishers)', async () => {
+  const { renderRecentFeed } = await import('../src/messaging/newsletter-markdown.ts');
+  const items: InboxItem[] = [
+    {
+      id: 'a',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00Z',
+      summary: 'A',
+      sent_at: '2026-04-26T10:00:00Z',
+      fields: { newsletter_slug: 'pub-a', original_subject: 'A' },
+    },
+    {
+      id: 'b',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T11:00:00Z',
+      summary: 'B',
+      sent_at: '2026-04-26T11:00:00Z',
+      fields: { newsletter_slug: 'pub-b', original_subject: 'B' },
+    },
+    {
+      id: 'c',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T12:00:00Z',
+      summary: 'C',
+      sent_at: '2026-04-26T12:00:00Z',
+      fields: { newsletter_slug: 'pub-a', original_subject: 'C' },
+    },
+  ];
+  const now = Date.parse('2026-04-27T12:00:00Z');
+  const md = renderRecentFeed('mailroom', items, '', 7, now);
+  assertStringIncludes(md, '**Items:** 3');
+  assertStringIncludes(md, '**Publishers:** 2');
+});
+
+// ============================================================================
+// renderNewsletterProfile (existing tests)
+// ============================================================================
+
 Deno.test('renderNewsletterProfile: multi-line note → one `>` per line', () => {
   const items: InboxItem[] = [
     {

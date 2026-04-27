@@ -31,6 +31,7 @@ import type { InboxRegistry } from './registry.ts';
 import {
   renderNewsletterIndex,
   renderNewsletterProfile,
+  renderRecentFeed,
   type NewsletterIndexEntry,
   type NewsletterProfile,
 } from './newsletter-markdown.ts';
@@ -60,12 +61,23 @@ export interface MirrorConfig {
    * When true, after pushing per-newsletter pages, list the destination
    * directory and DELETE any `*.md` files that no longer correspond to
    * an active slug (orphans from items deleted in smallstore). Skips
-   * `index.md`. Default: `true` — without this, deleting a newsletter's
-   * last item leaves a stale `.md` lingering on the peer until manually
-   * cleaned up. Disable to opt out (e.g. when sharing a directory with
-   * non-mirror content).
+   * `index.md` and `recent.md`. Default: `true` — without this, deleting
+   * a newsletter's last item leaves a stale `.md` lingering on the peer
+   * until manually cleaned up. Disable to opt out (e.g. when sharing a
+   * directory with non-mirror content).
    */
   prune_orphans?: boolean;
+  /**
+   * When true, also emit `recent.md` — a cross-publisher reading list
+   * of items from the last `recent_window_days` days, newest-first,
+   * body-inlined. Default: `true`. Disable per-peer to skip.
+   */
+  include_recent?: boolean;
+  /**
+   * Days back to include in `recent.md`. Default `7`. Items older than
+   * this are excluded; items with no usable date are excluded entirely.
+   */
+  recent_window_days?: number;
 }
 
 /** Per-peer summary returned from `runMirror`. */
@@ -170,6 +182,7 @@ export async function runMirror(opts: RunMirrorOptions): Promise<MirrorRunResult
 
     // Per-newsletter pages.
     const activeFilenames = new Set<string>();
+    const allHydrated: InboxItemFull[] = [];
     for (const [slug, items] of groups) {
       try {
         // Hydrate bodies so the rendered markdown is self-contained
@@ -193,8 +206,30 @@ export async function runMirror(opts: RunMirrorOptions): Promise<MirrorRunResult
         await pushFile(peer, auth.headers, fetcher, `${prefix}${slug}.md`, md);
         result.pushed++;
         activeFilenames.add(`${slug}.md`);
+        allHydrated.push(...fullItems);
       } catch (e) {
         result.failed.push({ slug, error: errorMessage(e) });
+      }
+    }
+
+    // Cross-publisher reading list — `recent.md`. Reuses the bodies
+    // already hydrated above so we don't double-fetch from R2.
+    if (config.include_recent !== false) {
+      const windowDays = typeof config.recent_window_days === 'number' && config.recent_window_days > 0
+        ? config.recent_window_days
+        : 7;
+      try {
+        await pushFile(
+          peer,
+          auth.headers,
+          fetcher,
+          `${prefix}recent.md`,
+          renderRecentFeed(config.source_inbox, allHydrated, linkOrigin, windowDays),
+        );
+        result.pushed++;
+        activeFilenames.add('recent.md');
+      } catch (e) {
+        result.failed.push({ slug: '__recent__', error: errorMessage(e) });
       }
     }
 

@@ -164,7 +164,7 @@ Deno.test('mirror: skips disabled peers even with mirror_config', async () => {
   await f.registerPeer({
     name: 'tf-disabled',
     disabled: true,
-    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false } },
   });
   const { fetcher, calls } = buildMockFetcher();
 
@@ -184,12 +184,12 @@ Deno.test('mirror: peer_name filter restricts to one peer', async () => {
   await f.seed({ fields: { newsletter_slug: 'pub', forward_note: 'note' } });
   await f.registerPeer({
     name: 'tf-a',
-    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false } },
   });
   await f.registerPeer({
     name: 'tf-b',
     url: 'https://tf-b.example.com',
-    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false } },
   });
   const { fetcher } = buildMockFetcher();
 
@@ -213,7 +213,7 @@ Deno.test('mirror: skip reason when source_inbox not registered', async () => {
   const f = await buildFixture();
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'no-such-inbox', prune_orphans: false } },
+    metadata: { mirror_config: { source_inbox: 'no-such-inbox', prune_orphans: false, include_recent: false } },
   });
   const { fetcher, calls } = buildMockFetcher();
 
@@ -235,7 +235,7 @@ Deno.test('mirror: skip reason when auth env var missing', async () => {
   await f.seed({ fields: { newsletter_slug: 'pub', forward_note: 'note' } });
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false } },
   });
   const { fetcher, calls } = buildMockFetcher();
 
@@ -279,7 +279,7 @@ Deno.test('mirror: PUTs one file per newsletter slug', async () => {
   });
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false } },
   });
   const { fetcher, calls } = buildMockFetcher();
 
@@ -322,7 +322,7 @@ Deno.test('mirror: include_index emits index.md alongside per-slug files', async
   await f.registerPeer({
     name: 'tf',
     metadata: {
-      mirror_config: { source_inbox: 'mailroom', include_index: true, prune_orphans: false },
+      mirror_config: { source_inbox: 'mailroom', include_index: true, prune_orphans: false, include_recent: false },
     },
   });
   const { fetcher, calls } = buildMockFetcher();
@@ -357,7 +357,7 @@ Deno.test('mirror: target_path_prefix overrides default', async () => {
     metadata: {
       mirror_config: {
         source_inbox: 'mailroom',
-        target_path_prefix: '/scratch/mailroom-mirror/', prune_orphans: false },
+        target_path_prefix: '/scratch/mailroom-mirror/', prune_orphans: false, include_recent: false },
     },
   });
   const { fetcher, calls } = buildMockFetcher();
@@ -378,7 +378,7 @@ Deno.test('mirror: target_path_prefix without trailing slash gets normalized', a
   await f.registerPeer({
     name: 'tf',
     metadata: {
-      mirror_config: { source_inbox: 'mailroom', target_path_prefix: '/folder', prune_orphans: false },
+      mirror_config: { source_inbox: 'mailroom', target_path_prefix: '/folder', prune_orphans: false, include_recent: false },
     },
   });
   const { fetcher, calls } = buildMockFetcher();
@@ -409,7 +409,7 @@ Deno.test('mirror: link_origin propagates to "View item →" links', async () =>
     metadata: {
       mirror_config: {
         source_inbox: 'mailroom',
-        link_origin: 'https://smallstore.labspace.ai', prune_orphans: false },
+        link_origin: 'https://smallstore.labspace.ai', prune_orphans: false, include_recent: false },
     },
   });
   const { fetcher, calls } = buildMockFetcher();
@@ -438,7 +438,7 @@ Deno.test('mirror: one bad slug does not tank others', async () => {
   await f.seed({ id: 'c', fields: { newsletter_slug: 'pub-c', forward_note: 'c' } });
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false } },
   });
   const { fetcher, calls } = buildMockFetcher({
     errorPaths: new Set(['/tf/pub-b.md']), // simulate per-slug failure
@@ -458,6 +458,107 @@ Deno.test('mirror: one bad slug does not tank others', async () => {
   assertStringIncludes(results[0].failed[0].error, '500');
   // All three were attempted
   assertEquals(calls.length, 3);
+});
+
+// ---------------------------------------------------------------------
+// Recent feed — cross-publisher reading list
+// ---------------------------------------------------------------------
+
+Deno.test('mirror: emits recent.md by default with cross-publisher items', async () => {
+  const f = await buildFixture();
+  await f.seed({
+    id: 'a',
+    sent_at: new Date().toISOString(),
+    fields: {
+      newsletter_slug: 'pub-a',
+      original_subject: 'Today A',
+      original_sent_at: new Date().toISOString(),
+    },
+  });
+  await f.seed({
+    id: 'b',
+    sent_at: new Date().toISOString(),
+    fields: {
+      newsletter_slug: 'pub-b',
+      original_subject: 'Today B',
+      original_sent_at: new Date().toISOString(),
+    },
+  });
+  await f.registerPeer({
+    name: 'tf',
+    // recent defaults on; opt out of prune so we can assert on PUTs without
+    // a directory listing GET muddying the call set.
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+  });
+  const { fetcher, calls } = buildMockFetcher();
+
+  await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  const paths = calls.filter((c) => c.method === 'PUT').map((c) => new URL(c.url).pathname).sort();
+  assertEquals(paths, ['/tf/pub-a.md', '/tf/pub-b.md', '/tf/recent.md']);
+  const recent = calls.find((c) => c.url.endsWith('/recent.md'))!;
+  assertStringIncludes(recent.body, 'Today A');
+  assertStringIncludes(recent.body, 'Today B');
+  assertStringIncludes(recent.body, '# Mailroom — recent');
+});
+
+Deno.test('mirror: include_recent: false skips recent.md', async () => {
+  const f = await buildFixture();
+  await f.seed({
+    id: 'a',
+    sent_at: new Date().toISOString(),
+    fields: { newsletter_slug: 'pub-a', original_sent_at: new Date().toISOString() },
+  });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: {
+      mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false },
+    },
+  });
+  const { fetcher, calls } = buildMockFetcher();
+
+  await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  const paths = calls.filter((c) => c.method === 'PUT').map((c) => new URL(c.url).pathname);
+  assertEquals(paths.includes('/tf/recent.md'), false);
+});
+
+Deno.test('mirror: prune does NOT delete recent.md (it is part of the active set)', async () => {
+  const f = await buildFixture();
+  await f.seed({
+    id: 'a',
+    sent_at: new Date().toISOString(),
+    fields: { newsletter_slug: 'pub-a', original_sent_at: new Date().toISOString() },
+  });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom' } }, // prune on, recent on
+  });
+  const { fetcher, calls } = buildMockFetcher({
+    existingFiles: ['pub-a.md', 'recent.md', 'orphan.md'],
+  });
+
+  const results = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  // Only orphan.md should be pruned; recent.md is kept.
+  assertEquals(results[0].pruned, ['orphan.md']);
+  const deletes = calls.filter((c) => c.method === 'DELETE').map((c) => new URL(c.url).pathname);
+  assertEquals(deletes, ['/tf/orphan.md']);
 });
 
 // ---------------------------------------------------------------------
@@ -539,7 +640,7 @@ Deno.test('prune: opt-out via prune_orphans: false', async () => {
   await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false } },
   });
   const { fetcher, calls } = buildMockFetcher({
     existingFiles: ['pub-a.md', 'orphan.md'],
@@ -587,7 +688,7 @@ Deno.test('prune: 404 on listing → skipped gracefully (first run, no dir yet)'
   await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', include_recent: false } },
   });
   const { fetcher } = buildMockFetcher({ dirNotFound: true });
 
@@ -609,7 +710,7 @@ Deno.test('prune: failed delete recorded in failed[], does not tank push', async
   await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
   await f.registerPeer({
     name: 'tf',
-    metadata: { mirror_config: { source_inbox: 'mailroom' } },
+    metadata: { mirror_config: { source_inbox: 'mailroom', include_recent: false } },
   });
   const { fetcher } = buildMockFetcher({
     existingFiles: ['pub-a.md', 'cursed.md'],

@@ -317,6 +317,110 @@ export function renderAllNotes(
   return lines.join('\n');
 }
 
+/**
+ * Render a cross-publisher reading list — every item with a usable date
+ * within the last `windowDays` days, newest-first. Same body-inlined
+ * shape as the per-publisher render, but each item shows the publisher
+ * with a relative link to its full `.md` so the reader can jump to the
+ * publisher's full archive in one click.
+ *
+ * Designed to live alongside `index.md` and the per-publisher files in
+ * the mirror folder. Always emits a file even when the window is empty
+ * (with a friendly placeholder body) — so a reader who opens
+ * `recent.md` on a quiet day doesn't see "file not found" and assume
+ * the mirror is broken.
+ *
+ * @param windowDays Days back from now to include. Items older than
+ *                   this are excluded. Items with no usable date are
+ *                   excluded entirely (they don't sort meaningfully).
+ * @param now        Override the "current time" anchor. Default:
+ *                   `Date.now()`. Pass an explicit value in tests.
+ */
+export function renderRecentFeed(
+  inboxName: string,
+  items: ReadonlyArray<InboxItem | InboxItemFull>,
+  origin: string,
+  windowDays: number,
+  now: number = Date.now(),
+): string {
+  const cutoffMs = now - windowDays * 24 * 60 * 60 * 1000;
+  const inWindow = items
+    .map((item) => ({ item, dt: pickItemSentAt(item) }))
+    .filter(({ dt }) => {
+      if (!dt) return false;
+      const t = Date.parse(dt);
+      return Number.isFinite(t) && t >= cutoffMs;
+    })
+    .sort((a, b) => (b.dt ?? '').localeCompare(a.dt ?? ''));
+
+  const lines: string[] = [];
+  lines.push(`# ${capitalize(inboxName)} — recent (last ${windowDays} days)`);
+  lines.push('');
+
+  const publishers = new Set<string>();
+  for (const { item } of inWindow) {
+    const slug = item.fields?.newsletter_slug as string | undefined;
+    if (slug) publishers.add(slug);
+  }
+  lines.push(`**Window:** last ${windowDays} days  `);
+  lines.push(`**Items:** ${inWindow.length}  `);
+  lines.push(`**Publishers:** ${publishers.size}  `);
+  lines.push(`**Generated:** ${new Date(now).toISOString().slice(0, 19).replace('T', ' ')}Z`);
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+
+  if (inWindow.length === 0) {
+    lines.push(
+      `_Nothing landed in the last ${windowDays} days. The mirror cron runs every 30 min — check back._`,
+    );
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  for (const { item, dt } of inWindow) {
+    const subject = (item.fields?.original_subject as string | undefined) ??
+      item.summary ??
+      '(no subject)';
+    const slug = item.fields?.newsletter_slug as string | undefined;
+    const display = (item.fields?.newsletter_name as string | undefined) ??
+      (item.fields?.from_addr ? stripAngleAddrInline(item.fields.from_addr as string) : undefined) ??
+      slug;
+
+    lines.push(`## ${formatDate(dt)} — ${subject}`);
+    lines.push('');
+    if (slug || display) {
+      const linkText = display ?? slug ?? '';
+      const linkTarget = slug ? `./${slug}.md` : '';
+      lines.push(linkTarget ? `**Publisher:** [${linkText}](${linkTarget})` : `**Publisher:** ${linkText}`);
+      lines.push('');
+    }
+
+    const note = item.fields?.forward_note as string | undefined;
+    if (typeof note === 'string' && note.trim().length > 0) {
+      lines.push('**Note:**');
+      lines.push('');
+      for (const noteLine of note.split(/\r?\n/)) {
+        lines.push(noteLine.length > 0 ? `> ${noteLine}` : '>');
+      }
+      lines.push('');
+    }
+
+    const bodyMd = extractRenderableBody(item);
+    if (bodyMd) {
+      lines.push(bodyMd);
+      lines.push('');
+    }
+
+    if (origin) {
+      lines.push(`[View item →](${origin}/inbox/${inboxName}/items/${item.id})`);
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
