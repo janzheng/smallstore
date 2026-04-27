@@ -390,8 +390,21 @@ function buildApp(env: Env): AppHandle {
   const app = new Hono();
 
   const VERSION = '0.2.0';
-  app.get('/health', (c) => c.json({ status: 'ok', service: 'smallstore', version: VERSION }));
+  // Minimal public heartbeat — enough to verify "the worker is up and is the
+  // expected version." Deliberately does NOT enumerate registered inboxes or
+  // the endpoint surface — those would be a free roadmap for any unauth'd
+  // visitor. The full manifest lives behind auth at /admin/inboxes (inbox
+  // list) + /admin/manifest (endpoint catalog).
+  app.get('/health', (c) => c.json({ status: 'ok' }));
   app.get('/', (c) =>
+    c.json({
+      name: 'smallstore',
+      version: VERSION,
+      status: 'ok',
+    }),
+  );
+
+  app.get('/admin/manifest', requireAuth, (c) =>
     c.json({
       name: 'smallstore',
       version: VERSION,
@@ -402,9 +415,15 @@ function buildApp(env: Env): AppHandle {
         inbox_query: 'POST /inbox/:name/query',
         inbox_rules: 'GET/POST /inbox/:name/rules',
         inbox_export: 'GET /inbox/:name/export?format=jsonl',
+        inbox_newsletters: 'GET /inbox/:name/newsletters[/:slug[/items|notes]]',
+        inbox_todos: 'GET /inbox/:name/todos',
+        inbox_note: 'POST /inbox/:name/items/:id/note',
+        inbox_replay: 'POST /admin/inboxes/:name/replay',
         admin_inboxes: 'GET /admin/inboxes',
+        admin_auto_confirm: 'GET/POST/DELETE /admin/auto-confirm/senders',
         peers: 'GET/POST /peers',
         peers_proxy: 'GET /peers/:name/fetch?path=... | POST /peers/:name/query',
+        webhook: 'POST /webhook/:peer (HMAC-authed, peer-specific)',
       },
     }),
   );

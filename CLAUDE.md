@@ -13,7 +13,7 @@ set -a && source deploy/.env && set +a
 curl -sS -H "Authorization: Bearer $SMALLSTORE_TOKEN" "https://smallstore.labspace.ai/inbox/mailroom?limit=20" | jq
 ```
 
-Routes behind auth: `/api/*`, `/inbox/*`, `/admin/*`, `/peers/*`. `/health` and `/` are open.
+Routes behind auth: `/api/*`, `/inbox/*`, `/admin/*`, `/peers/*`. `/health` and `/` are open but minimal — `/` returns `{name, version, status}` and `/health` returns `{status}`. The full manifest (registered inboxes + endpoint catalog) lives behind auth at `GET /admin/manifest`. Locked down 2026-04-27 — was previously enumerating inboxes + endpoints publicly.
 
 ## Mailroom triage — always surface `needs-confirm` first
 
