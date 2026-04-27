@@ -178,7 +178,7 @@ Operate the live mailroom inbox (bookmarks, auto-archive, export, rules). The in
 
 **Tagging / mutation:**
 - `sm_inbox_tag(inbox, id, add?, remove?)` — add/remove labels on one item. Use for "changed my mind" corrections.
-- `sm_inbox_set_note(inbox, id, note, mode?)` — set or update `fields.forward_note` after the fact. `mode: 'replace'` (default) overwrites; `'append'` joins to existing note via thematic break. Empty string clears. Stamps `fields.note_updated_at`. Identity + labels preserved. The note immediately surfaces in `sm_newsletter_notes`.
+- `sm_inbox_set_note(inbox, id, mode?, note?, find?, replace?)` — set, append, or surgically edit `fields.forward_note` after the fact. **`mode: 'replace'`** (default) — needs `note`; overwrites. **`'append'`** — needs `note`; joins to existing via thematic break. **`'edit'`** — needs `find` + `replace`; line-level rewrite (find one line by exact trimmed match, replace with new content). Empty `replace` deletes the line. Use `edit` mode to mark a todo done: pass `matched_line` from `sm_inbox_todos` as `find`, and `'- [x] ' + line` as `replace` — the /todos skip rule auto-excludes `[x]` lines so the todo self-cleans. Stamps `fields.note_updated_at`. Identity + labels preserved.
 - `sm_inbox_restore(inbox, id, label?)` — remove the quarantine label from one item.
 - `sm_inbox_delete(inbox, id)` — hard delete (item + blob refs gone).
 

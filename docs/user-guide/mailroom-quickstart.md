@@ -364,9 +364,9 @@ Patterns matched (first-match-wins, case-insensitive):
 
 A note with multiple matching lines emits multiple todos. Each todo includes `matched_pattern` (which rule fired) and `full_note` (the entire note for context). Lines that start with `>` (quoted reply) are skipped. `[x]` (checked) lines are skipped — that's the "done" form.
 
-### 1.16 Add or revise a note after the fact
+### 1.16 Add, revise, or surgically edit a note
 
-When a forward landed without a note, or you want to revise an existing one. Pairs with § 1.13 — the note immediately surfaces in `/inbox/:name/newsletters/:slug/notes`.
+`POST /inbox/:name/items/:id/note` is the one endpoint for changing `fields.forward_note` after the fact. Three modes:
 
 ```bash
 # Replace (default) — overwrites whatever was there
@@ -387,9 +387,26 @@ curl -H "Authorization: Bearer $TOKEN" -X POST \
   -H "Content-Type: application/json" \
   -d '{"note":""}' \
   "$BASE/inbox/mailroom/items/<id>/note"
+
+# Edit — surgical line-level rewrite. Find one line by exact trimmed match,
+# replace with new content, leave the rest of the note untouched. The right
+# tool for marking a single todo done — wrap the line as `- [x] ...` and the
+# /todos skip rule will exclude it on the next call.
+curl -H "Authorization: Bearer $TOKEN" -X POST \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "edit",
+    "find": "reminder to self: sub mailroom to rosieland",
+    "replace": "- [x] reminder to self: sub mailroom to rosieland (done — signed up)"
+  }' \
+  "$BASE/inbox/mailroom/items/<id>/note"
 ```
 
-Identity (id, received_at, source, summary, body, labels) and the inbox index entry are preserved — the annotation only touches `fields.forward_note` and stamps `fields.note_updated_at`. So a late annotation never re-orders your inbox or duplicates the item.
+For `edit` mode: empty `replace` deletes the line entirely. 404 if no matching line. Only the first matching line is rewritten (deterministic when duplicates exist).
+
+Identity (id, received_at, source, summary, body, labels) and the inbox index entry are preserved across all three modes — the annotation only touches `fields.forward_note` and stamps `fields.note_updated_at`. So a late annotation never re-orders your inbox or duplicates the item.
+
+**Done todos via edit mode** is the recommended pattern: wrap a matched todo line as `- [x] <line>`. The note becomes a record of completion (still visible in `/notes`), but the todo view auto-excludes it on the next call. No separate "done" store, no sync issues — the note is the source of truth.
 
 ### 1.17 Backfill a new field across existing items (hook replay)
 

@@ -882,25 +882,36 @@ export function registerMessagingRoutes(
   });
 
   /**
-   * After-the-fact annotation — set or update `fields.forward_note` on an
-   * already-stored item. Pairs with the forward-note flow: forwards landing
-   * via email get `forward_note` populated automatically (anything typed
-   * before the forwarded block); this endpoint covers the case where the
-   * forward had no note OR where the user wants to revise the note later.
+   * After-the-fact annotation — set, append to, or surgically edit
+   * `fields.forward_note` on an already-stored item. Pairs with the
+   * forward-note flow: forwards landing via email get `forward_note`
+   * populated automatically (anything typed before the forwarded block);
+   * this endpoint covers the case where the forward had no note OR where
+   * the user wants to revise/edit the note later.
    *
    * POST /inbox/:name/items/:id/note
-   * Body: { note: string, mode?: 'replace' | 'append' }
+   * Body shapes (mode determines required fields):
    *
-   * - `note` is required and must be a string (empty string clears).
-   * - `mode` defaults to `replace`. With `mode: 'append'`, joins to the
-   *   existing note via `\n\n---\n\n` (markdown thematic break) so multiple
-   *   thoughts over time read as a stack of dated entries.
-   * - Stamps `fields.note_updated_at` (ISO) every call — useful for "what
-   *   have I annotated recently" queries and for sorting notes views.
-   * - Identity (id, received_at, source, source_version, summary, body_ref)
-   *   and labels are preserved; only `fields` change.
+   *   { note: string, mode?: 'replace' }    // default — overwrite
+   *   { note: string, mode: 'append' }      // join via \n\n---\n\n
+   *   { mode: 'edit', find: string, replace: string }   // line-level
    *
-   * Returns `{ inbox, item }` or 404 if id not found.
+   * - `replace` mode: `note` required. Empty string clears.
+   * - `append` mode: `note` required. Joins to existing via thematic break.
+   * - `edit` mode: `find` + `replace` required. Finds the first line whose
+   *   trimmed text equals `find` and rewrites it to `replace`. Other lines
+   *   untouched. 404 if no matching line. Useful for marking a single todo
+   *   line `[x]` done without overwriting the rest of the note. The /todos
+   *   skip rule for `^- [x]` handles "done" lines automatically — so
+   *   editing a todo line to start with `- [x]` self-cleans from the todo
+   *   view on the next call.
+   *
+   * Stamps `fields.note_updated_at` (ISO) every call. Identity
+   * (id, received_at, source, source_version, summary, body_ref) and
+   * labels are preserved; only `fields` change.
+   *
+   * Returns `{ inbox, item }` or 404 if item id (or `edit`-mode line)
+   * not found.
    */
   app.post('/inbox/:name/items/:id/note', requireAuth, async (c) => {
     const name = c.req.param('name')!;
@@ -910,25 +921,66 @@ export function registerMessagingRoutes(
 
     const body = await readJson(c);
     if (!body || typeof body !== 'object') {
-      return badRequest(c, 'body must be { note: string, mode?: "replace" | "append" }');
-    }
-    const note = (body as { note?: unknown }).note;
-    if (typeof note !== 'string') {
-      return badRequest(c, 'note must be a string (use "" to clear)');
+      return badRequest(
+        c,
+        'body must be { note, mode?: "replace"|"append" } or { mode: "edit", find, replace }',
+      );
     }
     const mode = (body as { mode?: unknown }).mode ?? 'replace';
-    if (mode !== 'replace' && mode !== 'append') {
-      return badRequest(c, 'mode must be "replace" or "append"');
+    if (mode !== 'replace' && mode !== 'append' && mode !== 'edit') {
+      return badRequest(c, 'mode must be "replace", "append", or "edit"');
     }
 
     const existing = await inbox.read(id);
     if (!existing) return notFound(c, `item "${id}" not in inbox "${name}"`);
 
-    let nextNote = note;
-    if (mode === 'append' && note.length > 0) {
+    let nextNote: string;
+
+    if (mode === 'edit') {
+      const find = (body as { find?: unknown }).find;
+      const replace = (body as { replace?: unknown }).replace;
+      if (typeof find !== 'string' || find.length === 0) {
+        return badRequest(c, 'edit mode requires non-empty `find` (string)');
+      }
+      if (typeof replace !== 'string') {
+        return badRequest(c, 'edit mode requires `replace` (string; empty string deletes the line)');
+      }
       const prev = (existing.fields as Record<string, unknown> | undefined)?.forward_note;
-      if (typeof prev === 'string' && prev.length > 0) {
-        nextNote = `${prev}\n\n---\n\n${note}`;
+      if (typeof prev !== 'string' || prev.length === 0) {
+        return notFound(c, `item "${id}" has no forward_note to edit`);
+      }
+      // Find the first line whose trimmed content equals `find`.
+      const findTrimmed = find.trim();
+      const lines = prev.split(/\r?\n/);
+      let hitIdx = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === findTrimmed) {
+          hitIdx = i;
+          break;
+        }
+      }
+      if (hitIdx === -1) {
+        return notFound(c, `no line matching "${findTrimmed}" found in note`);
+      }
+      // Empty replace → delete the line entirely (don't leave a blank line).
+      const out = [...lines];
+      if (replace.length === 0) {
+        out.splice(hitIdx, 1);
+      } else {
+        out[hitIdx] = replace;
+      }
+      nextNote = out.join('\n');
+    } else {
+      const note = (body as { note?: unknown }).note;
+      if (typeof note !== 'string') {
+        return badRequest(c, 'note must be a string (use "" to clear)');
+      }
+      nextNote = note;
+      if (mode === 'append' && note.length > 0) {
+        const prev = (existing.fields as Record<string, unknown> | undefined)?.forward_note;
+        if (typeof prev === 'string' && prev.length > 0) {
+          nextNote = `${prev}\n\n---\n\n${note}`;
+        }
       }
     }
 

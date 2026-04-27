@@ -302,3 +302,207 @@ Deno.test('annotation: index entry untouched (item not duplicated, position pres
   const afterIds = after.items.map((it: { id: string }) => it.id);
   assertEquals(afterIds, beforeIds);
 });
+
+// ---------------------------------------------------------------------
+// edit mode — line-level surgery (the "mark a single todo done" primitive)
+// ---------------------------------------------------------------------
+
+Deno.test('edit mode: rewrites the matching line, leaves others untouched', async () => {
+  const f = buildFixture();
+  await seedItem(f.inbox, {
+    fields: {
+      from_email: 'x@x.com',
+      forward_note: '- [ ] sub mailroom to rosieland\n- [ ] follow up with author\nTODO: read part 2',
+    },
+  });
+
+  const r = await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'edit',
+      find: '- [ ] sub mailroom to rosieland',
+      replace: '- [x] sub mailroom to rosieland',
+    }),
+  });
+
+  assertEquals(r.status, 200);
+  const body = await r.json();
+  assertEquals(
+    body.item.fields.forward_note,
+    '- [x] sub mailroom to rosieland\n- [ ] follow up with author\nTODO: read part 2',
+  );
+});
+
+Deno.test('edit mode: trimmed match — leading/trailing spaces in stored line', async () => {
+  const f = buildFixture();
+  await seedItem(f.inbox, {
+    fields: { from_email: 'x@x.com', forward_note: '   - [ ] indented todo   \nother line' },
+  });
+
+  const r = await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'edit',
+      find: '- [ ] indented todo',
+      replace: '- [x] indented todo',
+    }),
+  });
+
+  assertEquals(r.status, 200);
+  const body = await r.json();
+  assertEquals(body.item.fields.forward_note, '- [x] indented todo\nother line');
+});
+
+Deno.test('edit mode: empty replace deletes the line entirely', async () => {
+  const f = buildFixture();
+  await seedItem(f.inbox, {
+    fields: {
+      from_email: 'x@x.com',
+      forward_note: 'first\nsecond (delete me)\nthird',
+    },
+  });
+
+  const r = await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'edit',
+      find: 'second (delete me)',
+      replace: '',
+    }),
+  });
+
+  const body = await r.json();
+  assertEquals(body.item.fields.forward_note, 'first\nthird');
+});
+
+Deno.test('edit mode: 404 when find line not present', async () => {
+  const f = buildFixture();
+  await seedItem(f.inbox, { fields: { from_email: 'x@x.com', forward_note: 'something else' } });
+
+  const r = await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'edit', find: 'no such line', replace: 'x' }),
+  });
+
+  assertEquals(r.status, 404);
+});
+
+Deno.test('edit mode: 404 when item has no forward_note to edit', async () => {
+  const f = buildFixture();
+  await seedItem(f.inbox); // no forward_note
+
+  const r = await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'edit', find: 'anything', replace: 'x' }),
+  });
+
+  assertEquals(r.status, 404);
+});
+
+Deno.test('edit mode: 400 on missing or empty find', async () => {
+  const f = buildFixture();
+  await seedItem(f.inbox, { fields: { from_email: 'x@x.com', forward_note: 'foo' } });
+
+  const missing = await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'edit', replace: 'x' }),
+  });
+  assertEquals(missing.status, 400);
+
+  const empty = await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'edit', find: '', replace: 'x' }),
+  });
+  assertEquals(empty.status, 400);
+});
+
+Deno.test('edit mode: 400 on missing replace', async () => {
+  const f = buildFixture();
+  await seedItem(f.inbox, { fields: { from_email: 'x@x.com', forward_note: 'foo' } });
+
+  const r = await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'edit', find: 'foo' }),
+  });
+  assertEquals(r.status, 400);
+});
+
+Deno.test('edit mode: stamps note_updated_at + preserves identity', async () => {
+  const f = buildFixture();
+  const seeded = await seedItem(f.inbox, {
+    fields: { from_email: 'x@x.com', forward_note: 'todo: bookmark this\nother' },
+  });
+
+  const r = await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'edit',
+      find: 'todo: bookmark this',
+      replace: '- [x] bookmark this',
+    }),
+  });
+
+  const { item } = await r.json();
+  assertEquals(item.id, seeded.id);
+  assertEquals(item.received_at, seeded.received_at);
+  assertEquals(item.source, seeded.source);
+  assertEquals(item.fields.forward_note, '- [x] bookmark this\nother');
+  assert(typeof item.fields.note_updated_at === 'string');
+});
+
+Deno.test('edit mode: marks todo done + todo self-cleans from /todos', async () => {
+  const f = buildFixture();
+  await seedItem(f.inbox, {
+    id: 'rosieland-1',
+    fields: {
+      newsletter_slug: 'rosieland',
+      from_email: 'rosieland@ghost.io',
+      original_from_addr: 'Rosieland',
+      forward_note: 'reminder to self: sub mailroom to rosieland',
+    },
+  });
+
+  // Before: 1 todo
+  const before = await (await f.fetch('/inbox/mailroom/todos')).json();
+  assertEquals(before.count, 1);
+
+  // Mark done — wrap as checked checkbox so /todos skip rule excludes it
+  await f.fetch('/inbox/mailroom/items/rosieland-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'edit',
+      find: 'reminder to self: sub mailroom to rosieland',
+      replace: '- [x] reminder to self: sub mailroom to rosieland (done — signed up 2026-04-27)',
+    }),
+  });
+
+  // After: 0 todos — the [x] line is in the skip set
+  const after = await (await f.fetch('/inbox/mailroom/todos')).json();
+  assertEquals(after.count, 0);
+});
+
+Deno.test('edit mode: only first matching line is rewritten when duplicates exist', async () => {
+  const f = buildFixture();
+  await seedItem(f.inbox, {
+    fields: { from_email: 'x@x.com', forward_note: 'duplicate\nother\nduplicate' },
+  });
+
+  await f.fetch('/inbox/mailroom/items/item-1/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'edit', find: 'duplicate', replace: 'first replaced' }),
+  });
+
+  const item = await (await f.fetch('/inbox/mailroom/items/item-1?full=true')).json();
+  assertEquals(item.item.fields.forward_note, 'first replaced\nother\nduplicate');
+});

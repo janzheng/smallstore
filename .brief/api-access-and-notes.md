@@ -165,11 +165,28 @@ Three properties matter:
 2. **No duplication.** The note in `forward_note` is the only source of truth — there's no sidecar todo store that can drift from it.
 3. **Edit the note → todos update.** Annotate via `sm_inbox_set_note` and the todo view picks up the new shape on the next `/todos` call. No separate todo-edit API.
 
-### What's deferred
+### Marking a todo done (shipped 2026-04-27)
 
-**"Done" tracking** — there's no way to mark a todo done today. Cheapest future implementation: append `[x]` to the matched line via `sm_inbox_set_note(mode: 'edit')` (which would need a new `mode` that diffs lines, not implemented yet). Or simpler: the user manually edits the note to checkbox `[x]` form, and the existing skip rule excludes it from the next view. Neither is built.
+`sm_inbox_set_note(mode: 'edit')` is the primitive. Pass the `matched_line` from a todo as `find`, prefix `- [x] ` to it as `replace`. The /todos skip rule for `[x]` excludes the line on the next call — the todo self-cleans without any sidecar "done" state. The note still shows up in `/notes` (the line is preserved as a record of completion); only the todo *projection* changes.
 
-**LLM extraction** — promote when the regex set demonstrably misses too much. Today the patterns cover what shows up in real notes; the rosieland note ("reminder to self: sub mailroom to rosieland") fired the `remind` pattern correctly without an LLM.
+```sh
+# Before: 1 todo
+curl ... /inbox/mailroom/todos    # {count: 1, lines: [...]}
+
+# Mark done
+curl -X POST -d '{
+  "mode": "edit",
+  "find": "reminder to self: sub mailroom to rosieland",
+  "replace": "- [x] reminder to self: sub mailroom to rosieland (signed up 2026-04-27)"
+}' .../note
+
+# After: 0 todos. Note still visible in /notes.
+curl ... /inbox/mailroom/todos    # {count: 0, todos: []}
+```
+
+### LLM extraction — still deferred
+
+Promote when the regex set demonstrably misses too much. Today the patterns cover what shows up in real notes; the rosieland note ("reminder to self: sub mailroom to rosieland") fired the `remind` pattern correctly without an LLM.
 
 ### MCP wrapper
 
@@ -203,7 +220,7 @@ The whole system has one data primitive (`InboxItem.fields.forward_note`) with o
 
 ## Suggested next adds (in priority order)
 
-1. **`sm_inbox_set_note(mode: 'edit')`** — line-level diff for marking a single todo `[x]` done without overwriting the rest of the note. Defer until manual edits feel awkward.
-2. **`inbox.query()` order honoring** — fix the underlying limitation so the filter path respects `options.order` natively, removing the in-memory sort fallback in `/inbox/:name/notes`. Not user-visible; pure cleanup.
-3. **Phase 2b — peer-mediated tigerflare cron mirror** — already scoped in `.brief/notes-todos-and-mirror.md § Phase 2b`. With the markdown export endpoints (Phase 2a) and the new notes markdown view both shipped, the cron just renders + pushes per slug. ~60-90 min.
-4. **Note-length engagement signal per newsletter** — correlate aggregate note length with interest score; surface in the profile dashboard. Parked from the original forward-notes brief.
+1. **`inbox.query()` order honoring** — fix the underlying limitation so the filter path respects `options.order` natively, removing the in-memory sort fallback in `/inbox/:name/notes`. Not user-visible; pure cleanup.
+2. **Phase 2b — peer-mediated tigerflare cron mirror** — already scoped in `.brief/notes-todos-and-mirror.md § Phase 2b`. With the markdown export endpoints (Phase 2a), the cross-newsletter notes markdown view, and the edit-mode primitive all shipped, the cron just renders + pushes per slug. ~60-90 min, mostly config (TF_TOKEN secret + tigerflare peer registration).
+3. **Note-length engagement signal per newsletter** — correlate aggregate note length with interest score; surface in the profile dashboard. Parked from the original forward-notes brief.
+4. **Cross-newsletter topic threading (LLM)** — extract topics from notes across publishers; surface as `/inbox/:name/topics`. Parked from the original forward-notes brief; needs an LLM call path that doesn't exist yet.

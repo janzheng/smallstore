@@ -134,20 +134,31 @@ export const INBOX_TOOLS: Tool[] = [
   {
     name: 'sm_inbox_set_note',
     description:
-      "Set or update `fields.forward_note` on an already-stored item — the after-the-fact annotation flow. Use this when you forwarded an email without a note and want to add one later, or to revise an existing note. Mode `replace` (default) overwrites; `append` joins to the existing note via a markdown thematic break so multiple thoughts over time read as a stack. Stamps `fields.note_updated_at` (ISO) every call. Identity, received_at, source, summary, body, and labels are preserved. The note then surfaces in `sm_newsletter_notes` and the `/newsletters/:slug/notes` route automatically.",
+      "Set, append to, or surgically edit `fields.forward_note` on an already-stored item — the after-the-fact annotation flow. Mode `replace` (default) overwrites with `note`; `append` joins to existing via a markdown thematic break; `edit` does a line-level rewrite (find one line by exact trimmed match, replace with `replace`, leave the rest of the note untouched). The `edit` mode is the right tool for marking a single todo line `[x]` done — pass the matched_line from sm_inbox_todos as `find`, and `'- [x] ' + line` as `replace`. The /todos skip rule for `[x]` lines means the todo self-cleans on the next call. Stamps `fields.note_updated_at` every call; identity, labels, body all preserved.",
     inputSchema: {
       type: 'object',
       properties: {
         inbox: { type: 'string', description: 'Registered inbox name.' },
         id: { type: 'string', description: 'Item id to annotate.' },
-        note: { type: 'string', description: 'Note text. Use empty string to clear.' },
         mode: {
           type: 'string',
-          enum: ['replace', 'append'],
-          description: '`replace` (default) overwrites; `append` joins to the existing note with a thematic break.',
+          enum: ['replace', 'append', 'edit'],
+          description: '`replace` (default) overwrites; `append` joins via thematic break; `edit` does line-level find/replace.',
+        },
+        note: {
+          type: 'string',
+          description: 'Required for `replace` and `append` modes. Use empty string in `replace` to clear.',
+        },
+        find: {
+          type: 'string',
+          description: 'Required for `edit` mode. Exact trimmed line content to find in the existing note.',
+        },
+        replace: {
+          type: 'string',
+          description: 'Required for `edit` mode. New line content (empty string deletes the line entirely).',
         },
       },
-      required: ['inbox', 'id', 'note'],
+      required: ['inbox', 'id'],
     },
   },
   {
@@ -672,15 +683,28 @@ export async function handleInboxTool(
     case 'sm_inbox_set_note': {
       const inbox = requireString(args, 'inbox');
       const id = requireString(args, 'id');
-      if (typeof args.note !== 'string') {
-        throw new Error('sm_inbox_set_note: `note` must be a string (use "" to clear)');
+      const mode = args.mode ?? 'replace';
+      if (mode !== 'replace' && mode !== 'append' && mode !== 'edit') {
+        throw new Error('sm_inbox_set_note: `mode` must be "replace", "append", or "edit"');
       }
-      const body: { note: string; mode?: 'replace' | 'append' } = { note: args.note };
-      if (args.mode !== undefined) {
-        if (args.mode !== 'replace' && args.mode !== 'append') {
-          throw new Error('sm_inbox_set_note: `mode` must be "replace" or "append"');
+      let body: Record<string, unknown>;
+      if (mode === 'edit') {
+        if (typeof args.find !== 'string' || args.find.length === 0) {
+          throw new Error('sm_inbox_set_note: edit mode requires non-empty `find` (string)');
         }
-        body.mode = args.mode;
+        if (typeof args.replace !== 'string') {
+          throw new Error(
+            'sm_inbox_set_note: edit mode requires `replace` (string; "" to delete the line)',
+          );
+        }
+        body = { mode: 'edit', find: args.find, replace: args.replace };
+      } else {
+        if (typeof args.note !== 'string') {
+          throw new Error(
+            `sm_inbox_set_note: ${mode} mode requires \`note\` (string; "" to clear)`,
+          );
+        }
+        body = { note: args.note, mode };
       }
       const r = await http('POST', `/inbox/${encName(inbox)}/items/${encId(id)}/note`, body);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_set_note failed', r));
