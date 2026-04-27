@@ -221,6 +221,7 @@ The whole system has one data primitive (`InboxItem.fields.forward_note`) with o
 ## Suggested next adds (in priority order)
 
 1. **`inbox.query()` order honoring** — fix the underlying limitation so the filter path respects `options.order` natively, removing the in-memory sort fallback in `/inbox/:name/notes`. Not user-visible; pure cleanup.
-2. **Phase 2b — peer-mediated tigerflare cron mirror** — already scoped in `.brief/notes-todos-and-mirror.md § Phase 2b`. With the markdown export endpoints (Phase 2a), the cross-newsletter notes markdown view, and the edit-mode primitive all shipped, the cron just renders + pushes per slug. ~60-90 min, mostly config (TF_TOKEN secret + tigerflare peer registration).
-3. **Note-length engagement signal per newsletter** — correlate aggregate note length with interest score; surface in the profile dashboard. Parked from the original forward-notes brief.
-4. **Cross-newsletter topic threading (LLM)** — extract topics from notes across publishers; surface as `/inbox/:name/topics`. Parked from the original forward-notes brief; needs an LLM call path that doesn't exist yet.
+2. **Note-length engagement signal per newsletter** — correlate aggregate note length with interest score; surface in the profile dashboard. Parked from the original forward-notes brief.
+3. **Cross-newsletter topic threading (LLM)** — extract topics from notes across publishers; surface as `/inbox/:name/topics`. Parked from the original forward-notes brief; needs an LLM call path that doesn't exist yet.
+
+(Phase 2b tigerflare cron mirror shipped 2026-04-27 — see `.brief/notes-todos-and-mirror.md § Phase 2b` for the implementation notes; live deploy `a7374c1a-7fc2-444e-b6f5-87407bb98872`.)

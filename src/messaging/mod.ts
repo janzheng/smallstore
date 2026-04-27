@@ -173,3 +173,9 @@ export {
   type AutoConfirmSendersStore,
   type CreateAutoConfirmSendersStoreOptions,
 } from './auto-confirm-senders.ts';
+export {
+  runMirror,
+  type MirrorConfig,
+  type MirrorRunResult,
+  type RunMirrorOptions,
+} from './mirror.ts';

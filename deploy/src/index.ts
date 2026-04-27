@@ -52,6 +52,7 @@ import {
   registerChannel,
   registerMessagingRoutes,
   rssChannel,
+  runMirror,
   InboxRegistry,
   type HookContext,
   type HookVerdict,
@@ -132,6 +133,8 @@ interface AppHandle {
   autoConfirmSendersStore: AutoConfirmSendersStore;
   peerStore: PeerStore;
   rssRunner: PullRunner;
+  /** Trigger the cron mirror over every peer with `metadata.mirror_config`. */
+  runMirror: () => ReturnType<typeof runMirror>;
 }
 
 let appHandle: AppHandle | null = null;
@@ -476,6 +479,21 @@ function buildApp(env: Env): AppHandle {
           return undefined;
       }
     },
+    // On-demand mirror trigger. Same engine the scheduled() cron runs
+    // (every 30 min); exposed via POST /admin/inboxes/:name/mirror[/:peer]
+    // for verification + after-annotation flushes that shouldn't wait
+    // for the next cron tick. peerName filter optional; inboxName filter
+    // currently unused (mirror dispatches based on each peer's
+    // mirror_config.source_inbox, not the URL inbox name) but accepted
+    // for forward compat.
+    runMirror: async ({ peerName }) => {
+      return await runMirror({
+        registry,
+        peerStore,
+        env: env as unknown as Record<string, string | undefined>,
+        peer_name: peerName,
+      });
+    },
   });
 
   // Peer registry routes — /peers CRUD + /peers/:name/{health,fetch,query}
@@ -530,7 +548,23 @@ function buildApp(env: Env): AppHandle {
     log: (msg, extra) => console.log(`[email] ${msg}`, JSON.stringify(extra ?? {})),
   });
 
-  return { app, email, senderIndexes, rulesStores, autoConfirmSendersStore, peerStore, rssRunner };
+  const runMirrorAll = () =>
+    runMirror({
+      registry,
+      peerStore,
+      env: env as unknown as Record<string, string | undefined>,
+    });
+
+  return {
+    app,
+    email,
+    senderIndexes,
+    rulesStores,
+    autoConfirmSendersStore,
+    peerStore,
+    rssRunner,
+    runMirror: runMirrorAll,
+  };
 }
 
 function ensureApp(env: Env): AppHandle {
@@ -565,17 +599,43 @@ export default {
    * await directly for simpler error reporting.
    */
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    const { rssRunner } = ensureApp(env);
-    const summary = await rssRunner.pollAll();
+    const { rssRunner, runMirror } = ensureApp(env);
+
+    // RSS poll first — runs against external feeds, network-bound.
+    const rssSummary = await rssRunner.pollAll();
     console.log('[scheduled] rss run complete', JSON.stringify({
       cron: event.cron,
       scheduled_time: new Date(event.scheduledTime).toISOString(),
-      feeds_seen: summary.feeds_seen,
-      feeds_polled: summary.feeds_polled,
-      feeds_errored: summary.feeds_errored,
-      items_stored: summary.items_stored,
-      items_dropped: summary.items_dropped,
-      duration_ms: summary.duration_ms,
+      feeds_seen: rssSummary.feeds_seen,
+      feeds_polled: rssSummary.feeds_polled,
+      feeds_errored: rssSummary.feeds_errored,
+      items_stored: rssSummary.items_stored,
+      items_dropped: rssSummary.items_dropped,
+      duration_ms: rssSummary.duration_ms,
     }));
+
+    // Mirror after — purely outbound writes to peers with mirror_config.
+    // Per-peer + per-slug failures already isolated inside runMirror;
+    // any unexpected error is logged but doesn't tank the cron.
+    try {
+      const mirrorResults = await runMirror();
+      for (const r of mirrorResults) {
+        if (r.skipped) {
+          console.log('[scheduled] mirror skipped', JSON.stringify({
+            peer: r.peer_name,
+            reason: r.skipped,
+          }));
+        } else {
+          console.log('[scheduled] mirror run', JSON.stringify({
+            peer: r.peer_name,
+            pushed: r.pushed,
+            failed: r.failed.length,
+            ...(r.failed.length > 0 && { failures: r.failed }),
+          }));
+        }
+      }
+    } catch (err) {
+      console.error('[scheduled] mirror error', err);
+    }
   },
 };

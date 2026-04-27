@@ -117,13 +117,24 @@ export interface RegisterMessagingRoutesOptions {
     inboxName: string,
     hookName: string,
   ) => import('./types.ts').PreIngestHook | undefined;
+  /**
+   * Optional mirror runner — when provided, enables
+   * `POST /admin/inboxes/:name/mirror[/:peer]` for on-demand cron-mirror
+   * triggering. Same engine the `scheduled()` cron drives, surfaced as
+   * an HTTP route so verification + after-annotation flushes don't have
+   * to wait for the next cron tick. Implementation: `src/messaging/mirror.ts`.
+   */
+  runMirror?: (opts: {
+    inboxName?: string;
+    peerName?: string;
+  }) => Promise<unknown>;
 }
 
 export function registerMessagingRoutes(
   app: Hono<any>,
   opts: RegisterMessagingRoutesOptions,
 ): void {
-  const { registry, requireAuth, createInbox, senderIndexFor, rulesStoreFor, autoConfirmSendersStore, webhookConfigFor, resolveHmacSecret, replayHookFor } = opts;
+  const { registry, requireAuth, createInbox, senderIndexFor, rulesStoreFor, autoConfirmSendersStore, webhookConfigFor, resolveHmacSecret, replayHookFor, runMirror } = opts;
 
   // --------------------------------------------------------------------------
   // Per-inbox surface
@@ -1645,6 +1656,42 @@ export function registerMessagingRoutes(
       errors,
       ...(dryRun && { samples }),
     });
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /admin/inboxes/:name/mirror[/:peer]  — on-demand cron-mirror trigger
+  // --------------------------------------------------------------------------
+  // Same engine the scheduled() handler runs every 30 min, exposed for
+  // verification + manual flushes (e.g. immediately after marking a todo
+  // done, before the next cron tick). Filters to one peer when :peer is
+  // present; otherwise runs every peer with `metadata.mirror_config` for
+  // this inbox. 501 if `runMirror` not wired by the deploy.
+  // Returns the per-peer summary array as-is from runMirror() in
+  // src/messaging/mirror.ts.
+
+  app.post('/admin/inboxes/:name/mirror', requireAuth, async (c) => {
+    if (!runMirror) {
+      return c.json({ error: 'NotImplemented', message: 'runMirror not provided' }, 501);
+    }
+    const inboxName = c.req.param('name')!;
+    if (!registry.get(inboxName)) {
+      return notFound(c, `inbox "${inboxName}" not registered`);
+    }
+    const results = await runMirror({ inboxName });
+    return c.json({ inbox: inboxName, results });
+  });
+
+  app.post('/admin/inboxes/:name/mirror/:peer', requireAuth, async (c) => {
+    if (!runMirror) {
+      return c.json({ error: 'NotImplemented', message: 'runMirror not provided' }, 501);
+    }
+    const inboxName = c.req.param('name')!;
+    const peerName = c.req.param('peer')!;
+    if (!registry.get(inboxName)) {
+      return notFound(c, `inbox "${inboxName}" not registered`);
+    }
+    const results = await runMirror({ inboxName, peerName });
+    return c.json({ inbox: inboxName, peer: peerName, results });
   });
 
   // --------------------------------------------------------------------------

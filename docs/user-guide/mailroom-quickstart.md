@@ -408,7 +408,56 @@ Identity (id, received_at, source, summary, body, labels) and the inbox index en
 
 **Done todos via edit mode** is the recommended pattern: wrap a matched todo line as `- [x] <line>`. The note becomes a record of completion (still visible in `/notes`), but the todo view auto-excludes it on the next call. No separate "done" store, no sync issues — the note is the source of truth.
 
-### 1.17 Backfill a new field across existing items (hook replay)
+### 1.17 Mirror your notes to tigerflare (cron-driven)
+
+Smallstore can push the markdown views (§ 1.13) to a tigerflare peer on the existing `*/30 * * * *` cron — so your notes corpus lives in your shared filesystem too, browsable in any markdown viewer (Obsidian, tigerflare CLI, etc.).
+
+**One-time setup:**
+
+```bash
+# 1. TF_TOKEN should already be on the smallstore Worker (set 2026-04-23)
+#    Verify: wrangler secret list (in deploy/) — should include TF_TOKEN
+
+# 2. Register a tigerflare peer (or update an existing one) with mirror_config:
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "metadata": {
+      "mirror_config": {
+        "source_inbox": "mailroom",
+        "target_path_prefix": "/scratch/mailroom-mirror/",
+        "include_index": true,
+        "link_origin": "https://smallstore.labspace.ai"
+      }
+    }
+  }' \
+  "$BASE/peers/tigerflare-demo"
+```
+
+`mirror_config` fields:
+- `source_inbox` (required) — which inbox to mirror.
+- `target_path_prefix` — where files land (default: `/<peer.name>/`). Must be a tigerflare-style absolute path.
+- `include_index` — also write `index.md` listing every newsletter with relative links.
+- `link_origin` — origin for "View item →" backlinks inside the markdown (e.g. `https://smallstore.labspace.ai`). Omit to skip the links.
+
+**The cron triggers automatically every 30 minutes.** Each run renders one file per `newsletter_slug` (plus optional index) and PUTs to tigerflare. Idempotent — re-rendering the same markdown is a no-op write at tigerflare.
+
+**Manual flush** (e.g. right after annotating a note, before the next tick):
+
+```bash
+# All peers with mirror_config for this inbox
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  "$BASE/admin/inboxes/mailroom/mirror"
+
+# One specific peer
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  "$BASE/admin/inboxes/mailroom/mirror/tigerflare-demo"
+```
+
+Response: `{ inbox, results: [{ peer_name, pushed, failed: [{slug, error}] }, ...] }`. Per-slug failures are isolated — one bad slug doesn't tank the run; per-peer auth/missing-inbox issues skip the peer with a `skipped` reason but still attempt other peers.
+
+**To pause** the mirror: set the peer to `disabled: true` (or remove the `mirror_config`). All runtime ops; no redeploy.
+
+### 1.18 Backfill a new field across existing items (hook replay)
 
 When a new forward-detect field ships (e.g. you start extracting `original_sent_at` after some items already exist without it), run the hook over the historical items via `POST /admin/inboxes/:name/replay`. This is the generalized form of `apply_retroactive` for rules.
 

@@ -4,13 +4,13 @@ Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN
 
 ## Current
 
-*(Eight sprints shipped 2026-04-23 → 2026-04-27 — mailroom pipeline, curation, peer registry, MCP reorg + tool families, RSS pull-runner, forward-notes (capture + newsletter views + retroactive backfill), notes/todos derived views + markdown export + cross-newsletter aggregation, and a public-manifest lockdown. All live at `smallstore.labspace.ai`. 41 MCP tools across 3 families (core/inbox/peers). Deploy uses `link:../dist` symlink (no more stale-code trap). 751/751 messaging tests green. See `TASKS.done.md` for daily detail; `.brief/forward-notes-and-newsletter-profiles.md`, `.brief/notes-todos-and-mirror.md`, `.brief/api-access-and-notes.md` for design.)*
+*(Nine sprints shipped 2026-04-23 → 2026-04-27 — mailroom pipeline, curation, peer registry, MCP reorg + tool families, RSS pull-runner, forward-notes (capture + newsletter views + retroactive backfill), notes/todos derived views + markdown export + cross-newsletter aggregation, public-manifest lockdown, and the cron-driven tigerflare mirror (closes the Phase 2b open from `.brief/notes-todos-and-mirror.md`). All live at `smallstore.labspace.ai`. 41 MCP tools across 3 families (core/inbox/peers). Deploy uses `link:../dist` symlink (no more stale-code trap). 762/762 messaging tests green. See `TASKS.done.md` for daily detail; `.brief/forward-notes-and-newsletter-profiles.md`, `.brief/notes-todos-and-mirror.md`, `.brief/api-access-and-notes.md` for design.)*
 
-### Notes → todos + browsable mirror — Phase 2b open (design: `.brief/notes-todos-and-mirror.md`)
+### Notes → todos + browsable mirror — fully shipped 2026-04-27
 
-Phases 1 + 2a both shipped 2026-04-27. Phase 2b is the remaining piece — a peer-mediated tigerflare cron mirror that uses the Phase 2a markdown renderers.
+All three deliverable phases of `.brief/notes-todos-and-mirror.md` are live. The full arc — annotate notes → search/extract todos → mirror to tigerflare — runs end-to-end on prod.
 
-- [ ] **Phase 2b — peer-mediated tigerflare cron mirror** — extend `scheduled()` handler to render markdown via Phase 2a path and push to a tigerflare peer registered with `metadata.mirror_config = { source_inbox, target_space, include_index? }`. Auth via the peer's `auth.token_env`; no smallstore-side TF token. Idempotent (re-rendering same markdown is a no-op write). Per-slug failure logs and skips. Needs ~30 min config (TF_TOKEN secret + tigerflare peer registration) before code can land. Total ~60-90 min. #messaging #tigerflare-mirror #phase2b
+(Phase 3 newsletter-level meta-notes remains deferred per the brief; no concrete need surfaced yet.)
 
 ### Stretch / parked
 
