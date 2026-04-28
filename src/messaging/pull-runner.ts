@@ -95,6 +95,15 @@ export interface FeedResult {
   items_stored: number;
   /** Number of items that a hook dropped. */
   items_dropped: number;
+  /**
+   * B031: number of items that hit a dedup-collision in storage — same
+   * id as a previously-stored item, so the sink returned the existing
+   * item unchanged. Distinct from `items_dropped` (which counts hook
+   * rejections). High counts here usually mean two distinct feed entries
+   * collapse to the same content-addressed id (e.g. both lack guid +
+   * link + title, or share a duplicated guid) — a feed-quality signal.
+   */
+  items_collided: number;
   /** Number of items that hit an error mid-dispatch. */
   items_errored: number;
   /** Milliseconds: fetch + parse + dispatch. */
@@ -120,6 +129,8 @@ export interface PullRunSummary {
   items_stored: number;
   /** Total items dropped by hooks across all feeds. */
   items_dropped: number;
+  /** B031: total items that hit dedup-collisions across all feeds. */
+  items_collided: number;
   /** Per-feed outcomes, same order as the peer iteration. */
   feeds: FeedResult[];
 }
@@ -179,6 +190,7 @@ export function createRssPullRunner(opts: CreatePullRunnerOptions): PullRunner {
       items_parsed: 0,
       items_stored: 0,
       items_dropped: 0,
+      items_collided: 0,
       items_errored: 0,
       duration_ms: 0,
     };
@@ -258,7 +270,17 @@ export function createRssPullRunner(opts: CreatePullRunnerOptions): PullRunner {
         if (d.dropped) {
           result.items_dropped++;
         } else if (d.results.some((r) => r.stored)) {
-          result.items_stored++;
+          // B031: a dedup-collision still reports `stored: true` on the
+          // sink (the item exists in storage), but the sink also flags
+          // `deduplicated: true` so we count it separately. If ANY sink
+          // saw a collision we treat the parse as a collision rather
+          // than a fresh store — matches how operators read these counters
+          // (new-this-poll vs already-known).
+          if (d.results.some((r) => r.deduplicated)) {
+            result.items_collided++;
+          } else {
+            result.items_stored++;
+          }
         } else {
           // All sinks failed or returned stored=false.
           result.items_errored++;
@@ -280,6 +302,7 @@ export function createRssPullRunner(opts: CreatePullRunnerOptions): PullRunner {
       parsed: result.items_parsed,
       stored: result.items_stored,
       dropped: result.items_dropped,
+      collided: result.items_collided,
       errored: result.items_errored,
       duration_ms: result.duration_ms,
     });
@@ -307,6 +330,7 @@ export function createRssPullRunner(opts: CreatePullRunnerOptions): PullRunner {
           items_parsed: 0,
           items_stored: 0,
           items_dropped: 0,
+          items_collided: 0,
           items_errored: 0,
           duration_ms: 0,
           error: `pollPeer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -324,6 +348,7 @@ export function createRssPullRunner(opts: CreatePullRunnerOptions): PullRunner {
       feeds_errored: feeds.filter((f) => f.error).length,
       items_stored: feeds.reduce((n, f) => n + f.items_stored, 0),
       items_dropped: feeds.reduce((n, f) => n + f.items_dropped, 0),
+      items_collided: feeds.reduce((n, f) => n + f.items_collided, 0),
       feeds,
     };
     log('run complete', {
@@ -331,6 +356,7 @@ export function createRssPullRunner(opts: CreatePullRunnerOptions): PullRunner {
       feeds_polled: summary.feeds_polled,
       feeds_errored: summary.feeds_errored,
       items_stored: summary.items_stored,
+      items_collided: summary.items_collided,
       duration_ms: summary.duration_ms,
     });
     return summary;

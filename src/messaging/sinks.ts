@@ -33,8 +33,20 @@ import type { Inbox, InboxItem, Sink, SinkContext, SinkResult } from './types.ts
 export function inboxSink(inbox: Inbox): Sink {
   return async (item: InboxItem, ctx: SinkContext): Promise<SinkResult> => {
     try {
+      // B031: peek storage BEFORE the ingest so we can tell new-store from
+      // dedup-hit. `_ingest` returns the existing item on dedup but doesn't
+      // surface "did dedup happen" — and rather than change `_ingest`'s
+      // return shape (many callers + the C1 pending-sidecar work just shipped)
+      // we probe here. The probe is racy with concurrent ingests but the
+      // signal is observability-only — `_ingest` itself remains the
+      // authoritative dedup gate.
+      const preExisting = await inbox.read(item.id).catch(() => null);
       const saved = await inbox._ingest(item, { blobs: ctx.blobs });
-      return { stored: true, id: saved.id };
+      return {
+        stored: true,
+        id: saved.id,
+        deduplicated: preExisting != null,
+      };
     } catch (err) {
       return {
         stored: false,

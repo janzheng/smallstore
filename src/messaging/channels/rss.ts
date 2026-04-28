@@ -210,9 +210,14 @@ async function parseFeedXml(raw: string, feedUrl: string): Promise<ParsedFeed> {
   //   laughs" cap. Default is 1000, which counts every `&amp;` / `&#39;` /
   //   etc — trivially exceeded by a busy podcast feed (anchor.fm, flightcast
   //   both hit this). Real entity bombs use DOCTYPE-defined recursive
-  //   entities; feed XML doesn't, so a generous cap on the 5 standard
-  //   entities + numeric refs is safe. 1M is ~3 orders of magnitude above
-  //   what real feeds produce while still rejecting true bombs.
+  //   entities (which fast-xml-parser disables by default); the only path
+  //   that consumes this budget is the 5 standard entities + numeric refs.
+  //   B030: dropped from 1M to 50_000 — three orders of magnitude is more
+  //   headroom than any legitimate feed needs (the busiest podcast feeds
+  //   we've measured land around 8k expansions for a year of episodes).
+  //   The lower cap is defense-in-depth: even though DTD recursion is off,
+  //   keeping the standard-entity budget bounded narrows the CPU window a
+  //   crafted-but-DTD-free feed could chew through.
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
@@ -220,7 +225,7 @@ async function parseFeedXml(raw: string, feedUrl: string): Promise<ParsedFeed> {
     parseAttributeValue: false,
     trimValues: true,
     textNodeName: '#text',
-    processEntities: { enabled: true, maxTotalExpansions: 1_000_000 },
+    processEntities: { enabled: true, maxTotalExpansions: 50_000 },
   });
 
   let doc: any;

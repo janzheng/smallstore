@@ -131,9 +131,14 @@ export function renderNewsletterProfile(
 
   for (const item of sorted) {
     const sentAt = pickItemSentAt(item);
-    const subject = (item.fields?.original_subject as string | undefined) ??
+    const rawSubject = (item.fields?.original_subject as string | undefined) ??
       item.summary ??
       '(no subject)';
+    // B032: sanitize user-supplied subject before interpolating into the
+    // `## ` heading — backticks would open an inline-code span, a `---`-only
+    // subject would inject a frontmatter fence, and a leading `# ` would
+    // bump the heading level.
+    const subject = escapeMarkdownText(rawSubject);
     const heading = sentAt
       ? `## ${formatDate(sentAt)} — ${subject}`
       : `## (date unknown) — ${subject}`;
@@ -210,9 +215,11 @@ export function renderNewsletterNotes(
   for (const n of notes) {
     if (!n.note || n.note.trim().length === 0) continue;
     const sentAt = n.original_sent_at ?? n.sent_at;
+    // B032: sanitize subject before heading interpolation.
+    const subject = escapeMarkdownText(n.subject ?? '(no subject)');
     const heading = sentAt
-      ? `## ${formatDate(sentAt)} — ${n.subject ?? '(no subject)'}`
-      : `## (date unknown) — ${n.subject ?? '(no subject)'}`;
+      ? `## ${formatDate(sentAt)} — ${subject}`
+      : `## (date unknown) — ${subject}`;
     lines.push(heading);
     lines.push('');
     for (const noteLine of n.note.split(/\r?\n/)) {
@@ -297,9 +304,11 @@ export function renderAllNotes(
 
     for (const n of slugNotes) {
       const sentAt = n.original_sent_at ?? n.sent_at;
+      // B032: sanitize subject before heading interpolation.
+      const subject = escapeMarkdownText(n.subject ?? '(no subject)');
       const heading = sentAt
-        ? `### ${formatDate(sentAt)} — ${n.subject ?? '(no subject)'}`
-        : `### (date unknown) — ${n.subject ?? '(no subject)'}`;
+        ? `### ${formatDate(sentAt)} — ${subject}`
+        : `### (date unknown) — ${subject}`;
       lines.push(heading);
       lines.push('');
       const noteText = n.note ?? '';
@@ -379,9 +388,11 @@ export function renderRecentFeed(
   }
 
   for (const { item, dt } of inWindow) {
-    const subject = (item.fields?.original_subject as string | undefined) ??
+    const rawSubject = (item.fields?.original_subject as string | undefined) ??
       item.summary ??
       '(no subject)';
+    // B032: sanitize subject before heading interpolation.
+    const subject = escapeMarkdownText(rawSubject);
     const slug = item.fields?.newsletter_slug as string | undefined;
     const display = (item.fields?.newsletter_name as string | undefined) ??
       (item.fields?.from_addr ? stripAngleAddrInline(item.fields.from_addr as string) : undefined) ??
@@ -491,6 +502,42 @@ function formatDate(iso: string | undefined): string {
 function escapePipe(s: string): string {
   // Markdown table cells need pipes escaped to avoid breaking the column layout.
   return s.replace(/\|/g, '\\|');
+}
+
+/**
+ * B032: sanitize user-supplied text before interpolating it into a markdown
+ * heading or other inline position. Three concrete injections we care about:
+ *
+ *   1. Backticks. A subject of `` foo `bar baz `` opens an inline-code span
+ *      that swallows everything until the next backtick. Escape every
+ *      backtick to `` \` ``.
+ *   2. A line that's exactly `---`. Mid-document, three dashes on their own
+ *      line render as a horizontal rule — but at the very top of the file
+ *      they open a YAML frontmatter block. We can't tell here whether we're
+ *      at the top, so just neutralize: prefix any `---`-only line with a
+ *      backslash so it can't be parsed as a fence.
+ *   3. Lines starting with `# ` (or `## `, etc.). A subject like
+ *      `## Compromised heading` would otherwise inject its own heading
+ *      level when interpolated into an `## H2 — ${subject}` template.
+ *      Escape leading `#` runs followed by space.
+ *
+ * Applied to subject + display strings before they get folded into headings.
+ * Returns the input unchanged when no escaping is needed.
+ */
+export function escapeMarkdownText(s: string): string {
+  if (!s) return s;
+  // 1. Backticks first — subsequent steps don't introduce new ones.
+  let out = s.replace(/`/g, '\\`');
+  // 2 + 3. Line-by-line: neutralize frontmatter delimiters and headings.
+  out = out
+    .split(/\r?\n/)
+    .map((line) => {
+      if (/^---\s*$/.test(line)) return '\\' + line;
+      if (/^#+\s/.test(line)) return '\\' + line;
+      return line;
+    })
+    .join('\n');
+  return out;
 }
 
 function capitalize(s: string): string {

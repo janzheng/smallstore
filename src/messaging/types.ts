@@ -591,6 +591,16 @@ export interface SinkResult {
 
   /** Non-fatal error message. Dispatcher continues to other sinks when present. */
   error?: string;
+
+  /**
+   * B031: optional dedup-collision signal. `true` when the sink determined
+   * that the item already existed (same id) and was returned unchanged —
+   * the sink reports `stored: true` so callers see "the item is in storage"
+   * but `deduplicated: true` lets observability layers count *new vs.
+   * already-present* separately. Currently set by `inboxSink`; other sinks
+   * leave it undefined.
+   */
+  deduplicated?: boolean;
 }
 
 // ============================================================================

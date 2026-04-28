@@ -26,6 +26,8 @@ import { InboxRegistry } from '../src/messaging/registry.ts';
 import { registerMessagingRoutes } from '../src/messaging/http-routes.ts';
 import { createInbox } from '../src/messaging/inbox.ts';
 import {
+  escapeMarkdownText,
+  renderAllNotes,
   renderNewsletterIndex,
   renderNewsletterNotes,
   renderNewsletterProfile,
@@ -678,4 +680,136 @@ Deno.test('Markdown view 404s on unknown slug (same as JSON)', async () => {
   const f = buildFixture();
   const r = await f.fetch('/inbox/mailroom/newsletters/no-such-slug?format=markdown');
   assertEquals(r.status, 404);
+});
+
+// ============================================================================
+// B032 — markdown injection: escape user-supplied subjects before interpolation
+// ============================================================================
+
+Deno.test('B032 escapeMarkdownText: backticks escaped to \\`', () => {
+  assertEquals(escapeMarkdownText('foo `bar` baz'), 'foo \\`bar\\` baz');
+  assertEquals(escapeMarkdownText('```code```'), '\\`\\`\\`code\\`\\`\\`');
+});
+
+Deno.test('B032 escapeMarkdownText: line that is exactly --- gets escaped', () => {
+  // A subject line that's literally `---` would otherwise open YAML
+  // frontmatter or render as a horizontal rule.
+  assertEquals(escapeMarkdownText('---'), '\\---');
+  assertEquals(escapeMarkdownText('--- '), '\\--- ');
+  // Lone-hyphens-on-line in a multi-line subject — only the offending line
+  // gets prefixed; surrounding lines are untouched.
+  assertEquals(escapeMarkdownText('intro\n---\nrest'), 'intro\n\\---\nrest');
+});
+
+Deno.test('B032 escapeMarkdownText: leading # H-marker escaped', () => {
+  assertEquals(escapeMarkdownText('# Faux heading'), '\\# Faux heading');
+  assertEquals(escapeMarkdownText('## Sneaky h2'), '\\## Sneaky h2');
+  assertEquals(escapeMarkdownText('#### deep'), '\\#### deep');
+  // No space after # → not a heading, leave alone.
+  assertEquals(escapeMarkdownText('#hashtag'), '#hashtag');
+});
+
+Deno.test('B032 escapeMarkdownText: passthrough for benign text', () => {
+  assertEquals(escapeMarkdownText('Plain subject line'), 'Plain subject line');
+  assertEquals(escapeMarkdownText(''), '');
+  assertEquals(escapeMarkdownText('mid-line --- not a fence'), 'mid-line --- not a fence');
+});
+
+Deno.test('B032 renderNewsletterProfile: subject with backticks neutralized in heading', () => {
+  const items: InboxItem[] = [
+    {
+      id: 'a',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00.000Z',
+      summary: 'Issue',
+      fields: {
+        original_sent_at: '2026-04-26T08:00:00.000Z',
+        // Subject with a backtick — un-escaped this opens an inline-code span
+        // that swallows the rest of the heading.
+        original_subject: 'How `eval` works',
+      },
+    },
+  ];
+  const md = renderNewsletterProfile('mailroom', 'p', { slug: 'p', count: 1, notes_count: 0 }, items, '');
+  assertStringIncludes(md, '## 2026-04-26 — How \\`eval\\` works');
+  // Sanity: every backtick in the heading is preceded by a backslash —
+  // no bare backticks survived to open an inline-code span.
+  const headingLine = md.split('\n').find((l) => l.startsWith('## ')) ?? '';
+  assertEquals(/(^|[^\\])`/.test(headingLine), false, 'every backtick must be backslash-escaped');
+});
+
+Deno.test('B032 renderNewsletterProfile: subject ---only line cannot inject frontmatter', () => {
+  const items: InboxItem[] = [
+    {
+      id: 'a',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00.000Z',
+      summary: 'Issue',
+      fields: {
+        original_sent_at: '2026-04-26T08:00:00.000Z',
+        original_subject: '---',
+      },
+    },
+  ];
+  const md = renderNewsletterProfile('mailroom', 'p', { slug: 'p', count: 1, notes_count: 0 }, items, '');
+  assertStringIncludes(md, '## 2026-04-26 — \\---');
+  assertEquals(md.includes('## 2026-04-26 — ---'), false, '--- subject must be escaped');
+});
+
+Deno.test('B032 renderNewsletterProfile: leading # in subject cannot bump heading level', () => {
+  const items: InboxItem[] = [
+    {
+      id: 'a',
+      source: 'email/v1',
+      source_version: 'email/v1',
+      received_at: '2026-04-26T10:00:00.000Z',
+      summary: 'Issue',
+      fields: {
+        original_sent_at: '2026-04-26T08:00:00.000Z',
+        original_subject: '# Injected H1',
+      },
+    },
+  ];
+  const md = renderNewsletterProfile('mailroom', 'p', { slug: 'p', count: 1, notes_count: 0 }, items, '');
+  assertStringIncludes(md, '## 2026-04-26 — \\# Injected H1');
+});
+
+Deno.test('B032 renderNewsletterNotes: subject sanitized in heading', () => {
+  const md = renderNewsletterNotes(
+    'mailroom',
+    'p',
+    { slug: 'p', count: 1, notes_count: 1 },
+    [
+      {
+        id: 'note-1',
+        original_sent_at: '2026-04-26T08:00:00.000Z',
+        subject: 'How `eval` works',
+        note: 'A note about it.',
+      },
+    ],
+    '',
+  );
+  assertStringIncludes(md, '## 2026-04-26 — How \\`eval\\` works');
+});
+
+Deno.test('B032 renderAllNotes: subject sanitized in nested heading', () => {
+  const md = renderAllNotes(
+    'mailroom',
+    [
+      {
+        id: 'a',
+        newsletter_slug: 'pub',
+        newsletter_display: 'Publisher',
+        original_sent_at: '2026-04-26T08:00:00.000Z',
+        subject: '# Sneaky H1',
+        note: 'note text',
+      },
+    ],
+    '',
+  );
+  // renderAllNotes uses ### for items; the leading-# subject must not bump
+  // the heading level beyond ###.
+  assertStringIncludes(md, '### 2026-04-26 — \\# Sneaky H1');
 });

@@ -343,3 +343,33 @@ Deno.test('rss — RDF feed parses items that sit as siblings of channel', async
   const first = items[0].item;
   assert(Array.isArray(first.fields.authors), 'authors normalized to array');
 });
+
+// ============================================================================
+// B030 — entity-expansion cap (defense-in-depth against billion-laughs)
+// ============================================================================
+
+Deno.test('rss — B030: feed with thousands of escaped-entity references still parses', async () => {
+  // The cap is now 50_000 (was 1_000_000). A real feed at the busy end —
+  // e.g. a podcast feed dropping `&amp;` and `&#39;` in every show-notes
+  // string — lands well below this. Synthesize 5_000 escaped entities and
+  // assert the parser still succeeds.
+  //
+  // Each entry's title contains 50 `&amp;` references; 100 entries = 5_000
+  // total expansions. That comfortably fits under 50_000 and is roughly
+  // an order of magnitude above the busiest real feeds we've seen. If the
+  // cap is ever lowered below ~10k this test will start failing — which
+  // is the early-warning we want.
+  const entitiesPerEntry = '&amp;'.repeat(50);
+  const items = Array.from({ length: 100 }).map((_, i) =>
+    `<item><title>Entry ${i} ${entitiesPerEntry}</title><link>https://x.test/${i}</link></item>`
+  ).join('');
+  const xml = `<?xml version="1.0"?><rss version="2.0"><channel><title>Entity-heavy</title>${items}</channel></rss>`;
+
+  const results = await rssChannel.parseMany({
+    raw: xml,
+    feed_url: 'https://entity-heavy.example.com/feed.xml',
+  });
+  assertEquals(results.length, 100);
+  // Sample one — the &amp; references should have decoded to literal `&`.
+  assert(results[0].item.summary?.includes('&'), 'entity refs decoded to literal ampersand');
+});

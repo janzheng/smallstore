@@ -378,7 +378,13 @@ Deno.test('pull-runner — re-poll is idempotent (same items, no duplicates)', a
     const first = await runner.pollAll();
     const second = await runner.pollAll();
 
-    assertEquals(first.items_stored, second.items_stored);
+    // First poll: every item is new (stored>0, collided=0).
+    assert(first.items_stored > 0);
+    assertEquals(first.items_collided, 0);
+    // Second poll: every item is a dedup-collision (B031: counted in
+    // items_collided, NOT items_stored). The on-disk inbox count stays put.
+    assertEquals(second.items_stored, 0);
+    assertEquals(second.items_collided, first.items_stored);
     const list = await h.inbox.list();
     // Inbox count should equal first.items_stored (not 2x — idempotent dedup).
     assertEquals(list.items.length, first.items_stored);
@@ -513,14 +519,14 @@ Deno.test('pull-runner — peer auth (bearer) injects Authorization header on fe
       name: 'private-feed',
       type: 'rss',
       url,
-      auth: { kind: 'bearer', token_env: 'FEED_TOKEN' },
+      auth: { kind: 'bearer', token_env: 'API_FEED_TOKEN' },
       metadata: { feed_config: { target_inbox: 'target_inbox' } },
     });
 
     const runner = createRssPullRunner({
       peerStore: h.peerStore,
       registry: h.registry,
-      env: { FEED_TOKEN: 'secret-token-xyz' },
+      env: { API_FEED_TOKEN: 'secret-token-xyz' },
       log: () => {},
     });
     const summary = await runner.pollAll();
@@ -548,21 +554,83 @@ Deno.test('pull-runner — peer auth missing env var: feed errors out without fe
       name: 'private-feed',
       type: 'rss',
       url,
-      auth: { kind: 'bearer', token_env: 'MISSING_TOKEN' },
+      auth: { kind: 'bearer', token_env: 'API_MISSING_TOKEN' },
       metadata: { feed_config: { target_inbox: 'target_inbox' } },
     });
 
     const runner = createRssPullRunner({
       peerStore: h.peerStore,
       registry: h.registry,
-      env: {/* MISSING_TOKEN unset */},
+      env: {/* API_MISSING_TOKEN unset */},
       log: () => {},
     });
     const summary = await runner.pollAll();
 
     assertEquals(summary.feeds_errored, 1);
     assertEquals(fetchCalled, false, 'no fetch when auth resolution fails');
-    assert(summary.feeds[0].error?.includes('MISSING_TOKEN'));
+    assert(summary.feeds[0].error?.includes('API_MISSING_TOKEN'));
+  } finally {
+    h.restoreFetch();
+  }
+});
+
+// ============================================================================
+// B031 — items_collided counter (in-feed dedup-collision visibility)
+// ============================================================================
+
+Deno.test('pull-runner — B031: two items sharing same guid collide → one stored, one collided', async () => {
+  // Two feed entries that both publish the *same* <guid>. The dedup key is
+  // sha256(feed_url + ':' + guid), so both items collapse to the same
+  // content-addressed id. The first lands as items_stored=1; the second hits
+  // dedup inside _ingest and is reported as items_collided=1. items_dropped
+  // stays 0 (that counter is for hook rejections, not dedup collisions).
+  const url = 'https://collide.example.com/feed.xml';
+  const collidingXml = `<?xml version="1.0"?>
+    <rss version="2.0"><channel><title>Collision Feed</title>
+      <item>
+        <title>First with shared guid</title>
+        <link>https://collide.example.com/1</link>
+        <guid isPermaLink="false">shared-guid-12345</guid>
+        <pubDate>Mon, 21 Apr 2026 10:00:00 GMT</pubDate>
+      </item>
+      <item>
+        <title>Second with same guid (different content)</title>
+        <link>https://collide.example.com/2</link>
+        <guid isPermaLink="false">shared-guid-12345</guid>
+        <pubDate>Tue, 22 Apr 2026 10:00:00 GMT</pubDate>
+      </item>
+    </channel></rss>`;
+
+  const h = createHarness({ fetchByUrl: { [url]: { status: 200, body: collidingXml } } });
+  try {
+    await h.peerStore.create({
+      name: 'collision-feed',
+      type: 'rss',
+      url,
+      metadata: { feed_config: { target_inbox: 'target_inbox' } },
+    });
+
+    const runner = createRssPullRunner({
+      peerStore: h.peerStore,
+      registry: h.registry,
+      env: {},
+      log: () => {},
+    });
+    const summary = await runner.pollAll();
+
+    assertEquals(summary.feeds_polled, 1);
+    assertEquals(summary.feeds_errored, 0);
+    assertEquals(summary.feeds[0].items_parsed, 2, 'parser still emits both entries');
+    assertEquals(summary.feeds[0].items_stored, 1, 'first entry lands as fresh store');
+    assertEquals(summary.feeds[0].items_collided, 1, 'second entry trips dedup → collision');
+    assertEquals(summary.feeds[0].items_dropped, 0, 'collision is NOT a hook drop');
+    // Summary aggregation matches per-feed.
+    assertEquals(summary.items_collided, 1);
+    assertEquals(summary.items_stored, 1);
+
+    // Inbox holds exactly one item (the dedup gate worked).
+    const list = await h.inbox.list();
+    assertEquals(list.items.length, 1);
   } finally {
     h.restoreFetch();
   }
