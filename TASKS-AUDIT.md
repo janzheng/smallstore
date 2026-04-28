@@ -2,8 +2,8 @@
 
 Focused sweep of this session's changes (new features + 7 bug fixes). Findings only — no fixes applied. Created 2026-04-17. **Wave 3 added 2026-04-18** covering paging + JSONL job-log feature (post-b24338f commits).
 
-**Totals: 47 + 11 = 58 findings, 58 resolved / 8 open as of 2026-04-26**
-> 58 fixed + 1 won't-fix (A042-path deprecated). 8 deferrable remain — mostly at-scale-only polish (A022 CacheManager disjoint-key race, A025 stats divergence docs, A201/A203/A204 JSONL growth/collision/parallelism, A220 cursor+offset docs, A242 weak casts, A243 preset-as-any). A103 (merge default) fixed 2026-04-17.
+**Totals: 47 + 11 = 58 findings, 58 resolved / 3 open as of 2026-04-28**
+> 58 fixed + 1 won't-fix (A042-path deprecated). 3 deferrable remain — A022 (CacheManager disjoint-key race, at-scale-only), A025 (stats divergence with remote adapter, at-scale-only), A201 (JSONL growth/cleanup, at-scale-only — needs a rotation policy). A103 (merge default) fixed 2026-04-17. A203/A204/A220/A242/A243 closed 2026-04-28 in cleanup commit 5393ef9.
 
 > **Deployment context:** Public JSR library (`@yawnxyz/smallstore`) consumed by coverflow-v3 (production Deno service, multi-user). Treat race conditions, error-swallowing, and wiring failures as real.
 > `#local-real` = affects every caller / every session.
@@ -120,18 +120,18 @@ Three agents swept the new surface: `src/utils/job-log.ts`, `serve.ts` new `/_sy
 
 - [x] **A200** [fixed: createJobLog moved INSIDE the IIFE so the outer handler has no awaits between has() and set(); lockPath is computed deterministically from jobId + dataDir so the response still includes logPath] Lock TOCTOU race in POST /_sync #race-condition #at-scale-only
 - [x] **A224** [fixed: cursor accepted as stringified non-negative integer (round-trips the adapter's own output); non-numeric cursor throws rather than silently restarting at offset 0; adapter now emits `cursor: String(nextOffset)` when `hasMore` — tested with 2 new cases] SQLite listKeys cursor handling #wiring #local-real
-- [ ] **A220** Cursor + offset precedence undocumented — Airtable/Upstash silently prefer `cursor` (offset-skip disabled when cursor is set via `!options.cursor` guard). Correct behavior, but no user-facing doc says so; passing both silently drops one. `src/adapters/airtable.ts:462`, `src/adapters/upstash.ts:375` #ux #local-real
+- [x] **A220** [fixed: documented at the type level in `src/types.ts` `KeysPageOptions` JSDoc + at both adapter call sites (airtable.ts + upstash.ts). Commit 5393ef9.] Cursor + offset precedence undocumented #ux #local-real
 
 ### P3 — Low (cosmetic, at-scale-only, or UX polish)
 
 - [ ] **A201** `summarizeJob` reads entire JSONL file via `Deno.readTextFile` (up to n=2000 events), so `GET /_sync/jobs?limit=50` reads 50 full files in parallel. Fine for small job counts; no rotation/cleanup so log dir grows forever. `src/utils/job-log.ts:108-123, 154-183` #resource-leak #at-scale-only
-- [ ] **A203** `generateJobId` uses `Date.now()` truncated to seconds + 6-char `Math.random()` suffix — ~2^31 space per second, but burst-parallel requests in the same second have non-trivial collision probability (~P=1e-6 per 1k/sec). Consider `crypto.randomUUID()` or `crypto.getRandomValues()`. `src/utils/job-log.ts:42-46` #logic-bug #at-scale-only
+- [x] **A203** [fixed: `crypto.getRandomValues(Uint8Array(6))` → 12 hex chars (~48 bits), replaces the prior 6-char Math.random base36 slice. Commit 5393ef9.] generateJobId collision risk #logic-bug #at-scale-only
 - [x] **A222** [fixed: `Number(raw)` + `Number.isInteger()` rejects "999x" as NaN; parseInt's loose parsing removed at src/http/handlers.ts:436-443] parseInt leniency #ux #local-real
 - [x] **A228** [fixed: limit must be a *positive* integer (`limit <= 0` rejected with 400) so `?limit=0` no longer returns empty-keys-with-hasMore:true confusion, src/http/handlers.ts:438] `?limit=0` UX #ux #local-real
-- [ ] **A204** `sm_sync_jobs` / `GET /_sync/jobs` fires `Promise.all` over `summarizeJob` for up to `limit` jobs — 50 concurrent full-file reads at default. Acceptable at dev scale; cap parallelism if job dir grows. `serve.ts:269-271` #ux #at-scale-only
-- [ ] **A242** Weak `(last as any).result` / `(last as any).message` casts in `summarizeJob` — only safe because caller contract writes exactly these fields in `completed`/`failed` events. Narrow with event-typed union instead. `src/utils/job-log.ts:179-180` #type-safety #local-real
+- [x] **A204** [fixed: `SUMMARIZE_CONCURRENCY = 8`, chunked sequential await in `serve.ts:282-298`. Commit 5393ef9.] /_sync/jobs unbounded summarizeJob fan-out #ux #at-scale-only
+- [x] **A242** [fixed: introduced `JobCompletedEvent` + `JobFailedEvent` narrowing types; summarizeJob branches via the typed shape instead of `as any`. `src/utils/job-log.ts:18-46,173-194`. Commit 5393ef9.] Weak as-any casts in summarizeJob #type-safety #local-real
 - [x] **A244** [fixed: extracted `DEFAULT_TAIL_EVENTS = 50` and `SUMMARY_SCAN_EVENTS = 2000` exported constants with JSDoc explaining the trade-off; tailJobLog default references DEFAULT_TAIL_EVENTS, summarizeJob calls tailJobLog(path, SUMMARY_SCAN_EVENTS), src/utils/job-log.ts:102-109] Magic tail/summary window constants #magic-number #local-real
-- [ ] **A243** `config.preset as any` cast in `serve.ts:75` — bypasses type safety on preset resolution; not a bug today but narrows the compiler's ability to catch a future preset-shape change. `serve.ts:75` #type-safety #local-real
+- [x] **A243** [fixed: runtime check against the `PresetName` union in `serve.ts:75-95`; invalid preset names now throw at startup with the allowed list instead of being silently passed through. Commit 5393ef9.] `config.preset as any` cast bypassed type safety #type-safety #local-real
 
 ### Verified fine (dropped from audit)
 
