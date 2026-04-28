@@ -194,3 +194,57 @@ Deno.test('seed — preserves runtime row if env has same pattern (no source fli
   const row = await store.get('*@substack.com');
   assertEquals(row?.source, 'runtime'); // existing row wins
 });
+
+// ============================================================================
+// B015 — subscribe / mutation notifications
+// ============================================================================
+
+Deno.test('subscribe — listener fires on add', async () => {
+  const { store } = freshStore();
+  let count = 0;
+  store.subscribe(() => count++);
+  await store.add({ pattern: '*@substack.com' });
+  assertEquals(count, 1);
+});
+
+Deno.test('subscribe — listener fires on delete (only when pattern existed)', async () => {
+  const { store } = freshStore();
+  await store.add({ pattern: '*@substack.com' });
+  let count = 0;
+  store.subscribe(() => count++);
+  await store.delete('*@substack.com');
+  assertEquals(count, 1);
+  // Delete-of-nothing does NOT fire (no state changed).
+  await store.delete('*@nonexistent.com');
+  assertEquals(count, 1);
+});
+
+Deno.test('subscribe — idempotent add does NOT fire (no state change)', async () => {
+  const { store } = freshStore();
+  await store.add({ pattern: '*@substack.com' });
+  let count = 0;
+  store.subscribe(() => count++);
+  // Re-add returns the existing row and does not write — listener stays at 0.
+  await store.add({ pattern: '*@substack.com' });
+  assertEquals(count, 0);
+});
+
+Deno.test('subscribe — unsubscribe stops further notifications', async () => {
+  const { store } = freshStore();
+  let count = 0;
+  const unsub = store.subscribe(() => count++);
+  await store.add({ pattern: '*@a.com' });
+  unsub();
+  await store.add({ pattern: '*@b.com' });
+  assertEquals(count, 1);
+});
+
+Deno.test('subscribe — listener exception does not poison mutation path', async () => {
+  const { store } = freshStore();
+  store.subscribe(() => {
+    throw new Error('boom');
+  });
+  // Mutation should still complete despite the throwing listener.
+  const row = await store.add({ pattern: '*@substack.com' });
+  assertEquals(row.pattern, '*@substack.com');
+});

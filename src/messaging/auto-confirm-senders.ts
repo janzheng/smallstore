@@ -66,6 +66,13 @@ export interface AutoConfirmSendersStore {
   delete(pattern: string): Promise<boolean>;
   /** Convenience for the auto-confirm hook — just the pattern strings. */
   patterns(): Promise<string[]>;
+  /**
+   * Subscribe to mutation events. The listener fires after every successful
+   * `add` or `delete` (whether the pattern actually changed or not — the
+   * hook just needs a "something happened" signal to invalidate its cache).
+   * Returns an unsubscribe function. Audit finding B015.
+   */
+  subscribe(listener: () => void): () => void;
 }
 
 export interface CreateAutoConfirmSendersStoreOptions {
@@ -119,6 +126,20 @@ export function createAutoConfirmSendersStore(
     return rows;
   }
 
+  // In-process listeners. Mutations fire all listeners synchronously after
+  // the storage write settles. Listener errors are swallowed + logged so a
+  // misbehaving subscriber can't poison the mutation path.
+  const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const fn of listeners) {
+      try {
+        fn();
+      } catch (err) {
+        console.warn('[auto-confirm-senders] listener threw:', err);
+      }
+    }
+  };
+
   return {
     async list(): Promise<AutoConfirmSender[]> {
       return await loadAll();
@@ -145,6 +166,7 @@ export function createAutoConfirmSendersStore(
         notes: input.notes,
       };
       await adapter.set(key, row);
+      notify();
       return row;
     },
 
@@ -153,13 +175,23 @@ export function createAutoConfirmSendersStore(
       if (!normalized) return false;
       const key = keyFor(normalized);
       const existed = await adapter.has(key);
-      if (existed) await adapter.delete(key);
+      if (existed) {
+        await adapter.delete(key);
+        notify();
+      }
       return existed;
     },
 
     async patterns(): Promise<string[]> {
       const all = await loadAll();
       return all.map((r) => r.pattern);
+    },
+
+    subscribe(listener: () => void): () => void {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
   };
 }

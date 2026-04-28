@@ -349,6 +349,10 @@ function buildApp(env: Env): AppHandle {
   // first boot (see `seedAutoConfirmFromEnv` below).
   const autoConfirmHook = createAutoConfirmHook({
     getPatterns: () => autoConfirmSendersStore.patterns(),
+    // Wire the store's mutation channel into the hook's cache invalidation
+    // so a `DELETE /admin/auto-confirm/senders/:pattern` takes effect on
+    // the next ingest, not after the 30s cache TTL elapses (B015).
+    subscribeInvalidations: (cb) => autoConfirmSendersStore.subscribe(cb),
   });
 
   // Boot-time env seed — fire-and-forget so the hook is constructed

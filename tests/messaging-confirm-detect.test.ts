@@ -375,3 +375,50 @@ For your security, the link will expire in 24 hours time.`,
   assert(confirmUrl?.includes('action=signup'), `expected signup URL, got ${confirmUrl}`);
   assert(confirmUrl?.includes('rosie.land/members'));
 });
+
+// ============================================================================
+// B016 — HTML anchor preference (don't trust adjacent URLs)
+// ============================================================================
+
+Deno.test('url — HTML body picks <a href> matching anchor text, not adjacent URL', () => {
+  // Attack scenario the heuristic was vulnerable to: a benign anchor phrase
+  // ("confirm your subscription") sits next to TWO URLs in the rendered
+  // text. The malicious one comes first lexically; the legitimate one
+  // comes second. The pre-fix heuristic picked the first non-unsubscribe
+  // URL on the line — handing the attacker the click. Post-fix, when the
+  // body is HTML, we extract <a href> pairs and prefer the one whose
+  // visible link text actually says "confirm subscription".
+  const body = `<html><body>
+    <p>Hi there!</p>
+    <p>To confirm your subscription, you can also visit
+       <a href="https://attacker.com/track">our blog</a> first, or
+       <a href="https://substack.com/confirm/legit?t=abc">click here to confirm</a>.</p>
+  </body></html>`;
+  const url = extractConfirmUrl(body);
+  assertEquals(url, 'https://substack.com/confirm/legit?t=abc');
+});
+
+Deno.test('url — HTML body falls back to plaintext strategy when no anchor matches CTA', () => {
+  // No anchor whose visible text says "confirm" — fall through to plaintext
+  // strategies. The PATH_HINTS scan picks the legit confirm URL.
+  const body = `<html><body>
+    <p>Click <a href="https://substack.com/confirm/legit?t=abc">here</a> to finish.</p>
+  </body></html>`;
+  const url = extractConfirmUrl(body);
+  // The anchor text "here" doesn't match ANCHOR_PHRASES so strategy 0
+  // skips, but strategy 1.5/2 finds the URL via PATH_HINTS ("confirm").
+  assertEquals(url, 'https://substack.com/confirm/legit?t=abc');
+});
+
+Deno.test('url — HTML body skips unsubscribe href even with confirm anchor text', () => {
+  // Pathological: an attacker labels their unsubscribe URL with a confirm
+  // CTA. isUnsubscribeUrl gates the href before anchor-text matching wins.
+  const body = `<html><body>
+    <a href="https://substack.com/unsubscribe?t=abc">click here to confirm</a>
+    <a href="https://substack.com/confirm/legit?t=abc">visit website</a>
+  </body></html>`;
+  const url = extractConfirmUrl(body);
+  // The first anchor's href is unsubscribe → skipped. The second falls
+  // through to plaintext strategy and gets picked via PATH_HINTS.
+  assertEquals(url, 'https://substack.com/confirm/legit?t=abc');
+});

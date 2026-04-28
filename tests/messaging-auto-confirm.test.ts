@@ -46,6 +46,27 @@ function throwingFetch(msg: string): typeof fetch {
   };
 }
 
+// Scripted multi-hop fetcher — returns a sequence of Responses indexed by
+// call order. Each response can specify a Location header (for 3xx) and
+// records the URL the caller hit. Used to exercise the B007 manual-redirect
+// walk: the test specifies a chain of (status, location?) tuples and the
+// fetcher walks through them.
+function scriptedFetch(
+  hops: Array<{ status: number; location?: string }>,
+): { fetcher: typeof fetch; visited: string[] } {
+  const visited: string[] = [];
+  let i = 0;
+  const fetcher: typeof fetch = async (input: unknown): Promise<Response> => {
+    visited.push(typeof input === 'string' ? input : (input as Request).url);
+    const hop = hops[i] ?? hops[hops.length - 1];
+    i++;
+    const headers = new Headers();
+    if (hop.location) headers.set('location', hop.location);
+    return new Response('', { status: hop.status, headers });
+  };
+  return { fetcher, visited };
+}
+
 // ============================================================================
 // parseAllowedSenders
 // ============================================================================
@@ -270,10 +291,18 @@ Deno.test('hook — allowed sender + safe URL + 200 → strips needs-confirm, ad
   assertEquals(typeof v.fields.auto_confirmed_at, 'string');
 });
 
-Deno.test('hook — 302 redirect status counts as success', async () => {
+Deno.test('hook — 302 to safe URL → walk + auto-confirm (B007)', async () => {
+  // Pre-B007 this used `redirect: 'follow'` and the fetcher saw only the
+  // final 302 status; now the hook walks redirects manually, validating
+  // each Location with isSafeUrl. A 302 to another safe https host with
+  // a confirm-style path resolves to the underlying 200.
+  const { fetcher, visited } = scriptedFetch([
+    { status: 302, location: 'https://substack.com/confirm/redirected?t=abc' },
+    { status: 200 },
+  ]);
   const hook = createAutoConfirmHook({
     allowedSenders: ['*@substack.com'],
-    fetch: stubFetch(302),
+    fetch: fetcher,
   });
   const item = makeItem({
     from_email: 'hi@substack.com',
@@ -282,6 +311,77 @@ Deno.test('hook — 302 redirect status counts as success', async () => {
   const v = await hook(item, CTX);
   if (typeof v === 'string') throw new Error('expected mutated item');
   assert(v.labels?.includes('auto-confirmed'));
+  assertEquals(v.fields.auto_confirm_status, 200);
+  assertEquals(visited.length, 2);
+});
+
+Deno.test('hook — 302 to unsubscribe URL → walk aborted, labels unchanged (B007)', async () => {
+  // B007 attack scenario: hostile newsletter origin sends a safely-validated
+  // confirm URL that 302s to its own unsubscribe endpoint (or any
+  // off-allowlist target). Pre-fix this would auto-click the unsubscribe;
+  // post-fix the redirect target fails isSafeUrl and the walk aborts.
+  const { fetcher, visited } = scriptedFetch([
+    { status: 302, location: 'https://substack.com/unsubscribe?t=abc' },
+  ]);
+  const hook = createAutoConfirmHook({
+    allowedSenders: ['*@substack.com'],
+    fetch: fetcher,
+  });
+  const item = makeItem({
+    from_email: 'hi@substack.com',
+    confirm_url: 'https://substack.com/confirm?t=abc',
+  });
+  const v = await hook(item, CTX);
+  if (typeof v === 'string') throw new Error('expected mutated item');
+  // needs-confirm preserved so the user can manual-confirm later if needed
+  assert(v.labels?.includes('needs-confirm'));
+  assert(!v.labels?.includes('auto-confirmed'));
+  assertEquals(v.fields.auto_confirm_error, 'redirect blocked: target failed isSafeUrl');
+  // Critical: only one fetch dispatched — the unsubscribe URL was never hit
+  assertEquals(visited.length, 1);
+});
+
+Deno.test('hook — 302 to IP literal → walk aborted (B007)', async () => {
+  // Cousin of the unsubscribe attack: redirect to a raw IP host. isSafeUrl
+  // rejects IP literals; walk aborts.
+  const { fetcher, visited } = scriptedFetch([
+    { status: 302, location: 'https://192.168.1.50/confirm' },
+  ]);
+  const hook = createAutoConfirmHook({
+    allowedSenders: ['*@substack.com'],
+    fetch: fetcher,
+  });
+  const item = makeItem({
+    from_email: 'hi@substack.com',
+    confirm_url: 'https://substack.com/confirm?t=abc',
+  });
+  const v = await hook(item, CTX);
+  if (typeof v === 'string') throw new Error('expected mutated item');
+  assertEquals(v.fields.auto_confirm_error, 'redirect blocked: target failed isSafeUrl');
+  assertEquals(visited.length, 1);
+});
+
+Deno.test('hook — redirect chain longer than MAX_REDIRECTS aborts (B007)', async () => {
+  // Pathological: peer keeps 302-ing to other safe URLs forever. Cap is 3
+  // hops; the 4th hop should error.
+  const { fetcher, visited } = scriptedFetch([
+    { status: 302, location: 'https://substack.com/confirm/a' },
+    { status: 302, location: 'https://substack.com/confirm/b' },
+    { status: 302, location: 'https://substack.com/confirm/c' },
+    { status: 302, location: 'https://substack.com/confirm/d' },
+    { status: 302, location: 'https://substack.com/confirm/e' },
+  ]);
+  const hook = createAutoConfirmHook({
+    allowedSenders: ['*@substack.com'],
+    fetch: fetcher,
+  });
+  const item = makeItem({
+    from_email: 'hi@substack.com',
+    confirm_url: 'https://substack.com/confirm?t=abc',
+  });
+  const v = await hook(item, CTX);
+  if (typeof v === 'string') throw new Error('expected mutated item');
+  assertEquals(v.fields.auto_confirm_error, 'too many redirects (>3)');
 });
 
 // ============================================================================
@@ -476,4 +576,47 @@ Deno.test('dynamic — getPatterns wins when both static and dynamic sources are
   const v = await hook(beehiivItem, CTX);
   if (typeof v === 'string') throw new Error('expected mutated item');
   assert(v.labels?.includes('auto-confirmed'));
+});
+
+// ============================================================================
+// B015 — cache invalidation via subscribeInvalidations
+// ============================================================================
+
+Deno.test('hook — subscribeInvalidations clears cache mid-flight (B015)', async () => {
+  // The default cacheTtlMs is 30s. Without B015, a pattern delete takes up
+  // to 30s to propagate. With the invalidation channel wired, the next
+  // ingest after a delete sees the fresh patterns.
+  let currentPatterns = ['*@substack.com'];
+  let invalidator: (() => void) | null = null;
+
+  const hook = createAutoConfirmHook({
+    getPatterns: async () => currentPatterns,
+    fetch: stubFetch(200),
+    cacheTtlMs: 60_000, // long TTL — without invalidation we'd be stuck
+    subscribeInvalidations: (cb) => {
+      invalidator = cb;
+      return () => { invalidator = null; };
+    },
+  });
+
+  // First call populates the cache.
+  const substackItem = makeItem({
+    from_email: 'hi@substack.com',
+    confirm_url: 'https://substack.com/confirm',
+  });
+  const v1 = await hook(substackItem, CTX);
+  if (typeof v1 === 'string') throw new Error('expected mutated item');
+  assert(v1.labels?.includes('auto-confirmed'));
+
+  // Operator deletes the pattern. Invalidator fires.
+  currentPatterns = [];
+  invalidator!();
+
+  // Next ingest should NOT auto-confirm — cache invalidated, fresh source
+  // returns no patterns.
+  const substackItem2 = makeItem({
+    from_email: 'hi@substack.com',
+    confirm_url: 'https://substack.com/confirm',
+  });
+  assertEquals(await hook(substackItem2, CTX), 'accept');
 });

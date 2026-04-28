@@ -167,12 +167,57 @@ function isUnsubscribeUrl(url: string): boolean {
 }
 
 /**
+ * Pull `<a href="X">Y</a>` pairs out of an HTML body. Best-effort regex
+ * extractor (Workers don't ship an HTML parser); the format we care about
+ * — newsletter platform confirm buttons — is consistently shaped enough
+ * that this is robust in practice. Returns `[]` when no anchors found.
+ *
+ * Used by `extractConfirmUrl` for B016: an HTML body lets us pick the URL
+ * whose visible link text actually says "confirm subscription" / "click
+ * here to confirm", instead of relying on "first URL near a confirm-y
+ * phrase" (which can be tricked by attacker-crafted bodies that put a
+ * malicious link right after a benign anchor phrase).
+ */
+function extractAnchorPairs(html: string): Array<{ href: string; text: string }> {
+  // Anchor regex: case-insensitive, dotall-equivalent (`[\s\S]` for inner
+  // content), captures `href` (group 1) and inner HTML (group 2). Not a
+  // full parser — won't survive nested anchors or quote-escaped hrefs —
+  // but neither pattern shows up in confirmation emails.
+  const re = /<a\s[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const out: Array<{ href: string; text: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const href = m[1].trim();
+    // Strip the inner HTML to plain text — drop tags, collapse whitespace.
+    const text = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (href) out.push({ href, text });
+  }
+  return out;
+}
+
+/**
+ * Heuristic: does the visible anchor text look like a confirm CTA?
+ * Looser than the subject heuristic — anchor text is usually short
+ * ("Confirm subscription", "Click here", "Yes, I'm in") so we just
+ * scan for the canonical confirm phrases.
+ */
+function isConfirmAnchorText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return ANCHOR_PHRASES.some((p) => lower.includes(p));
+}
+
+/**
  * Find the strongest confirmation URL in a body. Returns `null` if nothing
  * plausible. Strategy:
  *
+ *   0. **HTML-anchor preference (B016).** When the body looks like HTML,
+ *      extract `<a href="X">Y</a>` pairs and return the first non-unsub
+ *      href whose visible text matches a confirm anchor phrase. This is
+ *      the most reliable signal — we know the URL is what the user would
+ *      see when they clicked the "Confirm subscription" button.
  *   1. Split body into lines. Find lines containing any ANCHOR_PHRASES;
  *      extract the first non-unsubscribe URL from those lines, or the
- *      lines immediately following.
+ *      lines immediately following. Plaintext fallback.
  *   2. Failing that, scan all URLs — first one whose path matches
  *      PATH_HINTS wins.
  *   3. Failing that, return null. (We deliberately don't fall back to
@@ -183,6 +228,19 @@ export function extractConfirmUrl(body: string | undefined | null): string | nul
   if (!body) return null;
   const text = String(body);
   if (!text) return null;
+
+  // Strategy 0: HTML anchor preference. Cheap signature: the body has
+  // `<a` and `</a>` tokens. False positives are fine — we just fall through
+  // to the plaintext strategies if no anchor matches.
+  if (/<a\s[^>]*href=/i.test(text) && /<\/a>/i.test(text)) {
+    const pairs = extractAnchorPairs(text);
+    for (const { href, text: anchorText } of pairs) {
+      if (isUnsubscribeUrl(href)) continue;
+      if (isConfirmAnchorText(anchorText)) {
+        return stripTrailingPunct(href);
+      }
+    }
+  }
 
   // Strategy 1: anchor-line URL.
   const lines = text.split(/\r?\n/);
@@ -258,13 +316,17 @@ export function detectConfirmation(item: InboxItem): ConfirmDetectResult {
 
 function resolveBodyText(item: InboxItem): string | null {
   const fields = item.fields ?? {};
+  // HTML preferred when both are present — the B016 anchor-pair
+  // extractor needs `<a href>` markup to work. Plaintext bodies still
+  // fall back to the line-scan heuristic.
+  if (typeof fields.body_html === 'string') return fields.body_html;
   if (typeof fields.body_text === 'string') return fields.body_text;
   const b = item.body as unknown;
   if (typeof b === 'string') return b;
   if (b && typeof b === 'object') {
     const obj = b as Record<string, unknown>;
-    if (typeof obj.text === 'string') return obj.text;
     if (typeof obj.html === 'string') return obj.html;
+    if (typeof obj.text === 'string') return obj.text;
   }
   return null;
 }

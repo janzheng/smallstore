@@ -92,6 +92,23 @@ export interface AutoConfirmOptions {
   cacheTtlMs?: number;
 
   /**
+   * Cache invalidation channel (B015). When provided, the hook calls
+   * `subscribeInvalidations(invalidate)` once at construction; the store
+   * fires `invalidate()` after every add/delete so the in-process cache
+   * resets within one ingest tick instead of waiting up to `cacheTtlMs`.
+   *
+   * Wire `AutoConfirmSendersStore.subscribe` here:
+   * ```
+   *   subscribeInvalidations: (cb) => store.subscribe(cb),
+   * ```
+   *
+   * Returns an unsubscribe function the hook never calls today (the hook
+   * has the lifetime of the Worker isolate); callers are free to ignore
+   * the return value.
+   */
+  subscribeInvalidations?: (invalidate: () => void) => () => void;
+
+  /**
    * HTTP client — injectable for tests. Defaults to global `fetch`.
    */
   fetch?: typeof fetch;
@@ -227,6 +244,16 @@ export function createAutoConfirmHook(
   let cachedPatterns: string[] | null = null;
   let cachedAt = 0;
 
+  // Invalidation channel (B015): when wired, store mutations clear the
+  // cache so the next hook invocation re-resolves. Without this, a freshly-
+  // deleted pattern can still auto-confirm for up to `cacheTtlMs` (30s).
+  if (opts.subscribeInvalidations) {
+    opts.subscribeInvalidations(() => {
+      cachedPatterns = null;
+      cachedAt = 0;
+    });
+  }
+
   async function resolvePatterns(): Promise<string[]> {
     if (opts.getPatterns) {
       const now = Date.now();
@@ -270,25 +297,66 @@ export function createAutoConfirmHook(
     const url = item.fields?.confirm_url;
     if (typeof url !== 'string' || !isSafeUrl(url)) return 'accept';
 
-    // Fire the click.
+    // Manual redirect walk (B007). The previous implementation used
+    // `redirect: 'follow'`, which let a hostile newsletter sender 302 from a
+    // safely-validated origin to an unsubscribe URL or off-allowlist host.
+    // Now we walk redirects ourselves, re-running `isSafeUrl()` on every
+    // Location header before issuing the next hop. Capped at MAX_REDIRECTS
+    // hops to prevent loops + budget overrun.
+    const MAX_REDIRECTS = 3;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let status: number | null = null;
     let error: string | null = null;
     try {
-      const res = await fetcher(url, {
-        method: 'GET',
-        redirect: 'follow',
-        signal: controller.signal,
-        headers: { 'user-agent': 'smallstore-auto-confirm/1.0' },
-      });
-      status = res.status;
-      // Drain to release the socket. Body content is irrelevant — we only
-      // care about status.
-      try {
-        await res.text();
-      } catch { /* ignore drain errors */ }
-      if (status >= 400) error = `HTTP ${status}`;
+      let currentUrl = url;
+      let hops = 0;
+      while (true) {
+        const res = await fetcher(currentUrl, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: controller.signal,
+          headers: { 'user-agent': 'smallstore-auto-confirm/1.0' },
+        });
+        status = res.status;
+        // Drain to release the socket on every hop. Body irrelevant.
+        try {
+          await res.text();
+        } catch { /* ignore drain errors */ }
+
+        if (status >= 300 && status < 400) {
+          // Redirect — check Location and re-validate before following.
+          const next = res.headers.get('location');
+          if (!next) {
+            error = `redirect ${status} without Location header`;
+            break;
+          }
+          // Resolve relative redirects against the current hop, then check
+          // the absolute form is still safe. `isSafeUrl` rejects non-https,
+          // IP literals, and unsubscribe paths — exactly what we don't
+          // want to auto-follow on a redirect.
+          let resolved: string;
+          try {
+            resolved = new URL(next, currentUrl).toString();
+          } catch {
+            error = 'redirect Location not a valid URL';
+            break;
+          }
+          if (!isSafeUrl(resolved)) {
+            error = 'redirect blocked: target failed isSafeUrl';
+            break;
+          }
+          if (++hops > MAX_REDIRECTS) {
+            error = `too many redirects (>${MAX_REDIRECTS})`;
+            break;
+          }
+          currentUrl = resolved;
+          continue;
+        }
+
+        if (status >= 400) error = `HTTP ${status}`;
+        break;
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
