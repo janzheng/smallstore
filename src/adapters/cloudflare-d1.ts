@@ -28,6 +28,7 @@ import type { AdapterCapabilities } from '../types.ts';
 import type { RetryOptions } from '../utils/retry.ts';
 import { retryFetch, type RetryFetchOptions } from '../utils/retry-fetch.ts';
 import { debug } from '../utils/debug.ts';
+import { CorruptValueError } from './errors.ts';
 import {
   applyMessagingMigrations,
   buildDeleteByIdSql,
@@ -91,6 +92,19 @@ export interface CloudflareD1Config {
    * See `.brief/mailroom-pipeline.md` § FTS5 for product-level rationale.
    */
   messaging?: boolean;
+
+  /**
+   * Maximum number of concurrent deletes per batch in `clear()`.
+   *
+   * `clear()` paginates the key list into batches of 100 and issues
+   * deletes for each batch. Previous behaviour ran every key in a batch
+   * via `Promise.all` (i.e. fully unbounded fan-out per batch). On large
+   * tables that swamps D1 with parallel statements. This knob caps the
+   * in-flight delete count per batch.
+   *
+   * Default: 4.
+   */
+  clearConcurrency?: number;
 }
 
 interface ApiResponse<T = any> {
@@ -119,8 +133,21 @@ export class CloudflareD1Adapter implements StorageAdapter {
   private mode: 'http' | 'native';
   private retryOpts?: RetryFetchOptions;
   private messaging: boolean;
-  /** Cached flag — true once ensureTable() has completed successfully. */
-  private migrated = false;
+  private clearConcurrency: number;
+  /**
+   * Memoized in-flight (or completed) `ensureTable()` run.
+   *
+   * Stored as `Promise<void>` rather than a boolean flag so two concurrent
+   * first writes share the same migration run instead of racing it
+   * (TOCTOU on a `migrated` flag would let both pass the guard, both call
+   * `applyMessagingMigrations`, and both insert into `d1_migrations` with
+   * the same name — the second insert collides on PK).
+   *
+   * If the migration rejects, we clear the cache so the next call retries
+   * (treating the failure as transient — better than permanently latching
+   * the adapter into a broken state).
+   */
+  private ensureTablePromise: Promise<void> | null = null;
   
   // Adapter capabilities
   readonly capabilities: AdapterCapabilities = {
@@ -164,6 +191,7 @@ export class CloudflareD1Adapter implements StorageAdapter {
     this.table = config.table || DEFAULT_TABLE;
     this.retryOpts = config.retry === false ? { enabled: false } : config.retry ? { ...config.retry } : undefined;
     this.messaging = config.messaging === true;
+    this.clearConcurrency = Math.max(1, config.clearConcurrency ?? 4);
 
     if (this.messaging && this.mode !== 'native') {
       throw new Error(
@@ -185,9 +213,21 @@ export class CloudflareD1Adapter implements StorageAdapter {
   // Helper: Ensure table exists
   // ============================================================================
   
-  private async ensureTable(): Promise<void> {
-    if (this.migrated) return;
+  private ensureTable(): Promise<void> {
+    // Memoize the migration as a Promise so concurrent first writes share
+    // the same in-flight run (B035). On rejection, clear the cache so the
+    // next caller retries — a transient migration failure shouldn't latch
+    // the adapter shut.
+    if (this.ensureTablePromise) return this.ensureTablePromise;
 
+    this.ensureTablePromise = this.runMigration().catch((err) => {
+      this.ensureTablePromise = null;
+      throw err;
+    });
+    return this.ensureTablePromise;
+  }
+
+  private async runMigration(): Promise<void> {
     if (this.mode === 'native' && this.binding) {
       if (this.messaging) {
         // Messaging mode — denormalized InboxItem columns + FTS5 + triggers.
@@ -212,8 +252,6 @@ export class CloudflareD1Adapter implements StorageAdapter {
         body: JSON.stringify({ table: this.table }),
       });
     }
-
-    this.migrated = true;
   }
   
   // ============================================================================
@@ -282,31 +320,60 @@ export class CloudflareD1Adapter implements StorageAdapter {
           return null;
         }
 
-        // Parse value
-        try {
-          return JSON.parse(result.value as string);
-        } catch {
-          return result.value;
-        }
+        // Parse value. B005: previously this fell through to `return result.value`
+        // (the raw string) on any JSON.parse failure, which masked corruption —
+        // callers got back a string when they expected an object. Now we throw
+        // a typed CorruptValueError so the caller can decide whether to repair,
+        // skip, or alert.
+        return this.decodeStoredValue(key, result.value as string);
       } else {
         // HTTP mode
         const params = new URLSearchParams();
         params.set('key', key);
         params.set('table', this.table);
-        
+
         const response = await this.httpRequest<{ key: string; value: any }>(
           `/d1/kv?${params.toString()}`
         );
-        
+
         if (!response.success) {
           return null;
         }
-        
+
         return response.data?.value ?? null;
       }
     } catch (error) {
+      // CorruptValueError is intentionally surfaced — masking it as `null`
+      // would just push the bug downstream.
+      if (error instanceof CorruptValueError) throw error;
       console.error(`[CloudflareD1Adapter] Error getting ${key}:`, error);
       return null;
+    }
+  }
+
+  /**
+   * Decode a stored generic-mode value.
+   *
+   * - String inputs are JSON-parsed; non-JSON strings throw `CorruptValueError`.
+   * - The exception: a value that was set as a literal string (no JSON encoding
+   *   was applied because it was already a string at write time) cannot be
+   *   distinguished from a corrupt blob at the storage layer. Callers in
+   *   generic mode should pass objects/arrays through `set()` (which JSON-
+   *   stringifies) so reads can round-trip cleanly. Strings written via
+   *   `set()` are stored as-is; this matches the prior behavior for any
+   *   value that *did* parse, but corrupt-or-string-typed-value is now an
+   *   explicit error rather than a silent fallback.
+   */
+  private decodeStoredValue(key: string, raw: string): any {
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      throw new CorruptValueError(
+        'cloudflare-d1',
+        'get',
+        `Stored value for key "${key}" is not valid JSON; row may be corrupt or was written outside the adapter`,
+        err instanceof Error ? err : undefined,
+      );
     }
   }
   
@@ -474,19 +541,32 @@ export class CloudflareD1Adapter implements StorageAdapter {
   
   /**
    * Clear all data (for testing)
-   * 
+   *
    * @param prefix - Optional prefix to clear only specific namespace
+   *
+   * B034: Previous behaviour ran every key in a batch through `Promise.all`
+   * (i.e. unbounded fan-out per batch — 100 simultaneous deletes). This
+   * fans out enough parallel D1 statements to swamp the binding on large
+   * tables. We now run sequential batches with at most `clearConcurrency`
+   * deletes in flight at any time inside a batch. Default 4. Tunable via
+   * the constructor's `clearConcurrency` config.
    */
   async clear(prefix?: string): Promise<void> {
     const keys = await this.keys(prefix);
-    
+
     if (keys.length === 0) return;
-    
-    // Delete in batches of 100
+
     const batchSize = 100;
+    const concurrency = this.clearConcurrency;
+
     for (let i = 0; i < keys.length; i += batchSize) {
       const batch = keys.slice(i, i + batchSize);
-      await Promise.all(batch.map((key) => this.delete(key)));
+      // Sequential sub-batches inside the batch — at most `concurrency`
+      // deletes in flight at any time.
+      for (let j = 0; j < batch.length; j += concurrency) {
+        const slice = batch.slice(j, j + concurrency);
+        await Promise.all(slice.map((key) => this.delete(key)));
+      }
     }
   }
   
@@ -672,17 +752,76 @@ export class CloudflareD1Adapter implements StorageAdapter {
    *
    * @param options - List options
    * @returns Array of items
+   *
+   * B036: Native mode now pushes the offset/limit window down to SQL via
+   * `LIMIT ? OFFSET ?` instead of full-scanning keys + slicing in JS, then
+   * making `limit` extra `get()` round-trips. Single round trip, decode
+   * each row's value with the same JSON-parse semantics as `get()` (i.e.
+   * a corrupt row throws `CorruptValueError` rather than getting silently
+   * coerced to a raw string).
+   *
+   * Messaging mode reuses `buildListSql` with the same window applied at
+   * the SQL layer.
+   *
+   * HTTP mode falls back to keys-then-get (no equivalent windowed
+   * endpoint exists in the smallstore-workers HTTP API today).
    */
   async list(options?: {
     prefix?: string;
     limit?: number;
     offset?: number;
   }): Promise<any[]> {
+    const offset = Math.max(0, options?.offset ?? 0);
+    // Use a sentinel for "no limit" — D1 doesn't accept undefined here.
+    // When unset, ask SQLite for everything (-1 == unbounded in SQLite syntax).
+    const limit = options?.limit !== undefined ? Math.max(0, options.limit) : -1;
+
+    if (this.mode === 'native' && this.binding) {
+      await this.ensureTable();
+
+      if (this.messaging) {
+        // Messaging mode: SELECT * with received_at ordering, then decode rows.
+        const baseSql = options?.prefix !== undefined
+          ? `SELECT * FROM ${this.table} WHERE id LIKE ? ORDER BY received_at DESC`
+          : `SELECT * FROM ${this.table} ORDER BY received_at DESC`;
+        const sql = `${baseSql} LIMIT ? OFFSET ?`;
+
+        const stmt = this.binding.prepare(sql);
+        const result = options?.prefix !== undefined
+          ? await stmt.bind(`${options.prefix}%`, limit, offset).all()
+          : await stmt.bind(limit, offset).all();
+
+        return (result.results ?? []).map((row: any) => decodeItemRow(row));
+      }
+
+      // Generic k/v mode: pull (key, value) directly with LIMIT/OFFSET.
+      const baseSql = options?.prefix !== undefined
+        ? `SELECT key, value FROM ${this.table} WHERE key LIKE ? ORDER BY key ASC`
+        : `SELECT key, value FROM ${this.table} ORDER BY key ASC`;
+      const sql = `${baseSql} LIMIT ? OFFSET ?`;
+
+      const stmt = this.binding.prepare(sql);
+      const result = options?.prefix !== undefined
+        ? await stmt.bind(`${options.prefix}%`, limit, offset).all()
+        : await stmt.bind(limit, offset).all();
+
+      const items: any[] = [];
+      for (const row of result.results ?? []) {
+        const raw = (row as any).value as string;
+        if (raw === null || raw === undefined) continue;
+        // Same decode semantics as get() — corrupt rows throw rather than
+        // returning the raw string and masking the corruption.
+        items.push(this.decodeStoredValue((row as any).key as string, raw));
+      }
+      return items;
+    }
+
+    // HTTP mode: no equivalent windowed endpoint, keep keys-then-get.
     const keys = await this.keys(options?.prefix);
-    const startIdx = options?.offset || 0;
+    const startIdx = offset;
     const endIdx = options?.limit ? startIdx + options.limit : keys.length;
     const keysSlice = keys.slice(startIdx, endIdx);
-    
+
     const items: any[] = [];
     for (const key of keysSlice) {
       const value = await this.get(key);
@@ -690,7 +829,7 @@ export class CloudflareD1Adapter implements StorageAdapter {
         items.push(value);
       }
     }
-    
+
     return items;
   }
   

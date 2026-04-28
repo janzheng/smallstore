@@ -67,10 +67,35 @@ export class UnsupportedDataTypeError extends AdapterError {
 }
 
 /**
- * Adapter configuration error
- * 
+ * Stored value could not be decoded back into its expected shape
+ *
+ * Thrown when the adapter reads a row that was stored as a JSON-encoded
+ * object (or other structured value) but `JSON.parse` (or equivalent
+ * decoder) fails. The previous behaviour of silently returning the raw
+ * string masked corruption from callers — they'd get back a string when
+ * they expected an object, then crash deeper in the pipeline.
+ *
  * @example
- * throw new AdapterConfigError('notion', 'init', 
+ * throw new CorruptValueError('cloudflare-d1', 'get',
+ *   'Stored value is not valid JSON for key "items/abc"');
+ */
+export class CorruptValueError extends AdapterError {
+  constructor(
+    adapterName: string,
+    operation: string,
+    reason: string,
+    cause?: Error
+  ) {
+    super(adapterName, operation, reason, cause);
+    this.name = 'CorruptValueError';
+  }
+}
+
+/**
+ * Adapter configuration error
+ *
+ * @example
+ * throw new AdapterConfigError('notion', 'init',
  *   'Missing required schema mappings for database');
  */
 export class AdapterConfigError extends AdapterError {
@@ -183,6 +208,10 @@ export function isValidationError(error: unknown): error is ValidationError {
 
 export function isSizeLimitError(error: unknown): error is SizeLimitError {
   return error instanceof SizeLimitError;
+}
+
+export function isCorruptValueError(error: unknown): error is CorruptValueError {
+  return error instanceof CorruptValueError;
 }
 
 /**

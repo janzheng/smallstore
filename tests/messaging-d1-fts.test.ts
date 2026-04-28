@@ -21,6 +21,7 @@ import { assert, assertEquals, assertExists, assertRejects } from 'jsr:@std/asse
 import { Database } from 'jsr:@db/sqlite@0.12';
 
 import { CloudflareD1Adapter, createCloudflareD1Adapter } from '../src/adapters/cloudflare-d1.ts';
+import { CorruptValueError } from '../src/adapters/errors.ts';
 import {
   buildFtsSql,
   buildUpsertSql,
@@ -487,4 +488,117 @@ Deno.test('non-messaging mode — query({ fts }) is a no-op (fts ignored, scan u
   const result = await adapter.query({ fts: 'hello' });
   // The fallback scan returns all items (no filter applied).
   assertEquals(result.data.length, 1);
+});
+
+// ============================================================================
+// Lane C2 — security remediation tests
+//
+// B005: corrupt rows surface as `CorruptValueError`, not raw strings.
+// B034: `clear()` doesn't blow up on a 50-key table.
+// B035: concurrent `ensureTable()` calls share one migration run.
+// B036: `list({ offset, limit })` pushes the window down to SQL.
+// ============================================================================
+
+Deno.test('B005 — generic mode: get() throws CorruptValueError on non-JSON value', async () => {
+  const binding = makeMockD1();
+  const adapter = createCloudflareD1Adapter({ binding, table: 'kv_store' });
+
+  // Force a normal write so the table exists, then poke a bad row in
+  // directly under the binding (simulates external corruption).
+  await adapter.set('valid', { ok: true });
+  binding._db
+    .prepare('INSERT INTO kv_store (key, value) VALUES (?, ?)')
+    .run('corrupt', 'this is not json {');
+
+  // Sanity: valid key still round-trips.
+  assertEquals(await adapter.get('valid'), { ok: true });
+
+  await assertRejects(
+    () => adapter.get('corrupt'),
+    CorruptValueError,
+    'not valid JSON',
+  );
+});
+
+Deno.test('B034 — clear() handles 50 keys without blowing up', async () => {
+  const binding = makeMockD1();
+  // Smaller concurrency than default to make sure batching path is exercised.
+  const adapter = createCloudflareD1Adapter({
+    binding,
+    table: 'kv_store',
+    clearConcurrency: 2,
+  });
+
+  for (let i = 0; i < 50; i++) {
+    await adapter.set(`k${i.toString().padStart(2, '0')}`, { i });
+  }
+  assertEquals((await adapter.keys()).length, 50);
+
+  await adapter.clear();
+  assertEquals((await adapter.keys()).length, 0);
+});
+
+Deno.test('B035 — concurrent ensureTable() calls share one migration run', async () => {
+  const binding = makeMockD1();
+  // Wrap binding.prepare so we can count migration-table writes.
+  let migrationInsertCount = 0;
+  const realPrepare = binding.prepare.bind(binding);
+  binding.prepare = (sql: string) => {
+    // Match the tracking-row insert from `applyMessagingMigrations`:
+    //   INSERT INTO d1_migrations (name) VALUES (?)
+    if (/INSERT\s+INTO\s+d1_migrations/i.test(sql)) {
+      migrationInsertCount++;
+    }
+    return realPrepare(sql);
+  };
+
+  const adapter = createCloudflareD1Adapter({ binding, table: 'items', messaging: true });
+
+  // 5 concurrent first-time accesses — all share the same in-flight
+  // migration. Without the Promise<void> memoization this races and we'd
+  // see 5×10 = 50 migration insert attempts (and PK collisions on the
+  // tracking table).
+  await Promise.all([
+    adapter.keys(),
+    adapter.keys(),
+    adapter.keys(),
+    adapter.keys(),
+    adapter.keys(),
+  ]);
+
+  // Exactly one migration pass happened — 10 INSERT-tracking-row calls.
+  assertEquals(
+    migrationInsertCount,
+    10,
+    `expected 10 migration tracking inserts (one pass), got ${migrationInsertCount}`,
+  );
+
+  // And the tracking table holds exactly 10 rows.
+  const trackingRows = (binding._db
+    .prepare('SELECT COUNT(*) AS n FROM d1_migrations')
+    .get() as { n: number }).n;
+  assertEquals(trackingRows, 10);
+});
+
+Deno.test('B036 — list({ offset, limit }) returns the right SQL window', async () => {
+  const binding = makeMockD1();
+  const adapter = createCloudflareD1Adapter({ binding, table: 'kv_store' });
+
+  // 25 keys named k00..k24 — keys() orders ASC, so the slice [10..15)
+  // should land on k10..k14.
+  for (let i = 0; i < 25; i++) {
+    await adapter.set(`k${i.toString().padStart(2, '0')}`, { i });
+  }
+
+  const items = await adapter.list({ offset: 10, limit: 5 });
+  assertEquals(items.length, 5);
+  assertEquals(items.map((it: any) => it.i), [10, 11, 12, 13, 14]);
+
+  // Sanity: offset past the end returns empty.
+  const past = await adapter.list({ offset: 100, limit: 5 });
+  assertEquals(past.length, 0);
+
+  // Sanity: limit unset returns from offset to end.
+  const tail = await adapter.list({ offset: 22 });
+  assertEquals(tail.map((it: any) => it.i), [22, 23, 24]);
 });
