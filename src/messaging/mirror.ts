@@ -80,10 +80,27 @@ export interface MirrorConfig {
   recent_window_days?: number;
 }
 
+/**
+ * Sentinel peer name used in the single-element result array returned when
+ * a `runMirror()` invocation is short-circuited because another invocation
+ * is already in flight (B019). Callers that want to distinguish "this run
+ * did nothing because someone else is doing it" from "this run found no
+ * peers" can match on `peer_name === MIRROR_INFLIGHT_SENTINEL`.
+ */
+export const MIRROR_INFLIGHT_SENTINEL = '__mirror_inflight__';
+
 /** Per-peer summary returned from `runMirror`. */
 export interface MirrorRunResult {
   peer_name: string;
-  /** When set, the peer was skipped before any pushes. */
+  /**
+   * When set, the peer (or the entire run, for the `__mirror_inflight__`
+   * sentinel) was skipped before any pushes. Known values:
+   *   - `inbox "<name>" not registered` — registry miss
+   *   - `<env-var>` (from `resolvePeerAuth`) — auth env missing
+   *   - `'in-flight'` — another `runMirror()` invocation is already running
+   *     in this isolate; the second caller short-circuits to avoid two
+   *     concurrent rounds of PUTs racing on the peer.
+   */
   skipped?: string;
   /** Files successfully pushed. */
   pushed: number;
@@ -109,14 +126,68 @@ export interface RunMirrorOptions {
   peer_name?: string;
   /** Optional fetch override for tests. */
   fetcher?: typeof fetch;
+  /**
+   * Test-only overrides for the `recent.md` size caps (B022). Production
+   * never sets these — the defaults (200 items, 10 MB) are tuned for CF's
+   * 30 MB response cap. Tests use small values to exercise the trim
+   * mechanism without seeding millions of items.
+   * @internal
+   */
+  _recent_caps?: { itemCap?: number; byteCap?: number };
 }
+
+/**
+ * In-process mutex for `runMirror()` (B019).
+ *
+ * Cron fires `runMirror()` every 30 min while `POST /admin/inboxes/:name/mirror`
+ * calls the same function on demand. Two simultaneous runs both PUT
+ * `${prefix}slug.md` (and `recent.md`, where note ordering / window
+ * computation can diverge) → last-write-wins on the peer with the loser
+ * silently overwritten.
+ *
+ * `runMirror()` enumerates ALL peers regardless of caller (the optional
+ * `peer_name` filter is post-enumeration), so two concurrent invocations
+ * always do overlapping work. We therefore use a SINGLE GLOBAL key — not
+ * one-per-peer or one-per-source-inbox. The first caller acquires the
+ * mutex and runs to completion; the second caller sees `inFlight !== null`
+ * and short-circuits with a sentinel `MirrorRunResult[]` carrying
+ * `skipped: 'in-flight'`. The mutex is released in a `finally` so a thrown
+ * implementation error doesn't wedge the lock.
+ *
+ * (B020 follow-on: prune is the last block of `runMirrorImpl`, so the
+ * single mutex also gates prune against PUTs from a sibling call.)
+ */
+const inFlightMirror = new Map<string, Promise<MirrorRunResult[]>>();
+const MIRROR_LOCK_KEY = '__mirror__';
 
 /**
  * Run the mirror over every peer with a `metadata.mirror_config` (or just
  * one peer when `peer_name` is set). Returns one result per attempted
  * peer; never throws on per-slug or per-peer failures.
+ *
+ * Mutex'd against itself (B019): a second concurrent invocation does NOT
+ * await the first's completion — it returns a single
+ * `{ peer_name: MIRROR_INFLIGHT_SENTINEL, skipped: 'in-flight', pushed: 0, failed: [] }`
+ * result so the caller can log+move on without queuing another round.
  */
 export async function runMirror(opts: RunMirrorOptions): Promise<MirrorRunResult[]> {
+  const existing = inFlightMirror.get(MIRROR_LOCK_KEY);
+  if (existing) {
+    return [{
+      peer_name: MIRROR_INFLIGHT_SENTINEL,
+      skipped: 'in-flight',
+      pushed: 0,
+      failed: [],
+    }];
+  }
+  const promise = runMirrorImpl(opts).finally(() => {
+    inFlightMirror.delete(MIRROR_LOCK_KEY);
+  });
+  inFlightMirror.set(MIRROR_LOCK_KEY, promise);
+  return await promise;
+}
+
+async function runMirrorImpl(opts: RunMirrorOptions): Promise<MirrorRunResult[]> {
   const fetcher = opts.fetcher ?? fetch;
   const results: MirrorRunResult[] = [];
 
@@ -188,18 +259,24 @@ export async function runMirror(opts: RunMirrorOptions): Promise<MirrorRunResult
         // Hydrate bodies so the rendered markdown is self-contained
         // reading material — the "View item →" link below requires the
         // bearer token, which a user opening the .md in Finder/Obsidian
-        // doesn't have. O(N) R2 reads per slug; acceptable at current
-        // scale (cron is every 30 min). On read failure we keep the
-        // slim item — the renderer falls back to "(no note)" gracefully.
-        const fullItems: InboxItemFull[] = await Promise.all(
-          items.map(async (item) => {
+        // doesn't have. O(N) R2 reads per slug; on the worst-case
+        // newsletter (10k+ items) the previous `Promise.all(items.map(...))`
+        // spawned all reads concurrently and could starve the request
+        // budget / spike memory (B021). Cap at 10 in-flight per slug via
+        // a chunked-await pattern — chunk → await → next chunk. On read
+        // failure we keep the slim item; the renderer falls back to
+        // "(no note)" gracefully.
+        const fullItems: InboxItemFull[] = await mapWithConcurrency(
+          items,
+          MIRROR_HYDRATE_CONCURRENCY,
+          async (item) => {
             try {
               const full = await inbox.read(item.id, { full: true });
               return full ?? (item as InboxItemFull);
             } catch {
               return item as InboxItemFull;
             }
-          }),
+          },
         );
         const profile = buildProfile(slug, fullItems);
         const md = renderNewsletterProfile(config.source_inbox, slug, profile, fullItems, linkOrigin);
@@ -214,18 +291,41 @@ export async function runMirror(opts: RunMirrorOptions): Promise<MirrorRunResult
 
     // Cross-publisher reading list — `recent.md`. Reuses the bodies
     // already hydrated above so we don't double-fetch from R2.
+    //
+    // B022: rendered output is bounded by item count (RECENT_ITEM_CAP)
+    // AND aggregated body bytes (RECENT_BYTE_CAP). With a 365-day window
+    // across 50k inbox items the unbounded version blows past CF's 30 MB
+    // response cap. We pre-trim by date (newest first), then by item
+    // count, render, and if the resulting markdown is over the byte cap
+    // we trim further and re-render. Items beyond either cap are
+    // dropped with a console.log noting the omission count.
     if (config.include_recent !== false) {
       const windowDays = typeof config.recent_window_days === 'number' && config.recent_window_days > 0
         ? config.recent_window_days
         : 7;
+      const itemCap = opts._recent_caps?.itemCap ?? RECENT_ITEM_CAP;
+      const byteCap = opts._recent_caps?.byteCap ?? RECENT_BYTE_CAP;
       try {
-        await pushFile(
-          peer,
-          auth.headers,
-          fetcher,
-          `${prefix}recent.md`,
-          renderRecentFeed(config.source_inbox, allHydrated, linkOrigin, windowDays),
-        );
+        const { capped, omittedCount: itemOmits } = capRecentItems(allHydrated, itemCap);
+        let recentMd = renderRecentFeed(config.source_inbox, capped, linkOrigin, windowDays);
+        let byteOmits = 0;
+        // Byte trim — binary search-ish but simple: halve the slice until
+        // it fits. Items in `capped` are sorted newest-first so trimming
+        // from the tail keeps the most-recent items.
+        let trimmed = capped;
+        while (utf8ByteLength(recentMd) > byteCap && trimmed.length > 1) {
+          const newLen = Math.max(1, Math.floor(trimmed.length / 2));
+          byteOmits += trimmed.length - newLen;
+          trimmed = trimmed.slice(0, newLen);
+          recentMd = renderRecentFeed(config.source_inbox, trimmed, linkOrigin, windowDays);
+        }
+        if (itemOmits > 0 || byteOmits > 0) {
+          console.log(
+            `[mirror] recent.md trimmed for peer=${peer.name}: ` +
+              `item-cap omitted ${itemOmits}, byte-cap omitted ${byteOmits}`,
+          );
+        }
+        await pushFile(peer, auth.headers, fetcher, `${prefix}recent.md`, recentMd);
         result.pushed++;
         activeFilenames.add('recent.md');
       } catch (e) {
@@ -265,6 +365,91 @@ export async function runMirror(opts: RunMirrorOptions): Promise<MirrorRunResult
   }
 
   return results;
+}
+
+// ---------------------------------------------------------------------
+// Bounded-concurrency + size caps (B021, B022)
+// ---------------------------------------------------------------------
+
+/**
+ * Maximum in-flight `inbox.read({ full: true })` calls per slug during
+ * mirror hydration (B021). Keeps a 10k-item newsletter from spawning 10k
+ * concurrent R2 GETs. 10 is a conservative middle ground between
+ * throughput and CF subrequest budget pressure.
+ */
+const MIRROR_HYDRATE_CONCURRENCY = 10;
+
+/**
+ * Hard cap on items rendered into `recent.md` (B022). With a 365-day
+ * window across 50k inbox items, an unbounded render blows past CF's
+ * 30 MB response cap before the byte cap below would catch it. 200 is
+ * roughly two months of daily-ish newsletter sends across 5–10
+ * publishers — plenty for a "recent reading" view.
+ */
+const RECENT_ITEM_CAP = 200;
+
+/**
+ * Hard cap on `recent.md` rendered byte size (B022). 10 MB leaves
+ * generous headroom under CF's 30 MB response cap and matches the
+ * order-of-magnitude that markdown viewers / git hosts handle well.
+ * Above this we halve the item slice and re-render until we fit.
+ */
+const RECENT_BYTE_CAP = 10 * 1024 * 1024;
+
+/**
+ * Resolve `mapper` over `items` with at most `limit` in-flight at once.
+ * Implementation is a simple chunked-await: split into chunks of `limit`,
+ * `Promise.all` each chunk, append. Order of results matches input order.
+ * Avoids a third-party concurrency-limiter dep — simpler and adequate at
+ * this scale.
+ */
+async function mapWithConcurrency<T, R>(
+  items: ReadonlyArray<T>,
+  limit: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    const resolved = await Promise.all(chunk.map((item) => mapper(item)));
+    out.push(...resolved);
+  }
+  return out;
+}
+
+/**
+ * Pre-trim items destined for `recent.md` by item count (B022). Sorts
+ * newest-first by `original_sent_at` (with `sent_at` fallback) so the
+ * trim keeps the most-recent items, drops the rest, and reports how
+ * many were omitted. Items with no resolvable date are excluded too —
+ * `renderRecentFeed` filters them later anyway, but trimming here
+ * gives a tighter omit count.
+ */
+function capRecentItems(
+  items: ReadonlyArray<InboxItemFull>,
+  itemCap: number = RECENT_ITEM_CAP,
+): { capped: InboxItemFull[]; omittedCount: number } {
+  const dated: Array<{ item: InboxItemFull; dt: string }> = [];
+  for (const item of items) {
+    const dt = (item.fields?.original_sent_at as string | undefined) ??
+      (typeof item.sent_at === 'string' ? item.sent_at : undefined);
+    if (typeof dt === 'string' && dt.length > 0) {
+      dated.push({ item, dt });
+    }
+  }
+  dated.sort((a, b) => b.dt.localeCompare(a.dt));
+  if (dated.length <= itemCap) {
+    return { capped: dated.map((d) => d.item), omittedCount: 0 };
+  }
+  return {
+    capped: dated.slice(0, itemCap).map((d) => d.item),
+    omittedCount: dated.length - itemCap,
+  };
+}
+
+/** UTF-8 byte length of a string — used to enforce `recent.md`'s byte cap. */
+function utf8ByteLength(s: string): number {
+  return new TextEncoder().encode(s).byteLength;
 }
 
 // ---------------------------------------------------------------------

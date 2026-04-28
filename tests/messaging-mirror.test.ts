@@ -20,7 +20,7 @@ import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert';
 import { MemoryAdapter } from '../src/adapters/memory.ts';
 import { InboxRegistry } from '../src/messaging/registry.ts';
 import { createInbox } from '../src/messaging/inbox.ts';
-import { runMirror } from '../src/messaging/mirror.ts';
+import { MIRROR_INFLIGHT_SENTINEL, runMirror } from '../src/messaging/mirror.ts';
 import { createPeerStore } from '../src/peers/peer-registry.ts';
 import type { InboxConfig, InboxItem } from '../src/messaging/types.ts';
 import type { Peer } from '../src/peers/types.ts';
@@ -728,4 +728,256 @@ Deno.test('prune: failed delete recorded in failed[], does not tank push', async
   assertEquals(results[0].pruned, []); // delete failed, not counted as pruned
   assertEquals(results[0].failed.length, 1);
   assertStringIncludes(results[0].failed[0].slug, '__prune:cursed.md');
+});
+
+// ---------------------------------------------------------------------
+// B019 — concurrent runMirror() calls are mutex'd
+// ---------------------------------------------------------------------
+
+Deno.test('mirror: concurrent runMirror() calls — second call short-circuits with skipped: in-flight', async () => {
+  const f = await buildFixture();
+  await f.seed({ id: 'a', fields: { newsletter_slug: 'pub-a', forward_note: 'a' } });
+  await f.seed({ id: 'b', fields: { newsletter_slug: 'pub-b', forward_note: 'b' } });
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false } },
+  });
+
+  // Slow fetcher: every PUT awaits a manually-resolved gate so we can hold
+  // call #1 mid-flight while we kick off call #2. Without this, the
+  // serially-awaited per-slug loop in runMirror finishes before the second
+  // invocation even sees a populated inFlightMirror map.
+  const calls: MockedFetchCall[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const fetcher = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input.toString();
+    const method = init?.method ?? 'GET';
+    const headers: Record<string, string> = {};
+    if (init?.headers) {
+      const h = init.headers as Record<string, string>;
+      for (const k of Object.keys(h)) headers[k] = h[k];
+    }
+    const body = typeof init?.body === 'string' ? init.body : '';
+    calls.push({ url, method, headers, body });
+    await gate; // hold every PUT until the second call has had a chance to short-circuit
+    return new Response('ok', { status: 200 });
+  }) as typeof fetch;
+
+  const callOnePromise = runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  // Yield once so call #1 enters runMirrorImpl and registers in inFlightMirror.
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const callTwoResults = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  // Call #2 short-circuited immediately with the in-flight sentinel.
+  assertEquals(callTwoResults.length, 1);
+  assertEquals(callTwoResults[0].peer_name, MIRROR_INFLIGHT_SENTINEL);
+  assertEquals(callTwoResults[0].skipped, 'in-flight');
+  assertEquals(callTwoResults[0].pushed, 0);
+
+  // Now release call #1 so it can finish.
+  release();
+  const callOneResults = await callOnePromise;
+  assertEquals(callOneResults.length, 1);
+  assertEquals(callOneResults[0].pushed, 2);
+
+  // Only one round of PUTs happened — two slugs, not four.
+  const puts = calls.filter((c) => c.method === 'PUT');
+  assertEquals(puts.length, 2);
+  const paths = puts.map((c) => new URL(c.url).pathname).sort();
+  assertEquals(paths, ['/tf/pub-a.md', '/tf/pub-b.md']);
+
+  // After call #1 resolves, the mutex is released — a fresh call should run normally.
+  const callThreeResults = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+  assertEquals(callThreeResults[0].peer_name, 'tf');
+  assertEquals(callThreeResults[0].skipped, undefined);
+});
+
+// ---------------------------------------------------------------------
+// B021 — bounded concurrency for per-slug item hydration
+// ---------------------------------------------------------------------
+
+Deno.test('mirror: caps inbox.read() concurrency at 10 per slug (25 items → 3 batches)', async () => {
+  const f = await buildFixture();
+  // 25 items in a single slug; previously this would spawn 25 concurrent
+  // R2 reads. Now they should resolve in 3 batches of 10/10/5 with at
+  // most 10 in-flight at any moment.
+  for (let i = 0; i < 25; i++) {
+    await f.seed({
+      id: `item-${i}`,
+      fields: {
+        newsletter_slug: 'big-pub',
+        forward_note: `note ${i}`,
+      },
+    });
+  }
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false, include_recent: false } },
+  });
+  const { fetcher } = buildMockFetcher();
+
+  // Wrap inbox.read to track concurrent in-flight count + invocation order.
+  const originalRead = f.inbox.read.bind(f.inbox);
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const callTimestamps: number[] = [];
+  // deno-lint-ignore no-explicit-any
+  (f.inbox as any).read = async (...args: Parameters<typeof originalRead>) => {
+    inFlight++;
+    if (inFlight > maxInFlight) maxInFlight = inFlight;
+    callTimestamps.push(performance.now());
+    // small delay so multiple calls genuinely overlap
+    await new Promise((r) => setTimeout(r, 5));
+    try {
+      return await originalRead(...args);
+    } finally {
+      inFlight--;
+    }
+  };
+
+  const results = await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  assertEquals(results[0].pushed, 1);
+  assertEquals(callTimestamps.length, 25);
+
+  // Concurrency cap held — never more than 10 in-flight at once.
+  assert(maxInFlight <= 10, `maxInFlight ${maxInFlight} exceeded cap of 10`);
+  // And we did actually parallelize within a chunk — at least 2 in-flight
+  // (the previous fully-serialized version would peak at 1).
+  assert(maxInFlight >= 2, `maxInFlight ${maxInFlight} suggests serial execution`);
+
+  // Verify 3 distinct batches. Each chunk of 10 starts together (within a
+  // few ms of each other); the next chunk starts only after the previous
+  // chunk's awaits clear. Sort timestamps and inspect gaps: gaps within
+  // a batch are tiny; gaps between batches are roughly the per-call delay
+  // (5ms). With 25 items + concurrency 10 we expect 3 batches → 2 gaps.
+  const sorted = [...callTimestamps].sort((a, b) => a - b);
+  const gaps: number[] = [];
+  for (let i = 1; i < sorted.length; i++) gaps.push(sorted[i] - sorted[i - 1]);
+  // A "batch boundary" is a gap > 2ms (way above intra-batch jitter).
+  const boundaries = gaps.filter((g) => g > 2).length;
+  assertEquals(boundaries, 2, `expected 2 batch boundaries (3 batches); saw ${boundaries}`);
+});
+
+// ---------------------------------------------------------------------
+// B022 — recent.md size caps (item count + bytes)
+// ---------------------------------------------------------------------
+
+Deno.test('mirror: caps recent.md at 200 items even when 1000 are in window', async () => {
+  const f = await buildFixture();
+  // 1000 items, all in-window (sent_at = now), all under one publisher
+  // (so we don't blow up perf with 1000 distinct slug hydrations — single
+  // slug means a single per-slug loop iteration).
+  const nowIso = new Date().toISOString();
+  for (let i = 0; i < 1000; i++) {
+    await f.seed({
+      id: `item-${i}`,
+      sent_at: nowIso,
+      fields: {
+        newsletter_slug: 'pub',
+        original_subject: `Item ${i}`,
+        original_sent_at: new Date(Date.now() - i * 1000).toISOString(), // distinct-but-recent
+      },
+    });
+  }
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } }, // recent on
+  });
+  const { fetcher, calls } = buildMockFetcher();
+
+  await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+  });
+
+  const recent = calls.find((c) => c.url.endsWith('/recent.md'));
+  assert(recent, 'expected a PUT to recent.md');
+  // Header reports the rendered item count after the cap.
+  assertStringIncludes(recent.body, '**Items:** 200');
+  // And item-201 onwards should NOT appear (we sort newest-first and the
+  // first item seeded had original_sent_at = now, so item-0 is included
+  // and item-999 is dropped).
+  assertStringIncludes(recent.body, 'Item 0');
+  // Item 999 was the oldest and should be dropped under the 200-cap.
+  assert(!recent.body.includes('Item 999'), 'expected Item 999 to be dropped under 200-item cap');
+});
+
+Deno.test('mirror: caps recent.md by bytes when render exceeds byte cap', async () => {
+  // The production byte cap is 10 MB — well above what 200 max-bodied
+  // items can ever produce. To exercise the byte-trim mechanism without
+  // seeding millions of items we use the test-only `_recent_caps`
+  // override to drop the cap to 50 KB and seed 32 items with bodies just
+  // small enough to all fit per-item but big enough to bust the
+  // aggregate cap.
+  const f = await buildFixture();
+  const body = 'word '.repeat(1000); // ~5 KB per item, well under the per-item 20 KB cap
+  const nowIso = new Date().toISOString();
+  for (let i = 0; i < 32; i++) {
+    await f.seed({
+      id: `item-${i}`,
+      sent_at: nowIso,
+      body, // top-level body — extractRenderableBody reads from item.body
+      fields: {
+        newsletter_slug: 'pub',
+        original_subject: `Big ${i}`,
+        original_sent_at: new Date(Date.now() - i * 1000).toISOString(),
+      },
+    });
+  }
+  await f.registerPeer({
+    name: 'tf',
+    metadata: { mirror_config: { source_inbox: 'mailroom', prune_orphans: false } },
+  });
+  const { fetcher, calls } = buildMockFetcher();
+
+  await runMirror({
+    registry: f.registry,
+    peerStore: f.peerStore,
+    env: { TF_TOKEN: 'secret' },
+    fetcher,
+    _recent_caps: { byteCap: 50 * 1024 }, // 50 KB
+  });
+
+  const recent = calls.find((c) => c.url.endsWith('/recent.md'));
+  assert(recent, 'expected a PUT to recent.md');
+  // Final byte size must fit under the override byte cap.
+  const bytes = new TextEncoder().encode(recent.body).byteLength;
+  assert(bytes <= 50 * 1024, `recent.md ${bytes} bytes exceeded 50 KB override cap`);
+  // The render header should report a count strictly less than 32 — the
+  // byte-trim halved the slice at least once.
+  const itemsLine = recent.body.match(/\*\*Items:\*\* (\d+)/);
+  assert(itemsLine, 'expected an Items: count in the rendered header');
+  const renderedCount = Number(itemsLine[1]);
+  assert(renderedCount < 32, `expected byte-trim to drop count below 32; got ${renderedCount}`);
+  assert(renderedCount >= 1, `expected at least 1 item to survive trim; got ${renderedCount}`);
 });
