@@ -1,8 +1,10 @@
 # Smallstore — Test Coverage
 
-**Total: 771 offline tests passing, 13 live-adapter tests, 13 specialized live tests passing**
+**Total: 1864 offline tests passing, 13 live-adapter tests, 13 specialized live tests passing**
 
-Last verified: 2026-03-19
+Last verified: 2026-04-28 (full suite: `deno test --allow-all --no-check tests/`)
+
+Test count grew 771 → 1841 across the 2026-04 audit + remediation + admin-tools cycle. See § "2026-04 audit + remediation — test deltas" below for what landed when.
 
 Run all live tests from the project root (where `.env` lives):
 ```bash
@@ -148,6 +150,56 @@ deno test --no-check --allow-all tests/live-adapters.test.ts
 - [x] [pass: 7/7 after import map fix] Obsidian sync tests (`tests/obsidian-sync.test.ts`) #test #fixed
   - [*] Fix: added `"@std/path": "jsr:@std/path@^1.0.0"` to deno.json imports
 
+## 2026-04 audit + remediation — test deltas
+
+All landed in `main` between commits `7d7ffe6` (Phase A — security audit Sprint 0) and `916ea57` (admin MCP tools). Total + 1070 tests across 4 new files + 16 expanded files. Each entry below lists the canonical run command.
+
+### New test files (shipped 2026-04-28)
+
+- [x] [pass: 10/10, `deno test --no-check tests/peers-env-allowlist.test.ts`] **`tests/peers-env-allowlist.test.ts`** — env-var allowlist module unit tests. Covers default-allow (TF_/NOTION_/SHEET_/SHEETLOG_/GH_/GITHUB_/AIRTABLE_/UPSTASH_/API_/WEBHOOK_/BASIC_/BEARER_/HMAC_), hard-deny (SMALLSTORE_/CLOUDFLARE_/CF_/AWS_/SECRET_/PRIVATE_/DATABASE_/REDIS_), generic-shorthand rejection (TOKEN/KEY/USER/PASS), AllowlistViolationError shape, embedder override via `createEnvAllowlist({ safePrefix?, hardDeny? })`. Audit B002. #test #security #peers
+- [x] [pass: 5/5, `deno test --no-check tests/timing-safe.test.ts`] **`tests/timing-safe.test.ts`** — constant-time string equality (`timingSafeEqualString`). Equal returns true, mismatched chars false, mismatched lengths false (without short-circuit), non-string inputs false, mismatch position doesn't short-circuit the loop. Audit B011. #test #security #http
+- [x] [pass: 6/6, `deno test --no-check tests/messaging-dispatch.test.ts`] **`tests/messaging-dispatch.test.ts`** — dispatch-pipeline failure semantics. Classifier throw → drop with `drop_reason: "classifier-failed"` + `console.error`; postClassify + sinks + postStore not invoked on drop; throwing preIngest still flows through (existing behavior preserved). Audit B009. #test #messaging #pipeline
+- [x] [pass: 9/9, `deno test --no-check tests/router-routing.test.ts`] **`tests/router-routing.test.ts`** — router glob + specificity + routing-fallback parity. Glob metachar escape (`cache.temp` literal), specificity sort overrides insertion order both directions, set+append parity for glob mounts. Audit B006/B017/B018. #test #router
+
+### Expanded test files (audit B-series remediation)
+
+- [x] [pass: 73/73, `deno test --no-check tests/peers-proxy.test.ts`] +15 cases: 4 B002 (env-allowlist gates `resolvePeerAuth`'s bearer/header/basic paths + proxyGet short-circuit) + 11 B033 (`isValidPath` unit, proxy CRLF/control-char rejection, HTTP route boundary at /peers/:name/fetch + /peers/:name/query). #test #security #peers
+- [x] [pass: ~30+ messaging-auto-confirm cases, `deno test --no-check tests/messaging-auto-confirm.test.ts`] +6 cases: 5 B007 redirect-walk (302→safe-host completes, 302→unsubscribe aborts, 302→IP-literal aborts, MAX_REDIRECTS=3 limit, "302 counts as success" rewritten to "302→safe walk completes") + 1 B015 cache-invalidation-via-subscribeInvalidations. #test #messaging #auto-confirm
+- [x] [pass: ~25+ confirm-detect cases, `deno test --no-check tests/messaging-confirm-detect.test.ts`] +8 cases: 3 B016 HTML-anchor extraction (picks <a href> matching anchor text not adjacent URL, falls back to plaintext when no anchor, skips unsubscribe href even with confirm anchor text) + 5 B027 transactional-mail rejection (Verify your email address → false, Verify your subscription → true, Verify your sign up → true, Verify your account → false, password-reset → false). #test #messaging #confirm-detect
+- [x] [pass: 16+ senders-store cases, `deno test --no-check tests/messaging-auto-confirm-senders-store.test.ts`] +5 B015 subscribe semantics (fires on add+delete that actually changed state, idempotent add doesn't fire, unsubscribe stops notifications, listener exception doesn't poison mutation path). #test #messaging #auto-confirm
+- [x] [pass: 29/29, `deno test --no-check tests/messaging-inbox.test.ts`] +7 cases: 4 B004 atomicity (pending key cleared after success, recoverOrphans re-indexes after simulated mid-write crash, reaps pending without item, cleans benign pending after late delete) + 2 B014 concurrency (20 distinct concurrent ingests land as 20, 10 same-id ingests collapse to 1) + 1 happy-path. #test #messaging #inbox
+- [x] [pass: 30/30, `deno test --no-check tests/messaging-d1-fts.test.ts`] +4 cases: B005 throw CorruptValueError on JSON-parse fail, B034 50-key clear smoke, B035 concurrent ensureTable shares one migration, B036 SQL LIMIT/OFFSET correctness. #test #adapter #d1
+- [x] [pass: 27/27 (rules) + 11/11 (rules-http), `deno test --no-check tests/messaging-rules.test.ts tests/messaging-rules-http.test.ts`] +4 cases: 2 B008 (malformed filter throws inside evaluateFilter — second well-formed rule still matches; throwing rulesStore.apply → hook returns 'accept' + logs) + 2 B024 cursor non-advance (fast-fail in <10 calls vs 10k cap on stuck cursor; healthy paginated query no false-positive). #test #messaging #rules
+- [x] [pass: 25/25, `deno test --no-check tests/messaging-mirror.test.ts`] +4 cases: B019 concurrent runMirror short-circuits with `skipped: 'in-flight'`, B021 hydration concurrency cap of 10 (timestamp-gap analysis confirms 3 batches for 25 items), B022 item-cap (1000 → 200 rendered) + byte-cap (32 × 5KB → bytes ≤ cap with `_recent_caps` test override). #test #messaging #mirror
+- [x] [pass: ~25+ forward-detect cases, `deno test --no-check tests/messaging-forward-detect.test.ts`] +4 B025 cases: bare-address regex now rejects `+` and percent-encoded chars in local-part (negative lookbehind anchors); legitimate `<user+inbox@example.com>` in angle brackets still extracts. #test #messaging #forward-detect
+- [x] [pass: ~15+ unread-hook cases, `deno test --no-check tests/messaging-unread-hook.test.ts`] +5 B028 cases: `read_at` sentinel skips stamp on items that carry it; quarantine restore path (`_ingest({force: true})`) doesn't re-run hooks today but the sentinel is dormant defense-in-depth. #test #messaging #unread
+- [x] [pass: ~20+ sender-aliases cases, `deno test --no-check tests/messaging-sender-aliases.test.ts`] +3 B029 cases: parse-time specificity sort (longest literal-prefix wins regardless of insertion order); 4 existing parse tests updated to reflect sorted output. #test #messaging #sender-aliases
+- [x] [pass: 27/27, `deno test --no-check tests/messaging-channel-rss.test.ts`] +1 B030 case: 100-entry feed × 50 entities each parses fine (5000 expansions, well under 50_000 cap). #test #messaging #rss
+- [x] [pass: 15/15, `deno test --no-check tests/messaging-pull-runner.test.ts`] +1 B031 case (shared-guid feed → 1 stored + 1 collided + 0 dropped) + 1 existing test updated (re-poll counted as `items_collided` not `items_stored`) + 2 fixture renames `FEED_TOKEN` → `API_FEED_TOKEN` + `MISSING_TOKEN` → `API_MISSING_TOKEN` for B002 allowlist compliance. #test #messaging #pull-runner
+- [x] [pass: 42/42, `deno test --no-check tests/messaging-newsletter-markdown.test.ts`] +8 B032 cases: 4 `escapeMarkdownText` units (backticks, lines exactly `---`, leading `# `, normal text round-trips) + 4 per-renderer integration (renderNewsletterProfile, renderNewsletterNotes, renderAllNotes, renderRecentFeed). #test #messaging #markdown
+- [x] [pass: ~30+ adapter-paging cases, `deno test --no-check tests/adapter-paging.test.ts`] +2 B037 cases: probabilistic eviction over 1000+200 sets with stubbed `Date.now`, on-demand `keys()` correctness regression. #test #adapter #memory
+- [x] [pass: ~30+ cursor cases, `deno test --no-check tests/messaging-cursor.test.ts`] +8 B041 cases: malformed JSON, non-object payload, missing/wrong-typed `at`/`id`, non-ISO `at`, oversized id, accepted ISO with offsets, boundary 256-char id, empty-id sentinel preserved. #test #messaging #cursor
+
+### Audit cleanup batch (5393ef9, ee174a2, 55c9f84)
+
+- [x] [pass: 18/18, `deno test --no-check tests/sync-jobs-http.test.ts`] +1 A201 case: full `POST /_sync/jobs/prune` dryRun → real-prune cycle against running server with backdated mtime (`Deno.utime`). Plus a 10s → 30s deadline raise for the background-mode test (was flaking 1/3 under full-suite parallelism, now stable). #test #server #sync-jobs
+- [x] [pass: 13/13, `deno test --no-check tests/job-log.test.ts`] +5 A201 cases: pruneJobs reaps files older than cutoff + retains fresher, dryRun returns plan without deleting, empty dir returns zeroed counters, olderThanMs ≤ 0 is no-op, default 30d cutoff retains fresh files. Helper `backdateFile` via `Deno.utime`. #test #util #job-log
+
+### Admin MCP tools (916ea57)
+
+- [x] [pass: 19/19, `deno test --no-check tests/mcp-server.test.ts`] +3 mock-roundtrip cases: sm_inbox_create forwards `POST /admin/inboxes` with body, sm_inbox_list_admin forwards `GET /admin/inboxes`, sm_inbox_delete_inbox forwards `DELETE /admin/inboxes/:name`. Plus tools/list assertion bumped 26 → 49 → 52 (the 2026-04-28 refresh + the +3 admin tools). #test #mcp #admin
+
+### Peer registry HTTP CRUD coverage
+
+- [x] [pass: 23/23, `deno test --no-check tests/peers-http-routes.test.ts`] **`tests/peers-http-routes.test.ts`** — full CRUD + health-probe coverage. New file. Mounts `registerPeersRoutes` onto an in-process Hono app + MemoryAdapter-backed peerStore; auth middleware stubbed open. Coverage:
+  - POST /peers — happy + 4 validation paths (missing name, invalid type, invalid URL, duplicate) + 2 B002 allowlist cases (TF_TOKEN ok, SMALLSTORE_TOKEN rejected, AWS basic-auth rejected)
+  - GET /peers — empty list, multi-peer, type filter, include_disabled flag (disabled hidden by default)
+  - GET /peers/:name — happy + 404
+  - PUT /peers/:name — happy patch, read-only-fields stripped (id + created_at), 404, non-object body 400
+  - DELETE /peers/:name — happy + 404
+  - GET /peers/:name/health — disabled returns 409 without probing (asserts globalThis.fetch not called), unknown 404, happy probe stubs fetch + verifies upstream URL
+  - Companion to `tests/peers-proxy.test.ts` (which covers proxyGet/proxyPost + B033 path-validation boundary at /fetch + /query) and `tests/peers-registry.test.ts` (CRUD store directly, not over HTTP). #test #peers #http
+
 ## Coverage Gaps — No Tests
 
 ### Adapters without offline (mocked) tests
@@ -167,8 +219,7 @@ deno test --no-check --allow-all tests/live-adapters.test.ts
 
 ### Infrastructure
 
-- [ ] Obsidian import map fix — unblock 3 test files #gap #infra
-  - [*] Fix: add `"@std/path": "jsr:@std/path@^1.0.0"` to deno.json imports
+- [x] [shipped earlier; verified 2026-04-28: all 33 obsidian tests pass — `deno test --no-check tests/obsidian-adapter.test.ts tests/obsidian-codec.test.ts tests/obsidian-sync.test.ts` returns `33 passed | 0 failed`. This entry duplicated lines 146-149 above; closed for bookkeeping only.] Obsidian import map fix — unblock 3 test files #gap #infra
 
 ## Test Commands Quick Reference
 
