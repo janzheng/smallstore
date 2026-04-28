@@ -152,9 +152,15 @@ interface AppHandle {
   registry: InboxRegistry;
 }
 
-let appHandle: AppHandle | null = null;
+// Memoize as a Promise so concurrent first requests share the in-flight
+// build (B039). Without the promise wrapper, two cold-start requests both
+// pass the null-check and both call `buildApp()` — the second would
+// double-construct registry/peerStore/Hono and double-register channels
+// (currently caught by try/catch but a non-trivial waste). With the
+// promise, callers await the same in-flight build.
+let appHandle: Promise<AppHandle> | null = null;
 
-function buildApp(env: Env): AppHandle {
+async function buildApp(env: Env): Promise<AppHandle> {
   // Adapters
   const d1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_items' });
   const r2 = createCloudflareR2Adapter({ binding: env.MAILROOM_R2 });
@@ -355,23 +361,38 @@ function buildApp(env: Env): AppHandle {
     subscribeInvalidations: (cb) => autoConfirmSendersStore.subscribe(cb),
   });
 
-  // Boot-time env seed — fire-and-forget so the hook is constructed
-  // before D1 returns. The first invocation may see a stale (empty)
-  // cache while seeding completes; subsequent invocations are correct.
-  // Any seed errors get logged; we don't block boot on D1.
-  void seedAutoConfirmFromEnv(env.AUTO_CONFIRM_SENDERS, autoConfirmSendersStore, autoConfirmD1)
-    .then((added) => {
-      if (added.length > 0) {
-        console.log(`[auto-confirm] seeded ${added.length} env pattern(s):`, added);
-      }
-    })
-    .catch((err) => {
-      console.error('[auto-confirm] env seed failed:', err instanceof Error ? err.message : err);
-    });
+  // Boot-time env seed (B040): awaited inline so the first ingest after a
+  // cold start sees a populated cache. Pre-fix this was fire-and-forget,
+  // which left a ~100-300ms window where allowlisted-but-not-yet-seeded
+  // senders fell through to manual confirmation. Cost: cold-start latency
+  // grows by `pattern count × D1 round-trip` (~40-160ms for the default
+  // 8 patterns). Acceptable; D1 is already-initialized at this point.
+  // Errors are caught + logged; an env-seed failure shouldn't block the
+  // Worker (operators can still POST patterns at runtime).
+  try {
+    const added = await seedAutoConfirmFromEnv(env.AUTO_CONFIRM_SENDERS, autoConfirmSendersStore, autoConfirmD1);
+    if (added.length > 0) {
+      console.log(`[auto-confirm] seeded ${added.length} env pattern(s):`, added);
+    }
+  } catch (err) {
+    console.error('[auto-confirm] env seed failed:', err instanceof Error ? err.message : err);
+  }
   const stampUnreadHook = createStampUnreadHook();
 
   // Side-effect postClassify hook — updates sender-index on every ingest.
+  //
+  // B012: skip the upsert when the item carries a terminal label
+  // (`dropped`, `quarantined`). Without the guard, a pre-ingest hook that
+  // marks an item as dropped/quarantined still flowed into the sender-index
+  // upsert here (postClassify runs after preIngest), inflating sender stats
+  // with mail the user never saw. We check both labels because preIngest
+  // hooks can emit either ('drop' verdict → 'dropped' label,
+  // quarantine flow → 'quarantined' label).
   const senderUpsertHook = async (item: InboxItem, _ctx: HookContext): Promise<HookVerdict> => {
+    const labels = item.labels ?? [];
+    if (labels.includes('dropped') || labels.includes('quarantined')) {
+      return 'accept';
+    }
     try {
       await mailroomSenderIndex.upsert(item);
     } catch (err) {
@@ -617,8 +638,16 @@ function buildApp(env: Env): AppHandle {
   };
 }
 
-function ensureApp(env: Env): AppHandle {
-  if (!appHandle) appHandle = buildApp(env);
+function ensureApp(env: Env): Promise<AppHandle> {
+  if (!appHandle) {
+    appHandle = buildApp(env).catch((err) => {
+      // If the build itself fails (e.g. D1 unreachable on the first request),
+      // clear the cache so the next caller retries rather than latching the
+      // isolate into a broken state for its lifetime.
+      appHandle = null;
+      throw err;
+    });
+  }
   return appHandle;
 }
 
@@ -628,12 +657,12 @@ function ensureApp(env: Env): AppHandle {
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const { app } = ensureApp(env);
+    const { app } = await ensureApp(env);
     return app.fetch(request, env, ctx);
   },
 
   async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
-    const { email } = ensureApp(env);
+    const { email } = await ensureApp(env);
     return email(message as any, env, ctx);
   },
 
@@ -649,7 +678,7 @@ export default {
    * await directly for simpler error reporting.
    */
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    const { rssRunner, runMirror, registry } = ensureApp(env);
+    const { rssRunner, runMirror, registry } = await ensureApp(env);
 
     // RSS poll first — runs against external feeds, network-bound.
     const rssSummary = await rssRunner.pollAll();
