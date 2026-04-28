@@ -95,6 +95,22 @@ import {
 import type { MaterializedJson, CsvOptions } from './materializers/mod.ts';
 
 // ============================================================================
+// Internal helpers
+// ============================================================================
+
+/**
+ * Length of the literal (non-glob) prefix of a routing pattern.
+ *
+ * Used by `matchRoutingPattern` to sort rules by specificity (longest literal
+ * prefix wins). The only glob char supported by `patternMatches` is `*`, so
+ * we measure the prefix before the first `*`.
+ */
+function literalPrefixLength(pattern: string): number {
+  const star = pattern.indexOf('*');
+  return star === -1 ? pattern.length : star;
+}
+
+// ============================================================================
 // Smart Router Config
 // ============================================================================
 
@@ -1996,15 +2012,22 @@ export class SmartRouter implements Smallstore {
     const combinedRules = { ...mountRules, ...routingRules };
 
     if (Object.keys(combinedRules).length > 0) {
-      // Match against full path (not just collection) for mount-like behavior
+      // Match against full path (not just collection) for mount-like behavior.
+      // Fallback chain (B018 — reconciled with append()):
+      //   1. fullPath               — most specific (collection + sub-path)
+      //   2. parsed.collection      — bare collection name
+      //   3. parsed.collection + '/' — bare collection against mount patterns
+      //                                 like "yawnxyz/*" that need a trailing
+      //                                 segment to fire.
       const fullPath = [parsed.collection, ...parsed.path].join('/');
       const matchedAdapter = this.matchRoutingPattern(fullPath, combinedRules)
-        || this.matchRoutingPattern(parsed.collection, combinedRules);
+        || this.matchRoutingPattern(parsed.collection, combinedRules)
+        || this.matchRoutingPattern(parsed.collection + '/', combinedRules);
       if (matchedAdapter) {
         return this.validateAndRoute(matchedAdapter, analysis, 'pattern-routing');
       }
     }
-    
+
     // Priority 5: TTL-aware routing — prefer TTL-capable adapters when TTL requested
     if (options?.ttl) {
       for (const [name, adapter] of Object.entries(this.adapters)) {
@@ -2072,9 +2095,20 @@ export class SmartRouter implements Smallstore {
   
   /**
    * Match collection path against routing patterns
-   * 
-   * Phase 3.1: Pattern matching (first match wins)
-   * 
+   *
+   * Patterns are sorted by literal-prefix length (longest first) before
+   * iteration, so a more-specific pattern (`mailroom/inbox/*`) wins over a
+   * less-specific one (`mailroom/*`) regardless of insertion order. The sort
+   * is stable — ties fall back to original insertion order.
+   *
+   * Literal-prefix length = length of the pattern substring before the first
+   * `*` (or the full length if there is no `*`). This is the only glob char
+   * supported by `patternMatches`, so it's a safe specificity proxy.
+   *
+   * Pre-fix B017: insertion-order iteration ("first match wins") let a broader
+   * pattern shadow a more specific one if registered earlier — surprising for
+   * mount-style configs that often layer broader fallbacks on top.
+   *
    * @param collection - Collection name to match
    * @param rules - Routing rules
    * @returns Matched adapter name, or null
@@ -2083,29 +2117,54 @@ export class SmartRouter implements Smallstore {
     collection: string,
     rules: Record<string, { adapter: string }>
   ): string | null {
-    // Match patterns in order (first match wins)
-    for (const [pattern, config] of Object.entries(rules)) {
+    const entries = Object.entries(rules);
+
+    // Sort by literal-prefix length desc (longest first → most specific wins).
+    // Use index as a stable tie-breaker so equal-specificity patterns keep
+    // their original insertion order.
+    const sorted = entries
+      .map(([pattern, config], index) => ({
+        pattern,
+        config,
+        index,
+        prefixLen: literalPrefixLength(pattern),
+      }))
+      .sort((a, b) => {
+        if (b.prefixLen !== a.prefixLen) return b.prefixLen - a.prefixLen;
+        return a.index - b.index;
+      });
+
+    for (const { pattern, config } of sorted) {
       if (this.patternMatches(collection, pattern)) {
         return config.adapter;
       }
     }
     return null;
   }
-  
+
   /**
    * Check if collection matches pattern
-   * 
+   *
    * Supports simple glob matching:
    * - '*' = catch-all
    * - 'cache:*' = starts with 'cache:'
    * - '*:temp' = ends with ':temp'
    * - 'cache:*:temp' = starts with 'cache:' and ends with ':temp'
+   *
+   * Pre-fix B006: regex metachars in `pattern` were not escaped before the
+   * `*`-to-`.*` replacement, so `cache.temp` compiled to `/^cache.temp$/` and
+   * matched `cacheXtemp`, `cache!temp`, etc. Escape regex metachars first,
+   * THEN expand `*` to `.*` so `*` keeps its glob semantics.
    */
   private patternMatches(collection: string, pattern: string): boolean {
     if (pattern === '*') return true;  // Catch-all
-    
-    // Convert glob pattern to regex
-    const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+
+    // Escape regex metachars first, then expand `*` (the only glob char) to `.*`.
+    // The escape set deliberately omits `*` so the next replace can convert it.
+    const escaped = pattern
+      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*');
+    const regex = new RegExp('^' + escaped + '$');
     return regex.test(collection);
   }
   
@@ -2264,8 +2323,12 @@ export class SmartRouter implements Smallstore {
     const combinedRules = { ...mountRules, ...routingRules };
 
     if (Object.keys(combinedRules).length > 0) {
+      // B018: same 3-step fallback chain as routeData/append so all routing
+      // surfaces resolve identically. Trailing-slash form lets bare-collection
+      // paths match mount patterns like "yawnxyz/*".
       const matched = this.matchRoutingPattern(fullPath, combinedRules)
-        || this.matchRoutingPattern(parsed.collection, combinedRules);
+        || this.matchRoutingPattern(parsed.collection, combinedRules)
+        || this.matchRoutingPattern(parsed.collection + '/', combinedRules);
       if (matched && this.adapters[matched]) {
         return this.adapters[matched];
       }
