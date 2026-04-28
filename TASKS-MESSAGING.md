@@ -147,14 +147,11 @@ Two paths: fast (external poller POSTs via existing `/inbox/:name/items`) and la
 - [ ] Pull runner — shared scheduler reading `inbox.schedule` from config; hooked to CF Worker `scheduled()` cron export. Per-feed watermark persistence. Per-channel concurrency cap #messaging #pull-runner
 - [?] Promote path A → path B when: 3+ feeders OR valtown hiccup loses a day of data OR unified observability becomes valuable #rss-promotion-trigger
 
-### Outbox
+### Outbox — moved to `TASKS-OUTBOX.md` (2026-04-28)
 
-- [ ] Spike: D1-table-as-queue + R2-as-payload-store vs CF Queues + DO alarms — measure both for retry/backoff ergonomics. Decide before building #outbox #spike #needs:inbox-shipped
-- [ ] `src/messaging/outbox.ts` — Outbox plugin: `enqueue` (idempotent), `status`, `list`, `cancel`, `history`. Reply linkage to inbox items #outbox #impl
-- [ ] `src/messaging/channels/cf-email-out.ts` — first output channel. Wraps `env.EMAIL.send` (CF Email Sending public beta) #outbox #channel-cf-email-out
-- [ ] HTTP routes for outbox — `POST /outbox/:name/send`, `GET /outbox/:name`, `GET /outbox/:name/items/:id/history`, `POST /outbox/:name/items/:id/cancel` #outbox #http
-- [ ] MCP tools: `sm_outbox_send`, `sm_outbox_status`, `sm_outbox_list`, `sm_outbox_cancel`, `sm_outbox_history`, `sm_messaging_respond` (sugar: read inbox item + LLM callback + enqueue with `reply_to` + `idempotency_key`) #outbox #mcp
-- [ ] Webhook output channel — `cf-webhook-out` — generic POST with retry policy. Useful for Slack, Discord, generic webhooks #outbox #channel-webhook-out
+The outbound side of the messaging subsystem (sending, replies, webhook out, the `sm_messaging_respond` flow) is **parked** with no current need. Plan + promotion triggers + spike + 7 implementation tasks live in [`TASKS-OUTBOX.md`](./TASKS-OUTBOX.md). When a real reply / send / notification use case lands, promote the relevant items into `TASKS.md § Current` and write `.brief/outbox.md` per the standard `fold:mxit:brief` flow.
+
+Inbound channels (cf-email, rss, webhook) stay here; outbound channels (cf-email-out, cf-webhook-out) live in TASKS-OUTBOX.
 
 ### Mailroom curation — SHIPPED 2026-04-25
 

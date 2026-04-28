@@ -1,6 +1,6 @@
 # Smallstore
 
-Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN.md`, `TASKS-AUDIT.md`, `TASKS-TESTS.md`, `TASKS-MESSAGING.md`, `TASKS-SECURITY.md` for area backlogs.
+Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN.md`, `TASKS-AUDIT.md`, `TASKS-TESTS.md`, `TASKS-MESSAGING.md` (inbound), `TASKS-OUTBOX.md` (sending, parked), `TASKS-SECURITY.md` for area backlogs.
 
 ## Current
 
