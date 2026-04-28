@@ -769,3 +769,95 @@ Deno.test('createForwardDetectHook — does not overwrite missing fields with un
   const next = verdict as InboxItem;
   assertEquals(next.fields.original_sent_at, '2020-01-01T00:00:00Z');
 });
+
+// ============================================================================
+// B025 — extractEmailAddress regex hardening
+// ============================================================================
+//
+// The bare-address fallback regex previously accepted `+` and `%` in the
+// local-part, which let a malicious forwarder set `original_from_email` to
+// `attacker+newsletter@example.com` (or a percent-encoded variant) and
+// piggyback on sender-aliases / auto-confirm allowlists keyed off a
+// different address.
+//
+// **Decision on plus-addressing:** the hardened regex rejects `+` in the
+// bare-address path even though some senders use it legitimately
+// (e.g. `user+inbox@gmail.com`). The trade-off is acceptable because:
+//   1. plus-addressing is overwhelmingly used for INCOMING routing, not
+//      sending — real senders don't typically send FROM a plus-address.
+//   2. The angle-bracket branch (`<addr@host>`) is still permissive
+//      (`[^<>\s]+`), so well-formed `From:` headers like
+//      `"User" <user+inbox@example.com>` still extract correctly.
+// Only the bare-address fallback (e.g. body `From: addr@host` lines with
+// no `<...>` wrap) is tightened.
+
+Deno.test('B025 — bare address with `+` in local-part is rejected (plus-addressing fallback path)', () => {
+  // Body has a bare address with `+` — the bare regex should refuse to
+  // match, so original_from_email stays undefined.
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: attacker+newsletter@example.com',
+    'Subject: Sneaky',
+    '',
+    'body',
+  ].join('\n');
+  const item = makeItem({}, {
+    from_email: 'me@example.com',
+    subject: 'Fwd: Sneaky',
+  }, body);
+  const r = detectForward(item, { selfAddresses: SELF });
+  assertEquals(r.isForwarded, true);
+  // The injection address must NOT be picked up.
+  assertEquals(r.original_from_email, undefined);
+});
+
+Deno.test('B025 — bare address with `%` (percent-encoded `@`) in local-part is rejected', () => {
+  // attacker%40example.com is the percent-encoded form of
+  // attacker@example.com — pre-fix the regex accepted `%` in the local
+  // part and would have matched something nonsensical.
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: attacker%40example.com',
+    'Subject: Encoded',
+  ].join('\n');
+  const item = makeItem({}, {
+    from_email: 'me@example.com',
+    subject: 'Fwd: Encoded',
+  }, body);
+  const r = detectForward(item, { selfAddresses: SELF });
+  assertEquals(r.original_from_email, undefined);
+});
+
+Deno.test('B025 — angle-bracket form still accepts `+` (safe path stays permissive)', () => {
+  // The angle-bracket branch uses `[^<>\s]+` — unchanged. So a well-
+  // formed `From: "Name" <user+inbox@example.com>` still extracts.
+  // The injection vector is specifically the bare-address fallback,
+  // not the angle form.
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: User <user+inbox@example.com>',
+    'Subject: Plus-addressing legit',
+  ].join('\n');
+  const item = makeItem({}, {
+    from_email: 'me@example.com',
+    subject: 'Fwd: Plus-addressing legit',
+  }, body);
+  const r = detectForward(item, { selfAddresses: SELF });
+  assertEquals(r.original_from_email, 'user+inbox@example.com');
+});
+
+Deno.test('B025 — bare address with normal local-part still extracts', () => {
+  // Regression check: the dot/dash/underscore/digit cases still work —
+  // we only removed `+` and `%` from the character class.
+  const body = [
+    '---------- Forwarded message ---------',
+    'From: jane.doe-2_test@example.co',
+    'Subject: Normal',
+  ].join('\n');
+  const item = makeItem({}, {
+    from_email: 'me@example.com',
+    subject: 'Fwd: Normal',
+  }, body);
+  const r = detectForward(item, { selfAddresses: SELF });
+  assertEquals(r.original_from_email, 'jane.doe-2_test@example.co');
+});

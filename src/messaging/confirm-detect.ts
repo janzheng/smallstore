@@ -90,10 +90,20 @@ export interface ConfirmDetectOptions {
 
 // Subject patterns — case-insensitive. First match wins; we don't need
 // "strongest signal" — any match graduates the item to needs-confirm.
+//
+// **B027: `verify` patterns now require explicit double-opt-in keywords
+// (`subscription`, `subscribe`, `signup`, `sign up`).** The previous
+// `\bverify\s+(your\s+)?(email|subscription|account|address)/i` matched
+// transactional account-creation mail like "Verify your email address" —
+// not a newsletter double-opt-in. The classifier's `requireNewsletterLabel`
+// guard usually catches this in practice, but defense-in-depth: the
+// subject heuristic itself now refuses to match unless the wording is
+// explicitly subscription-shaped.
 const SUBJECT_PATTERNS: RegExp[] = [
   /\bconfirm(?:\s+your)?\s+(subscription|email|sign[\s-]?up|address|account)/i,
   /\bplease\s+confirm\b/i,
-  /\bverify\s+(your\s+)?(email|subscription|account|address)/i,
+  /\bverify\s+(your\s+)?subscription\b/i,
+  /\bverify\s+(your\s+)?(subscribe|signup|sign[\s-]?up)\b/i,
   /\bactivate\s+(your\s+)?(subscription|account|email)/i,
   /\bsubscription\s+confirmation\b/i,
   /\bone\s+more\s+step\b/i, // Substack pattern

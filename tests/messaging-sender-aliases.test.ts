@@ -34,9 +34,13 @@ function makeItem(
   };
 }
 
+// B029: parseSenderAliases sorts rules by literal-prefix length (longest
+// first) with insertion order as a stable tie-breaker. So even though the
+// user wrote `jessica.c.sacher@*` first, the parsed/sorted output puts
+// `jan@phage.directory` ahead of it (no `*` → full-length prefix).
 const RULES: SenderAliasRule[] = [
-  { pattern: 'jessica.c.sacher@*', name: 'Jessica' },
   { pattern: 'jan@phage.directory', name: 'Jan' },
+  { pattern: 'jessica.c.sacher@*', name: 'Jessica' },
   { pattern: 'janzheng@*', name: 'Jan' },
 ];
 
@@ -52,18 +56,21 @@ Deno.test('parseSenderAliases — empty string → []', () => {
   assertEquals(parseSenderAliases(''), []);
 });
 
-Deno.test('parseSenderAliases — rule array lowercases patterns, trims names', () => {
+Deno.test('parseSenderAliases — rule array lowercases patterns, trims names, sorts by specificity (B029)', () => {
+  // B029: even though `Jessica.C.Sacher@*` is written first, it has a
+  // shorter literal prefix (17 chars before `*`) than the wildcard-free
+  // `jan@phage.directory` (full 19 chars). After sort, `jan@...` wins.
   const out = parseSenderAliases([
     { pattern: 'Jessica.C.Sacher@*', name: '  Jessica  ' },
     { pattern: 'jan@phage.directory', name: 'Jan' },
   ]);
   assertEquals(out, [
-    { pattern: 'jessica.c.sacher@*', name: 'Jessica' },
     { pattern: 'jan@phage.directory', name: 'Jan' },
+    { pattern: 'jessica.c.sacher@*', name: 'Jessica' },
   ]);
 });
 
-Deno.test('parseSenderAliases — record form preserves insertion order', () => {
+Deno.test('parseSenderAliases — record form sorted by specificity, insertion order is tie-breaker (B029)', () => {
   const out = parseSenderAliases({
     'jessica.c.sacher@*': 'Jessica',
     'jan@phage.directory': 'Jan',
@@ -72,21 +79,60 @@ Deno.test('parseSenderAliases — record form preserves insertion order', () => 
   assertEquals(out, RULES);
 });
 
-Deno.test('parseSenderAliases — CSV string form (pattern:name,...)', () => {
+Deno.test('parseSenderAliases — CSV string form sorted by specificity (B029)', () => {
   const out = parseSenderAliases(
     'jessica.c.sacher@*:Jessica,jan@phage.directory:Jan,janzheng@*:Jan',
   );
   assertEquals(out, RULES);
 });
 
-Deno.test('parseSenderAliases — CSV form tolerates whitespace + ignores malformed entries', () => {
+Deno.test('parseSenderAliases — CSV form tolerates whitespace + ignores malformed entries + specificity sort (B029)', () => {
   const out = parseSenderAliases(
     '  jessica.c.sacher@* : Jessica  , no-colon-entry, :missing-pattern, jan@phage.directory:Jan',
   );
+  // After parse + sort: `jan@phage.directory` (no `*`, prefix=19) wins
+  // over `jessica.c.sacher@*` (prefix=17).
   assertEquals(out, [
-    { pattern: 'jessica.c.sacher@*', name: 'Jessica' },
     { pattern: 'jan@phage.directory', name: 'Jan' },
+    { pattern: 'jessica.c.sacher@*', name: 'Jessica' },
   ]);
+});
+
+// B029 — the bug this fix addresses: a broad pattern added first must
+// NOT eat a narrower one added later.
+Deno.test('parseSenderAliases — broad pattern first, narrow pattern second → narrow wins after sort (B029)', () => {
+  // User-written order: broad first, narrow second. Pre-fix this would
+  // make `*@example.com:Generic` shadow `jan@example.com:Jan` since
+  // `matchSenderAlias` returned on first match.
+  const out = parseSenderAliases([
+    { pattern: '*@example.com', name: 'Generic' },
+    { pattern: 'jan@example.com', name: 'Jan' },
+  ]);
+  assertEquals(out, [
+    { pattern: 'jan@example.com', name: 'Jan' },
+    { pattern: '*@example.com', name: 'Generic' },
+  ]);
+});
+
+Deno.test('matchSenderAlias — narrower pattern wins regardless of insertion order (B029)', () => {
+  const aliases = parseSenderAliases([
+    { pattern: '*@example.com', name: 'Generic' },
+    { pattern: 'jan@example.com', name: 'Jan' },
+  ]);
+  // jan@example.com matches the specific rule, not the broad fallback.
+  assertEquals(matchSenderAlias('jan@example.com', aliases)?.name, 'Jan');
+  // Other addresses still hit the broad fallback.
+  assertEquals(matchSenderAlias('alice@example.com', aliases)?.name, 'Generic');
+});
+
+Deno.test('matchSenderAlias — equal-specificity ties broken by insertion order (B029)', () => {
+  // Both patterns have prefix length 0 (start with `*`). Sort is stable,
+  // so insertion order wins — first-listed `*@a.com` matches both.
+  const aliases = parseSenderAliases([
+    { pattern: '*@a.com', name: 'First' },
+    { pattern: '*@a.com', name: 'Second' },
+  ]);
+  assertEquals(matchSenderAlias('foo@a.com', aliases)?.name, 'First');
 });
 
 Deno.test('parseSenderAliases — drops rules missing pattern or name', () => {

@@ -18,8 +18,14 @@
  *   ];
  *
  * Glob support: `*` matches any sequence of characters (including empty
- * or `@`). First-match-wins — order matters. Patterns are compared
- * case-insensitively. Exact matches work fine with no wildcard.
+ * or `@`). Patterns are compared case-insensitively. Exact matches work
+ * fine with no wildcard.
+ *
+ * Specificity: `parseSenderAliases` sorts rules by literal-prefix length
+ * (longest first) with insertion order as a stable tie-breaker, so the
+ * most-specific rule wins regardless of how the user wrote the config —
+ * `[*@example.com:Generic, jan@example.com:Jan]` correctly matches
+ * `jan@example.com` to `Jan`, not `Generic` (B029).
  *
  * ## Which address does the hook check?
  *
@@ -91,6 +97,39 @@ export interface SenderAliasResult {
 // ============================================================================
 
 /**
+ * Length of the literal (non-glob) prefix of an alias pattern. Used by
+ * `parseSenderAliases` to sort rules by specificity (longest literal
+ * prefix wins). The only glob char supported by `globToRegex` is `*`,
+ * so we measure the prefix before the first `*`.
+ */
+function literalPrefixLength(pattern: string): number {
+  const star = pattern.indexOf('*');
+  return star === -1 ? pattern.length : star;
+}
+
+/**
+ * Sort alias rules by literal-prefix length descending (most specific
+ * first), with insertion order as a stable tie-breaker. Same shape as
+ * `router.ts` B017 for routing patterns.
+ *
+ * **B029**: pre-fix, `matchSenderAlias` iterated rules in insertion order
+ * and returned on first match — broad patterns added first ate narrower
+ * ones added later (e.g. `[*@example.com:Generic, jan@example.com:Jan]`
+ * incorrectly returned `Generic` for `jan@example.com`). Sorting once at
+ * parse time gives the matcher a predictable specificity order regardless
+ * of how the user wrote the config.
+ */
+function sortRulesBySpecificity(rules: SenderAliasRule[]): SenderAliasRule[] {
+  return rules
+    .map((rule, index) => ({ rule, index, prefixLen: literalPrefixLength(rule.pattern) }))
+    .sort((a, b) => {
+      if (b.prefixLen !== a.prefixLen) return b.prefixLen - a.prefixLen;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.rule);
+}
+
+/**
  * Normalize a user-provided alias config into `SenderAliasRule[]`.
  *
  * Accepts:
@@ -102,6 +141,12 @@ export interface SenderAliasResult {
  *
  * Empty patterns or names are dropped. Patterns are lowercased; names are
  * trimmed but keep their original case.
+ *
+ * **B029 ordering:** the returned array is sorted by literal-prefix length
+ * (longest first) with insertion order as a stable tie-breaker, so
+ * `matchSenderAlias`'s first-match-wins iteration honors specificity
+ * regardless of how the user wrote the config. Sort happens once here at
+ * parse time, NOT on every match call.
  */
 export function parseSenderAliases(
   input: string | Record<string, string> | SenderAliasRule[] | undefined,
@@ -118,7 +163,7 @@ export function parseSenderAliases(
       if (!pattern || !name) continue;
       out.push({ pattern, name });
     }
-    return out;
+    return sortRulesBySpecificity(out);
   }
 
   // CSV string form: "pattern:name,pattern:name"
@@ -134,7 +179,7 @@ export function parseSenderAliases(
       if (!pattern || !name) continue;
       out.push({ pattern, name });
     }
-    return out;
+    return sortRulesBySpecificity(out);
   }
 
   // Record form
@@ -146,7 +191,7 @@ export function parseSenderAliases(
       if (!pattern || !name) continue;
       out.push({ pattern, name });
     }
-    return out;
+    return sortRulesBySpecificity(out);
   }
 
   return [];
@@ -171,6 +216,12 @@ function globToRegex(pattern: string): RegExp {
 /**
  * Match `address` against the first rule in `aliases` whose pattern matches.
  * Returns `null` when nothing matches. Empty address → `null`.
+ *
+ * **B029 ordering note:** rules produced by `parseSenderAliases` are pre-
+ * sorted by literal-prefix length (longest first), so "first match" here
+ * implicitly means "most specific match." Callers passing a hand-built
+ * array directly are responsible for ordering — the matcher does not
+ * re-sort on every call.
  */
 export function matchSenderAlias(
   address: string | undefined | null,

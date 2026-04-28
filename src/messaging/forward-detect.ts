@@ -683,6 +683,20 @@ function slugifyNewsletterDisplayName(name: string): string {
  * - "Name (comment) addr@example.com" → addr@example.com
  *
  * Returns lowercased address or undefined if none found.
+ *
+ * **B025: local-part is intentionally restricted to `[A-Z0-9._-]`** —
+ * `+` and `%` are excluded to block address-injection via a malicious
+ * forwarded mail (an attacker setting `original_from_email` to
+ * `attacker+newsletter@example.com` or a percent-encoded variant could
+ * piggyback on sender-aliases / auto-confirm allowlists keyed off a
+ * different address).
+ *
+ * Trade-off: legitimate plus-addressing in the local-part (e.g.
+ * `user+inbox@gmail.com`) is rejected here. We accept the false-negative
+ * because senders rarely send FROM a plus-address (the convention is for
+ * INCOMING routing); when they do, the angle-bracket branch above (which
+ * uses a permissive `[^<>\s]+` class) still catches it. The tightened
+ * regex only applies to the bare-address fallback path.
  */
 function extractEmailAddress(raw: string): string | undefined {
   if (!raw) return undefined;
@@ -690,7 +704,16 @@ function extractEmailAddress(raw: string): string | undefined {
   const angle = raw.match(/<([^<>\s]+@[^<>\s]+)>/);
   if (angle) return angle[1].trim().toLowerCase();
   // Otherwise hunt for a bare address.
-  const bare = raw.match(/([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})/i);
+  //
+  // **B025 — negative lookbehind on local-part-shaped chars.** The
+  // character class omits `+` and `%`, but on a string like
+  // `attacker+newsletter@example.com` the engine would still find
+  // `newsletter@example.com` by starting after the `+`. To reject the
+  // whole construct, we require the start of the match to NOT be
+  // immediately preceded by another local-part-shaped char (alnum,
+  // `.`, `_`, `-`, `+`, `%`). That way, an injected address embedded
+  // inside a longer local-part never extracts a partial suffix.
+  const bare = raw.match(/((?<![A-Z0-9._+%\-])[A-Z0-9._\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})/i);
   if (bare) return bare[1].trim().toLowerCase();
   return undefined;
 }

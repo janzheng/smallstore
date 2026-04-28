@@ -45,8 +45,34 @@ Deno.test('subject — "Please confirm your email" → true', () => {
   assert(isConfirmationSubject('Please confirm your email'));
 });
 
-Deno.test('subject — "Verify your email address" → true', () => {
-  assert(isConfirmationSubject('Verify your email address'));
+// B027 — pre-fix this returned true, which graduated transactional
+// account-creation mail (Stripe, Auth0, GitHub, etc.) into the
+// `needs-confirm` queue any time the classifier mis-tagged it
+// `newsletter`. Verify patterns now require explicit double-opt-in
+// keywords (`subscription`, `subscribe`, `signup`).
+Deno.test('subject — "Verify your email address" → false (B027: transactional, not double-opt-in)', () => {
+  assertEquals(isConfirmationSubject('Verify your email address'), false);
+});
+
+Deno.test('subject — "Verify your subscription" → true (B027: explicit double-opt-in keyword)', () => {
+  assert(isConfirmationSubject('Verify your subscription'));
+});
+
+Deno.test('subject — "Verify your signup" → true (B027: explicit double-opt-in keyword)', () => {
+  assert(isConfirmationSubject('Verify your signup'));
+});
+
+Deno.test('subject — "Verify your sign up" → true (B027: hyphen/space variants accepted)', () => {
+  assert(isConfirmationSubject('Verify your sign up'));
+  assert(isConfirmationSubject('Verify your sign-up'));
+});
+
+Deno.test('subject — "Verify your account" → false (B027: transactional account-verify is out of scope)', () => {
+  assertEquals(isConfirmationSubject('Verify your account'), false);
+});
+
+Deno.test('subject — "Confirm your subscription" → true (regression check, untouched pattern)', () => {
+  assert(isConfirmationSubject('Confirm your subscription'));
 });
 
 Deno.test('subject — "Activate your account" → true', () => {
@@ -66,9 +92,10 @@ Deno.test('subject — generic newsletter → false', () => {
 });
 
 Deno.test('subject — password reset → false (not a subscription)', () => {
-  // "verify your email" matches, but our scope is opt-in newsletters. The
-  // hook narrows via requireNewsletterLabel — the subject predicate alone
-  // stays loose on purpose.
+  // Post-B027, the verify pattern requires an explicit subscription/
+  // subscribe/signup keyword, so the subject predicate alone now refuses
+  // to graduate transactional mail. `requireNewsletterLabel` still
+  // serves as defense-in-depth at the hook layer.
   assertEquals(isConfirmationSubject('Your password reset request'), false);
 });
 
@@ -248,8 +275,12 @@ Deno.test('hook — requireNewsletterLabel: false → fires on non-newsletter', 
   const hook = createConfirmDetectHook({ requireNewsletterLabel: false });
   const item = makeItem(
     {
-      subject: 'Verify your email address',
-      body_text: 'https://example.com/verify/abc',
+      // Post-B027, the subject heuristic refuses transactional
+      // "Verify your email address" — use an explicit double-opt-in
+      // wording instead so this test still exercises the
+      // requireNewsletterLabel: false path.
+      subject: 'Confirm your subscription',
+      body_text: 'https://example.com/subscribe/confirm?t=abc',
     },
     { labels: [] },
   );

@@ -54,7 +54,18 @@ export interface UnreadHookOptions {
 /**
  * Pure check — should this item get stamped `unread`?
  * Returns true when: the item doesn't already have `unread`, AND
- * carries no terminal label. Exported for testing.
+ * carries no terminal label, AND has no `read_at` sentinel. Exported
+ * for testing.
+ *
+ * **B028: `fields.read_at` suppresses re-stamp.** If a future code path
+ * re-runs the postClassify pipeline on an existing item (e.g. quarantine
+ * restore reaching back through `dispatchItem`), an item the user
+ * previously marked read must NOT have `unread` resurrected. The
+ * `read_at` sentinel — set by `markRead`-shaped flows — is the explicit
+ * "user already saw this" signal that survives re-ingest. Today the
+ * `_ingest({force: true})` path used by quarantineItem/restoreItem does
+ * not re-run hooks, so this is forward defense-in-depth; if the wiring
+ * ever changes, the guard prevents the regression.
  */
 export function shouldStampUnread(
   item: InboxItem,
@@ -65,6 +76,10 @@ export function shouldStampUnread(
   for (const t of terminalLabels) {
     if (labels.includes(t)) return false;
   }
+  // B028: explicit read sentinel — set by markRead flows, preserved
+  // through any future re-ingest path. If present, do not re-stamp.
+  const readAt = item.fields?.read_at;
+  if (typeof readAt === 'string' && readAt.trim()) return false;
   return true;
 }
 

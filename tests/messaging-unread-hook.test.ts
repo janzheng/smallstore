@@ -128,6 +128,84 @@ Deno.test('hook — default terminals replaced when custom list provided', async
   assertEquals(result.labels, ['archived', UNREAD_LABEL]);
 });
 
+// ============================================================================
+// B028 — `fields.read_at` sentinel suppresses re-stamp
+// ============================================================================
+//
+// **Decision:** the hook honors `fields.read_at` rather than threading a
+// flag through HookContext. Two reasons:
+//   1. The current `_ingest({force: true})` path used by quarantineItem
+//      / restoreItem does NOT re-run hooks, so a context flag would
+//      need new plumbing in dispatch.ts and types.ts (out of lane scope
+//      and useless until re-ingest hooks fire).
+//   2. The `read_at` sentinel rides on the item itself — it survives any
+//      future re-ingest path (dispatch, channel replay, hook-replay) so
+//      defense-in-depth holds without further wiring.
+// markRead-style flows in `http-routes.ts` can populate `read_at` later
+// without breaking the hook contract; until then, this guard is dormant
+// but ready.
+
+Deno.test('shouldStampUnread — fields.read_at set → false (B028 read sentinel)', () => {
+  const item = makeItem({
+    labels: [],
+    fields: { read_at: '2026-04-28T12:00:00Z' },
+  });
+  assertEquals(shouldStampUnread(item), false);
+});
+
+Deno.test('shouldStampUnread — empty fields.read_at string → still stamps (B028)', () => {
+  // Defensive: an empty string isn't a meaningful sentinel.
+  const item = makeItem({
+    labels: [],
+    fields: { read_at: '   ' },
+  });
+  assertEquals(shouldStampUnread(item), true);
+});
+
+Deno.test('shouldStampUnread — non-string fields.read_at ignored (B028)', () => {
+  // We only honor a string sentinel — rogue/numeric values don't suppress.
+  const item = makeItem({
+    labels: [],
+    fields: { read_at: 0 },
+  });
+  assertEquals(shouldStampUnread(item), true);
+});
+
+Deno.test('hook — fields.read_at set → accept (B028: re-ingest path leaves read item read)', async () => {
+  // Simulates: item was previously marked read (a future markRead writes
+  // `fields.read_at`), then a code path re-ingests it (e.g. quarantine
+  // restore). The hook must not resurrect `unread`.
+  const hook = createStampUnreadHook();
+  const item = makeItem({
+    labels: ['quarantined'], // restore will strip this; but read_at independently suppresses
+    fields: { read_at: '2026-04-28T12:00:00Z' },
+  });
+  const result = await hook(item, CTX);
+  assertEquals(result, 'accept');
+});
+
+Deno.test('hook — quarantine restore round-trip: item with read_at stays read (B028 integration)', async () => {
+  // Step 1: ingest stamps `unread` — fresh items have no read_at.
+  const hook = createStampUnreadHook();
+  const fresh = makeItem({ labels: [], fields: {} });
+  const stamped = await hook(fresh, CTX);
+  assert(typeof stamped !== 'string');
+  assertEquals(stamped.labels, [UNREAD_LABEL]);
+
+  // Step 2: simulate the user marking read — `unread` removed,
+  // `read_at` set on the item's fields.
+  const readItem = makeItem({
+    labels: [],
+    fields: { read_at: '2026-04-28T12:00:00Z' },
+  });
+
+  // Step 3: simulate a re-ingest that runs the hook chain (the path the
+  // audit B028 was concerned about). The read_at sentinel must keep the
+  // hook from re-stamping `unread`.
+  const reingest = await hook(readItem, CTX);
+  assertEquals(reingest, 'accept');
+});
+
 Deno.test('hook — ingest → mark-read → re-ingest stays read (integration)', async () => {
   // Simulates: new email arrives (stamp), user clicks read (label removed),
   // some other hook mutates the item causing re-ingest. Unread must NOT

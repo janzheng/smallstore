@@ -118,6 +118,13 @@ export function quarantineSink(inbox: Inbox, opts?: QuarantineOptions): Sink {
  * reflects the operation.
  *
  * Returns the updated item, or `null` if the id doesn't exist in the inbox.
+ *
+ * **B028 — read-state preservation.** `_ingest({force: true})` does NOT
+ * re-run the postClassify hook chain (hooks fire only via `dispatchItem`),
+ * so this path cannot resurrect the `unread` label today. As forward
+ * defense, the `stampUnreadHook` honors `fields.read_at` (see
+ * `unread.ts`); if a future change ever wires this code through the hook
+ * chain, items the user previously marked read stay read.
  */
 export async function quarantineItem(
   inbox: Inbox,
