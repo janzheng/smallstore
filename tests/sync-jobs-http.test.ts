@@ -99,21 +99,33 @@ Deno.test('sync-jobs-http: POST /_sync returns jobId + logPath in background mod
     assert(typeof body.logPath === 'string' && body.logPath.endsWith('.jsonl'));
     assertEquals(body.status, 'running');
 
-    // Poll /_sync/jobs/:id until completed (with a timeout).
-    const deadline = Date.now() + 10000;
+    // Poll /_sync/jobs/:id until terminal. Deadline raised to 30s (was 10s)
+    // because full-suite parallelism loads the filesystem enough that the
+    // job's JSONL writes can lag — the test was a flaky 1-in-3 failure
+    // under `deno test tests/`. Polled every 50ms; in isolation the job
+    // settles in <1s, so this only matters under contention.
+    const deadline = Date.now() + 30000;
     let summary: Record<string, unknown> | null = null;
+    let lastStatus: unknown = 'never-fetched';
+    let pollCount = 0;
     while (Date.now() < deadline) {
       const s = await fetch(`${srv.url}/_sync/jobs/${body.jobId}`);
       if (s.ok) {
         summary = await s.json() as Record<string, unknown>;
+        lastStatus = summary.status;
+        pollCount++;
         if (summary.status === 'completed' || summary.status === 'failed') break;
       } else {
         await s.body?.cancel();
       }
       await new Promise(r => setTimeout(r, 50));
     }
-    assert(summary !== null, 'summary should be fetched');
-    assertEquals(summary.status, 'completed', `expected completed, got ${summary.status}`);
+    assert(summary !== null, 'summary should be fetched at least once before deadline');
+    assertEquals(
+      summary.status,
+      'completed',
+      `expected completed, got ${lastStatus} after ${pollCount} polls; events=${JSON.stringify((summary as { events?: unknown[] }).events?.slice(-3))}`,
+    );
     const events = summary.events as Array<Record<string, unknown>>;
     assertEquals(events[0].event, 'started');
     assertEquals(events[events.length - 1].event, 'completed');

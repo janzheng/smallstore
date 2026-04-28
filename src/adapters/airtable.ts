@@ -433,6 +433,12 @@ export class AirtableAdapter implements StorageAdapter {
    * returned in each page's response). `options.cursor` round-trips it
    * opaquely. `options.offset` (numeric) walks forward from the start;
    * safe but O(offset) in Airtable API calls, so prefer cursor.
+   *
+   * **A220 — cursor + offset precedence:** `cursor` wins when both are
+   * supplied. The numeric `offset` skip is gated on `!options.cursor`,
+   * so passing both silently ignores `offset` (resumes from where the
+   * previous page left off). This matches the resume-from-cursor mental
+   * model — but callers passing both should pick one explicitly.
    */
   async listKeys(options: KeysPageOptions = {}): Promise<KeysPage> {
     const prefix = options.prefix;

@@ -24,6 +24,27 @@ export interface JobLogEvent {
   [key: string]: unknown;
 }
 
+/**
+ * Terminal-event shapes recognized by `summarizeJob`. Callers writing the
+ * `completed` / `failed` events should match these so the summary picks up
+ * `result` and `message` without an `as any` cast (audit finding A242).
+ *
+ * `JobLogEvent` keeps an open index signature so this is a *narrowing* type
+ * the summary uses on read, not a constraint enforced at write time —
+ * appenders can attach extra fields freely.
+ */
+export interface JobCompletedEvent extends JobLogEvent {
+  event: 'completed';
+  result?: unknown;
+}
+
+export interface JobFailedEvent extends JobLogEvent {
+  event: 'failed';
+  message?: string;
+}
+
+export type TerminalJobEvent = JobCompletedEvent | JobFailedEvent;
+
 export interface JobLog {
   /** Unique job id for this run. */
   readonly jobId: string;
@@ -37,11 +58,20 @@ export interface JobLog {
 
 /**
  * Generate a timestamped, URL-safe job ID.
- * Shape: `sync-2026-04-18T03-22-15-<rand6>` — sortable + unique per second.
+ * Shape: `sync-2026-04-18T03-22-15-<rand12>` — sortable + collision-resistant.
+ *
+ * **A203 hardening:** the random suffix is 12 hex chars from
+ * `crypto.getRandomValues` (~48 bits = ~2.8 × 10^14 space) instead of
+ * the previous 6-char `Math.random().toString(36)` slice which had a
+ * non-trivial collision probability for burst-parallel /_sync requests
+ * within the same second (~10^-6 per 1k req/s). The format stays
+ * URL-safe (lowercase hex only).
  */
 export function generateJobId(prefix = 'job'): string {
   const ts = new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, '');
-  const rand = Math.random().toString(36).slice(2, 8);
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  const rand = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
   return `${prefix}-${ts}-${rand}`;
 }
 
@@ -174,6 +204,12 @@ export async function summarizeJob(path: string): Promise<{
   let status: 'running' | 'completed' | 'failed' | 'unknown' = 'running';
   if (last.event === 'completed') status = 'completed';
   else if (last.event === 'failed') status = 'failed';
+  // A242: narrow via the terminal-event types instead of `as any`. Both
+  // `result` (on completed) and `message` (on failed) are open-shape fields
+  // — the runtime check looks them up positionally + type-guards before use.
+  const completed = status === 'completed' ? (last as JobCompletedEvent) : null;
+  const failed = status === 'failed' ? (last as JobFailedEvent) : null;
+  const errorMsg = failed && typeof failed.message === 'string' ? failed.message : undefined;
   return {
     status,
     startedAt: typeof first.t === 'string' ? first.t : undefined,
@@ -182,8 +218,8 @@ export async function summarizeJob(path: string): Promise<{
       : undefined,
     source: typeof first.source === 'string' ? first.source : undefined,
     target: typeof first.target === 'string' ? first.target : undefined,
-    result: (last as any).result,
-    error: typeof (last as any).message === 'string' && status === 'failed' ? (last as any).message : undefined,
+    result: completed?.result,
+    error: errorMsg,
     lastEvent: last.event,
   };
 }

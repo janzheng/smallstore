@@ -34,7 +34,7 @@ import { cors } from 'hono/cors';
 import { createSmallstore } from './mod.ts';
 import { createHonoRoutes } from './src/http/integrations/hono.ts';
 import { loadConfig, buildAdapters, resolveInboxStorage, type SmallstoreServerConfig, type InboxConfigEntry } from './config.ts';
-import { resolvePreset } from './presets.ts';
+import { resolvePreset, type PresetName } from './presets.ts';
 import { syncAdapters, type SyncAdapterOptions } from './src/sync.ts';
 import type { StorageAdapter } from './src/adapters/adapter.ts';
 import { createJobLog, generateJobId, listJobs, summarizeJob, tailJobLog } from './src/utils/job-log.ts';
@@ -77,8 +77,23 @@ if (config.preset) {
   const hasExplicitAdapters = Object.keys(config.adapters).length > 0;
   const manualAdapters = hasExplicitAdapters ? await buildAdapters(config.adapters, { dataDir: config.dataDir }) : undefined;
 
+  // A243: narrow the preset name from `config.preset: string | undefined`
+  // to the typed `PresetName` union. `loadConfig` reads from a JSON config
+  // so we can't statically guarantee the value at the source — runtime
+  // validation throws with the allowed names if it doesn't match, instead
+  // of letting `resolvePreset` silently accept something arbitrary.
+  const VALID_PRESETS: readonly PresetName[] = [
+    'memory', 'local', 'local-sqlite', 'deno-fs', 'cloud', 'hybrid', 'structured',
+  ];
+  if (!VALID_PRESETS.includes(config.preset as PresetName)) {
+    throw new Error(
+      `config.preset "${config.preset}" not recognized — expected one of: ${VALID_PRESETS.join(', ')}`,
+    );
+  }
+  const presetName = config.preset as PresetName;
+
   const resolved = resolvePreset({
-    preset: config.preset as any,
+    preset: presetName,
     ...(manualAdapters ? { adapters: manualAdapters } : {}),
     ...(config.mounts ? { mounts: config.mounts } : {}),
     ...(config.typeRouting ? { typeRouting: config.typeRouting } : {}),
@@ -269,14 +284,27 @@ app.post('/_sync', requireAuth, async (c) => {
 
 // List recent sync jobs (newest first). Reads directly from the jobs
 // directory — no in-memory state to reconcile across restarts.
+//
+// A204: summarizeJob hits each JSONL file with a full `Deno.readTextFile`,
+// so unbounded `Promise.all` here would fan out 50+ concurrent file reads
+// at default limits. Cap concurrency at 8 (heuristic: roughly one per
+// reasonable filesystem queue depth; tunable if a real bottleneck appears).
+const SUMMARIZE_CONCURRENCY = 8;
+
 app.get('/_sync/jobs', requireAuth, async (c) => {
   const jobs = await listJobs(config.dataDir);
   const limitParam = c.req.query('limit');
   const limit = limitParam ? Math.max(1, parseInt(limitParam, 10)) : 50;
   const slice = jobs.slice(0, limit);
-  const withSummaries = await Promise.all(
-    slice.map(async (j) => ({ ...j, ...(await summarizeJob(j.path)) })),
-  );
+
+  const withSummaries: Array<typeof slice[number] & Awaited<ReturnType<typeof summarizeJob>>> = [];
+  for (let i = 0; i < slice.length; i += SUMMARIZE_CONCURRENCY) {
+    const chunk = slice.slice(i, i + SUMMARIZE_CONCURRENCY);
+    const results = await Promise.all(
+      chunk.map(async (j) => ({ ...j, ...(await summarizeJob(j.path)) })),
+    );
+    withSummaries.push(...results);
+  }
   return c.json({ jobs: withSummaries, total: jobs.length, truncated: jobs.length > limit });
 });
 

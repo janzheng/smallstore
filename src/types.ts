@@ -44,9 +44,18 @@ export interface KeysPageOptions {
   prefix?: string;
   /** Max keys to return in this page. Undefined = no limit. */
   limit?: number;
-  /** Absolute offset into the full key list (ignored if `cursor` is given). */
+  /**
+   * Absolute offset into the full key list. **Ignored when `cursor` is set
+   * (cursor wins).** This is the documented A220 precedence: callers
+   * passing both will silently use the cursor. If you want to skip
+   * forward from the start of a fresh listing, omit `cursor`. If you're
+   * resuming an in-progress listing, omit `offset`.
+   */
   offset?: number;
-  /** Opaque, adapter-specific cursor from the previous page's response. */
+  /**
+   * Opaque, adapter-specific cursor from the previous page's response.
+   * Takes precedence over `offset` when both are set.
+   */
   cursor?: string;
 }
 

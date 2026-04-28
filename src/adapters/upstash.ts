@@ -330,6 +330,13 @@ export class UpstashAdapter implements StorageAdapter {
    * honored best-effort by skipping; prefer cursor when possible.
    * SCAN's `count` is a hint, not a hard limit — Redis may return fewer or
    * slightly more; we keep iterating until `limit` is reached or cursor is 0.
+   *
+   * **A220 — cursor + offset precedence:** `cursor` wins when both are
+   * supplied. The skip-counter that implements `offset` only fires when
+   * `!options.cursor`, so passing both silently ignores `offset` (resumes
+   * from where the previous SCAN page left off). This matches the
+   * resume-from-cursor mental model — but callers passing both should
+   * pick one explicitly.
    */
   async listKeys(options: KeysPageOptions = {}): Promise<KeysPage> {
     const prefix = options.prefix;
