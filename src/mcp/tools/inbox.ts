@@ -557,6 +557,66 @@ export const INBOX_TOOLS: Tool[] = [
       required: ['inbox', 'hook'],
     },
   },
+  // --------------------------------------------------------------------------
+  // Admin (runtime inbox lifecycle — wraps /admin/inboxes)
+  // --------------------------------------------------------------------------
+  {
+    name: 'sm_inbox_create',
+    description:
+      'Spin up a new runtime inbox. Wraps `POST /admin/inboxes`. Pass `name` (the inbox slug — must be unique among registered inboxes) plus an `InboxConfig`-shaped payload (channel + storage, optionally channel_config / schedule / keyPrefix). Runtime inboxes auto-namespace their storage via `keyPrefix: "inbox/<name>/"` unless one is supplied, so multiple runtime inboxes can share a single D1 table without `_index` rows colliding. 409 if `name` already exists. The created inbox shows up in `sm_inbox_list_admin` immediately and is usable from the rest of the `sm_inbox_*` family.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Inbox slug. Must be unique. URL-safe.' },
+        channel: {
+          type: 'string',
+          description: 'Channel name (must be registered server-side — e.g. `cf-email`, `rss`, `webhook`).',
+        },
+        storage: {
+          description:
+            'Storage adapter reference. Either a bare adapter name (string) for items-only, or `{ items: "<name>", blobs?: "<name>" }` to split body/attachments off to a blob adapter.',
+        },
+        channel_config: {
+          type: 'object',
+          description: 'Channel-specific config (HMAC secret env name, feed URL, etc). Shape depends on the channel.',
+        },
+        schedule: {
+          type: 'string',
+          description: 'Cron schedule for pull channels (e.g. `"*/5 * * * *"`). Ignored for push channels.',
+        },
+        keyPrefix: {
+          type: 'string',
+          description: 'Storage key prefix. Defaults to `inbox/<name>/` when omitted.',
+        },
+        ttl: {
+          type: 'number',
+          description: 'Optional TTL in seconds — runtime inbox is reaped after this many seconds idle.',
+        },
+      },
+      required: ['name', 'channel', 'storage'],
+    },
+  },
+  {
+    name: 'sm_inbox_list_admin',
+    description:
+      'List ALL registered inboxes — boot-time + runtime — with their channel, storage, and origin. Wraps `GET /admin/inboxes`. Use this to see what inboxes exist on the server (per-item `sm_inbox_list` lists items inside ONE inbox; this lists the inboxes themselves). Returns `{ inboxes: [{ name, channel, origin: "boot"|"runtime", created_at, config }] }`.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'sm_inbox_delete_inbox',
+    description:
+      'Unregister an inbox from the server. Wraps `DELETE /admin/inboxes/:name`. Disambiguated from `sm_inbox_delete` (which removes a single item from inside an inbox). The unregister is in-memory only — the inbox storage rows under the registered keyPrefix remain in the underlying adapter so a re-registration can pick up where it left off (or a separate cleanup task can reap them). 404 if the inbox name is not registered.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Inbox name to unregister.' },
+      },
+      required: ['inbox'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -1005,6 +1065,38 @@ export async function handleInboxTool(
       if (typeof args.limit === 'number') body.limit = args.limit;
       const r = await http('POST', `/admin/inboxes/${encName(inbox)}/replay`, body);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_replay_hook failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_create': {
+      const inboxName = requireString(args, 'name');
+      // Validate the slug shape via validateName (same regex /admin/inboxes accepts).
+      validateName(inboxName, 'name');
+      const channel = requireString(args, 'channel');
+      const storage = args.storage;
+      if (storage === undefined || storage === null) {
+        throw new Error('sm_inbox_create: `storage` (string or { items, blobs? }) required');
+      }
+      const body: Record<string, unknown> = { name: inboxName, channel, storage };
+      if (args.channel_config !== undefined) body.channel_config = args.channel_config;
+      if (typeof args.schedule === 'string') body.schedule = args.schedule;
+      if (typeof args.keyPrefix === 'string') body.keyPrefix = args.keyPrefix;
+      if (typeof args.ttl === 'number') body.ttl = args.ttl;
+      const r = await http('POST', '/admin/inboxes', body);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_create failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_list_admin': {
+      const r = await http('GET', '/admin/inboxes');
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_list_admin failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_delete_inbox': {
+      const inbox = requireString(args, 'inbox');
+      const r = await http('DELETE', `/admin/inboxes/${encName(inbox)}`);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_delete_inbox failed', r));
       return r.body;
     }
 

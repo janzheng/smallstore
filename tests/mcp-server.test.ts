@@ -243,12 +243,15 @@ Deno.test('MCP: tools/list returns all expected tools with inputSchemas', async 
       // core (10)
       'sm_adapters', 'sm_append', 'sm_delete', 'sm_list', 'sm_query', 'sm_read',
       'sm_sync', 'sm_sync_jobs', 'sm_sync_status', 'sm_write',
-      // inbox — items + confirmations + notes/todos + replay (21)
+      // inbox — items + confirmations + notes/todos + replay (19) + admin (3)
       'sm_inbox_attachments_list',
       'sm_inbox_confirm',
+      'sm_inbox_create',
       'sm_inbox_delete',
+      'sm_inbox_delete_inbox',
       'sm_inbox_export',
       'sm_inbox_list',
+      'sm_inbox_list_admin',
       'sm_inbox_mark_read',
       'sm_inbox_mark_read_many',
       'sm_inbox_mark_unread',
@@ -510,6 +513,78 @@ Deno.test('MCP: sm_sync_jobs forwards to GET /_sync/jobs', async () => {
     assertEquals(isError, false);
     assertEquals(mock.requests[0].method, 'GET');
     assertEquals(mock.requests[0].path, '/_sync/jobs?limit=20');
+  } finally {
+    await mcp.close();
+    await mock.stop();
+  }
+});
+
+// ============================================================================
+// 2.5 — Admin inbox tools (runtime inbox lifecycle)
+// ============================================================================
+
+Deno.test('MCP: sm_inbox_create forwards POST /admin/inboxes with body', async () => {
+  const mock = await startMockServer();
+  mock.setResponder(() => ({
+    status: 201,
+    body: { created: { name: 'mailroom-test', channel: 'cf-email', origin: 'runtime' } },
+  }));
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    const resp = await callTool(mcp, 'sm_inbox_create', {
+      name: 'mailroom-test',
+      channel: 'cf-email',
+      storage: { items: 'd1', blobs: 'r2' },
+      schedule: '*/30 * * * *',
+    });
+    const { isError } = extractText(resp);
+    assertEquals(isError, false);
+    assertEquals(mock.requests.length, 1);
+    const req = mock.requests[0];
+    assertEquals(req.method, 'POST');
+    assertEquals(req.path, '/admin/inboxes');
+    assertEquals(req.body, {
+      name: 'mailroom-test',
+      channel: 'cf-email',
+      storage: { items: 'd1', blobs: 'r2' },
+      schedule: '*/30 * * * *',
+    });
+  } finally {
+    await mcp.close();
+    await mock.stop();
+  }
+});
+
+Deno.test('MCP: sm_inbox_list_admin forwards GET /admin/inboxes', async () => {
+  const mock = await startMockServer();
+  mock.setResponder(() => ({
+    status: 200,
+    body: { inboxes: [{ name: 'mailroom', channel: 'cf-email', origin: 'boot' }] },
+  }));
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    const resp = await callTool(mcp, 'sm_inbox_list_admin', {});
+    const { text, isError } = extractText(resp);
+    assertEquals(isError, false);
+    assert(text.includes('mailroom'), `response should include mock body: ${text}`);
+    assertEquals(mock.requests[0].method, 'GET');
+    assertEquals(mock.requests[0].path, '/admin/inboxes');
+  } finally {
+    await mcp.close();
+    await mock.stop();
+  }
+});
+
+Deno.test('MCP: sm_inbox_delete_inbox forwards DELETE /admin/inboxes/:name', async () => {
+  const mock = await startMockServer();
+  mock.setResponder(() => ({ status: 200, body: { deleted: 'mailroom-test' } }));
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    const resp = await callTool(mcp, 'sm_inbox_delete_inbox', { inbox: 'mailroom-test' });
+    const { isError } = extractText(resp);
+    assertEquals(isError, false);
+    assertEquals(mock.requests[0].method, 'DELETE');
+    assertEquals(mock.requests[0].path, '/admin/inboxes/mailroom-test');
   } finally {
     await mcp.close();
     await mock.stop();

@@ -121,7 +121,7 @@ End-to-end: real email → deployed smallstore → mailroom collection materiali
 Expose Inbox operations via MCP so agents can read inboxes without local install.
 
 - [x] [shipped — moved to `src/mcp/tools/inbox.ts` during MCP reorg sprint] Register `sm_inbox_list`, `sm_inbox_read`, `sm_inbox_query` (cursor surfaced via list response). 19+ inbox tools live (verified mid-session). #messaging #mcp
-- [?] **Admin MCP tools — NOT YET shipped**: `sm_inbox_create`, `sm_inbox_delete_inbox` (rename to disambiguate from per-item `sm_inbox_delete`), `sm_inbox_list_admin`. The HTTP `/admin/inboxes` surface exists; just no MCP wrapper. Promote when a real "spin up runtime inbox via Claude" workflow appears #messaging #mcp #runtime-config #needs:admin-api
+- [x] [shipped 2026-04-28: 3 admin tools `sm_inbox_create`, `sm_inbox_list_admin`, `sm_inbox_delete_inbox` — thin wrappers over the existing `/admin/inboxes` HTTP surface. Disambiguated from per-item `sm_inbox_delete`. 3 mock-roundtrip tests in tests/mcp-server.test.ts. Tool count 49 → 52.] **Admin MCP tools shipped** #messaging #mcp #runtime-config
 - [x] [shipped earlier — never flipped] Update smallstore MCP `SKILL.md` — `skills/smallstore/SKILL.md` covers the inbox tool family and is mcp-hub-synced to `~/.claude/skills/` + `~/.cursor/skills/` + `~/.codex/skills/` + `~/.agents/skills/` #messaging #mcp #docs
 - [x] [shipped earlier — never flipped] Restart MCP client + verify tools callable — done after every tool addition; CLAUDE.md documents the `claude mcp remove` + `add` re-register dance. #messaging #mcp #verify
 
