@@ -281,7 +281,24 @@ export function createRulesStore(
       // stable label order before dedup.
       const matches: MailroomRule[] = [];
       for (const rule of enabled) {
-        if (evaluateFilter(rule.match, item)) matches.push(rule);
+        // B008: a malformed filter (e.g. an unclosed regex in
+        // `subject_regex`) used to throw out of `evaluateFilter` and bubble
+        // through `apply` → the rules-hook → terminate the ingest pipeline,
+        // wedging the mailroom until the bad rule was deleted by hand.
+        // Treat any throw as "rule did not match" so a single broken rule
+        // can't take down ingest. We log the rule id + error so the
+        // operator can find and fix the offender.
+        let didMatch = false;
+        try {
+          didMatch = evaluateFilter(rule.match, item);
+        } catch (err) {
+          console.warn(
+            `[rules.apply] evaluateFilter threw for rule ${rule.id}; treating as no-match:`,
+            err,
+          );
+          didMatch = false;
+        }
+        if (didMatch) matches.push(rule);
       }
       matches.sort((a, b) => {
         if (a.priority !== b.priority) return a.priority - b.priority;
@@ -349,6 +366,22 @@ export function createRulesStore(
       const maxPages = 10_000;
       let pages = 0;
 
+      // B024: fast-fail on cursor non-advance. If `inbox.query` returns the
+      // same `next_cursor` value across multiple consecutive pages, we're
+      // looping — advancing pages without actually walking the result set —
+      // and would burn the cron's CPU budget grinding through the 10k cap
+      // multiplied by per-page latency.
+      //
+      // Threshold: 3 consecutive pages with an identical cursor. One repeat
+      // can be a benign coincidence on a tiny inbox; three is a structural
+      // bug — either a corrupted index or a `query` implementation that
+      // forgot to advance. Bail with a logged warning so the operator can
+      // surface the data corruption. The 10k cap stays as the ultimate
+      // backstop for any other pathology we haven't anticipated.
+      const stuckThreshold = 3;
+      let stuckCount = 0;
+      let lastCursor: string | undefined;
+
       while (pages++ < maxPages) {
         const result = await inbox.query(rule.match, { cursor, limit: pageLimit });
         for (const item of result.items) {
@@ -366,6 +399,23 @@ export function createRulesStore(
           affected++;
         }
         if (!result.next_cursor) break;
+
+        // Detect cursor non-advance: same value as last page's next_cursor.
+        if (result.next_cursor === lastCursor) {
+          stuckCount++;
+          if (stuckCount >= stuckThreshold) {
+            console.warn(
+              `[rules.applyRetroactive] cursor stuck at "${result.next_cursor}" for ${stuckCount} consecutive pages on rule ${rule.id}; bailing after ${pages} pages with ${affected} items affected. Likely inbox.query() bug or index corruption.`,
+            );
+            return {
+              affected,
+              error: `cursor non-advance detected (${stuckCount} stuck pages); aborted retroactive apply`,
+            };
+          }
+        } else {
+          stuckCount = 0;
+        }
+        lastCursor = result.next_cursor;
         cursor = result.next_cursor;
       }
 

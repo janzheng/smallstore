@@ -48,7 +48,22 @@ export function createRulesHook(opts: RulesHookOptions): PreIngestHook {
   const quarantineLabel = opts.quarantineLabel ?? DEFAULT_QUARANTINE_LABEL;
 
   return async function rulesHook(item: InboxItem, _ctx: HookContext): Promise<HookVerdict> {
-    const result = await rulesStore.apply(item);
+    // B008 second-line: if the rules store throws (e.g. storage adapter
+    // outage, malformed rule payload that escapes the per-rule try/catch in
+    // `apply`, etc.) we must NOT crash the ingest pipeline. A single broken
+    // rule wedging the mailroom for hours is the failure mode we're guarding
+    // against — fall back to 'accept' and log the error so the operator can
+    // see it surface in the Worker logs.
+    let result;
+    try {
+      result = await rulesStore.apply(item);
+    } catch (err) {
+      console.error(
+        `[rulesHook] rulesStore.apply threw for item ${item.id}; accepting item unmodified to keep ingest alive:`,
+        err,
+      );
+      return 'accept';
+    }
 
     // Drop wins unconditionally: item never reaches sinks.
     if (result.terminal === 'drop') {
