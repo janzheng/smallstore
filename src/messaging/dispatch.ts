@@ -86,6 +86,10 @@ type HookOutcome =
  * Stages:
  *   1. `reg.hooks.preIngest` — hooks can mutate, drop, or quarantine.
  *   2. Built-in `classifyAndMerge` (opt-out via `opts.classify = false`).
+ *      A throwing classifier is fail-closed — the item is dropped with
+ *      `drop_reason: 'classifier-failed'` and a `console.error` log, because
+ *      downstream postClassify hooks gate on classifier labels and would
+ *      silently misbehave on an unlabeled item (B009).
  *   3. `reg.hooks.postClassify` — same verdict surface as preIngest.
  *   4. Fan out to `reg.sinks` in order. Each sink is guarded with try/catch
  *      so one failing sink doesn't stop the others.
@@ -113,14 +117,36 @@ export async function dispatchItem(
   let isQuarantined = preOutcome.action === 'quarantine';
 
   // ── Stage 2: built-in classifier ────────────────────────────────────
+  // B009: a classifier throw is fail-closed — postClassify hooks
+  // (newsletter-name, confirm-detect, auto-confirm, sender-index) all gate on
+  // classifier-applied labels (`newsletter`, `list`, `bounce`). Continuing
+  // with an unlabeled item silently breaks the confirmation flow because
+  // those hooks see no `newsletter` label and skip. Drop the item with a
+  // logged `console.error` so the operator notices and the auto-confirm flow
+  // never silently rots.
   if (shouldClassify) {
     try {
       item = classifyAndMerge(item);
     } catch (err) {
-      log('classify threw (bug in classifier)', {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error('[dispatch] classifier threw — dropping item', {
         registration: regName,
-        error: err instanceof Error ? err.message : String(err),
+        item_id: initialItem.id,
+        channel: opts.channel,
+        error: errMsg,
       });
+      log('classifier threw (B009: dropping item to avoid silent label loss)', {
+        registration: regName,
+        item_id: initialItem.id,
+        error: errMsg,
+      });
+      return {
+        item: null,
+        dropped: true,
+        drop_reason: 'classifier-failed',
+        quarantined: false,
+        results: [],
+      };
     }
   }
 
