@@ -211,13 +211,36 @@ Order matters: ship the manual triage path first so the system starts collecting
 - `src/mcp/tools/inbox.ts` — `sm_inbox_spam_stats`, `sm_inbox_promote_spam_rule`
 - Tests + MCP tools/list assertion bump
 
-### Edge cases to handle
+### Edge case decisions (resolved 2026-04-28 with user)
 
-- **Duplicate mark-spam calls on the same item** — idempotent: don't bump counter twice for the same item. Track `marked_items: string[]` per sender? Or just dedup on the item's existing `spam` label (skip if already present)? **Decision needed.**
-- **Mark-spam on a forwarded item** — does it count against the original sender or the forwarder? Probably original (`fields.original_from_email` if present, else `fields.from_email`).
-- **Mark-not-spam on an auto-confirmed item** — should the auto-confirm allowlist also be revoked? Probably yes (one-shot operator decision = "this sender shouldn't have been auto-confirmed either"); confirm via response payload.
-- **Sender has both `trusted` (whitelist rule) AND user marks an item from them as spam** — what happens? **Decision: trusted wins for ingest gating, but `spam_count` still increments. If `not_spam_count + spam_count >= 5` and the item is on the trusted list, prompt the user to demote.** Operator awareness > automation.
-- **Per-recipient tracking pixels in body normalization** — we strip these before hashing. List of patterns to strip lives in `content-hash.ts`'s normalize fn.
+1. **Duplicate mark-spam on the same item — idempotent.** If the item already carries `spam`, the endpoint is a no-op for the counter; returns 200 with `{ already_spam: true }` so the caller can distinguish from "first mark." Implementation: skip the counter bump when `item.labels.includes('spam')`. No need for a per-sender `marked_items: string[]` — the item's own label IS the dedup key.
+
+2. **Mark-spam on a forwarded item — attribute to the original sender, BUT a trusted forwarder breaks the chain.** Three-step resolution:
+   1. If `fields.original_from_email` exists AND the forwarder (`fields.from_email`) carries the `trusted` tag in sender-index → attribute to **the forwarder**. Reasoning: a trusted curator's deliberate forward is signal about *their* curation choice, not a failure of the original sender. The forwarder's `spam_count` increments; the original sender is untouched.
+   2. Else if `fields.original_from_email` exists → attribute to the original sender (the normal forward case — user got something gross from someone they don't have a trust relationship with).
+   3. Else → attribute to `fields.from_email` (no forward chain).
+   The decision logic lives in a small helper `resolveSpamAttribution(item, senderIndex): Promise<string>` and gets unit-tested directly.
+
+3. **Mark-not-spam on an auto-confirmed item — revoke the auto-confirm allowlist entry, with an undo path.** When the item carries `auto-confirmed`, the mark-not-spam endpoint:
+   - Removes `spam` + `quarantined` labels (normal mark-not-spam behavior)
+   - Looks up the sender's auto-confirm allowlist pattern (if any matches `fields.from_email`)
+   - Removes that pattern from `AutoConfirmSendersStore`
+   - Returns the response with `{ revoked_auto_confirm: { pattern, source } | null }` so the caller knows what was undone
+   - Undo path: re-add via existing `sm_auto_confirm_add(pattern, { source: 'runtime', notes: 'restored after mark-not-spam undo' })`. The response includes the revoked pattern's `source` so the caller can preserve provenance.
+   - Documented in `mailroom-inbox/CLAUDE.md` under operator workflows.
+
+4. **Trusted + spam-mark — trusted wins for ingest gating, but counter still increments. Repeats from trusted senders AMPLIFY (don't dedup).** Two parts:
+   - **Ingest gating:** `trusted` tag short-circuits every spam layer below — no `spam-suspect:*` label gets emitted, no content-hash dedup applies, no rule-engine quarantine fires (trusted-priority rules win first).
+   - **Counter still bumps:** `spam_count` increments normally on a trusted sender, so if the same trusted sender lands ≥5 marks the system can prompt the user to demote (`spam_count + not_spam_count >= 5 && spam_rate > 0.5 && has_trusted_tag` → emit a `consider_demote` field in the next mark-spam response).
+   - **Repeat amplification:** Layer 4 (content-hash dedup) does NOT label trusted-sender repeats `campaign-blast`. Instead emits `repeated:trusted` so the caller can surface "this is being repeated, important." Reasoning: trusted senders re-sending the same content usually means "make sure you see this" — the user wants emphasis, not deduplication.
+
+5. **Body normalization for content-hash — strip ESP tracking pixels and per-recipient tokens before hashing.** Explicit pattern list in `content-hash.ts`:
+   - **Tracking pixel hosts** to drop entirely from body: `*.list-manage.com/track/*` (Mailchimp), `*.sendgrid.net/track/*` + `email.mg.*` (Mailgun/SendGrid), `*.email.beehiiv.com/c/*`, `*.substackcdn.com/image/*?token=*` (Substack), `*.convertkit.com/click/*`, `*.email.mailerlite.com/lt/*`.
+   - **Inline 1×1 pixel tags:** `<img[^>]*(?:width=["']?1["']?|height=["']?1["']?)[^>]*>` — strip the whole tag.
+   - **Per-recipient tokens in URLs:** any URL with a query string segment matching `[?&](token|t|c|recipient|email|user|uid)=[^&]+` — drop that single param while keeping the rest of the URL.
+   - **Whitespace runs** (newlines + spaces + tabs) collapsed to single spaces.
+   - **Sender-name salutations:** `^(Hi|Hello|Hey|Dear)\s+\S+,?\s*` at the start of a paragraph — strip.
+   The helper is small (~30 lines) but explicit so future ESP additions are obvious. List grows over time as the user encounters senders we missed.
 
 ### Schema change (sender-index, back-compat)
 
