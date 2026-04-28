@@ -1458,11 +1458,21 @@ export function registerMessagingRoutes(
 
     if (config.hmac) {
       if (!resolveHmacSecret) {
-        return c.json({ error: 'webhook HMAC required but resolveHmacSecret not provided' }, 500);
+        // Server-side log keeps the operational detail; client gets a generic
+        // 500 so we don't reveal the env-var schema to unauthenticated callers.
+        console.error('[webhook] HMAC required but resolveHmacSecret not provided');
+        return c.json({ error: 'webhook configuration error' }, 500);
       }
-      const secret = resolveHmacSecret(config.hmac.secret_env);
+      let secret: string | undefined;
+      try {
+        secret = resolveHmacSecret(config.hmac.secret_env);
+      } catch (err) {
+        console.error(`[webhook] HMAC secret resolver threw for env "${config.hmac.secret_env}":`, err);
+        return c.json({ error: 'webhook configuration error' }, 500);
+      }
       if (!secret) {
-        return c.json({ error: `HMAC secret env "${config.hmac.secret_env}" not set` }, 500);
+        console.error(`[webhook] HMAC secret env "${config.hmac.secret_env}" not set or not allowed`);
+        return c.json({ error: 'webhook configuration error' }, 500);
       }
       const headerVal = c.req.header(config.hmac.header) ?? '';
       const sig = config.hmac.prefix && headerVal.startsWith(config.hmac.prefix)

@@ -31,3 +31,10 @@ export type {
 export { createPeerStore } from './peer-registry.ts';
 export { resolvePeerAuth, proxyGet, proxyPost, probePeer } from './proxy.ts';
 export { registerPeersRoutes, type RegisterPeersRoutesOptions, type RequireAuth } from './http-routes.ts';
+export {
+  createEnvAllowlist,
+  defaultEnvAllowlist,
+  AllowlistViolationError,
+  type EnvAllowlist,
+  type EnvAllowlistOptions,
+} from './env-allowlist.ts';

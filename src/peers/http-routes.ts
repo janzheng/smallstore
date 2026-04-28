@@ -33,6 +33,7 @@
 
 import type { Context, Hono, Next } from 'hono';
 import type { Peer, PeerAuth, PeerStore, PeerType, PeerQueryFilter } from './types.ts';
+import { defaultEnvAllowlist } from './env-allowlist.ts';
 import { probePeer, proxyGet, proxyPost } from './proxy.ts';
 
 export type RequireAuth = (c: Context, next: Next) => Promise<Response | void> | Response | void;
@@ -310,38 +311,63 @@ function validateAuthShape(auth: unknown): string | undefined {
   if (typeof a.kind !== 'string' || !VALID_AUTH_KINDS.has(a.kind)) {
     return `auth.kind must be one of: ${[...VALID_AUTH_KINDS].join(', ')}`;
   }
+  // Reject env-var names not on the allowlist up front. Same gate is enforced
+  // at request time by `resolvePeerAuth`, but rejecting at create time gives
+  // operators a clearer error rather than a silent dispatch failure later.
+  // The reason string includes the allowlist policy summary; the env-var
+  // name itself is included in the operator-facing 400 (the route is behind
+  // bearer auth) so the operator can fix their config.
+  const checkEnvName = (name: string, field: string): string | undefined => {
+    const reason = defaultEnvAllowlist.reasonRejected(name);
+    if (reason) return `auth.${field} "${name}" rejected — ${reason}`;
+    return undefined;
+  };
   switch (a.kind) {
     case 'none':
       return undefined;
-    case 'bearer':
+    case 'bearer': {
       if (typeof a.token_env !== 'string' || !a.token_env) {
         return 'auth.token_env (string) required for bearer auth';
       }
+      const reason = checkEnvName(a.token_env, 'token_env');
+      if (reason) return reason;
       return undefined;
-    case 'header':
+    }
+    case 'header': {
       if (typeof a.name !== 'string' || !a.name) {
         return 'auth.name (string) required for header auth';
       }
       if (typeof a.value_env !== 'string' || !a.value_env) {
         return 'auth.value_env (string) required for header auth';
       }
+      const reason = checkEnvName(a.value_env, 'value_env');
+      if (reason) return reason;
       return undefined;
-    case 'query':
+    }
+    case 'query': {
       if (typeof a.name !== 'string' || !a.name) {
         return 'auth.name (string) required for query auth';
       }
       if (typeof a.value_env !== 'string' || !a.value_env) {
         return 'auth.value_env (string) required for query auth';
       }
+      const reason = checkEnvName(a.value_env, 'value_env');
+      if (reason) return reason;
       return undefined;
-    case 'basic':
+    }
+    case 'basic': {
       if (typeof a.user_env !== 'string' || !a.user_env) {
         return 'auth.user_env (string) required for basic auth';
       }
       if (typeof a.pass_env !== 'string' || !a.pass_env) {
         return 'auth.pass_env (string) required for basic auth';
       }
+      const userReason = checkEnvName(a.user_env, 'user_env');
+      if (userReason) return userReason;
+      const passReason = checkEnvName(a.pass_env, 'pass_env');
+      if (passReason) return passReason;
       return undefined;
+    }
   }
   return undefined;
 }

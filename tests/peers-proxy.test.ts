@@ -202,9 +202,9 @@ Deno.test('resolvePeerAuth: query kind with missing env sets error', () => {
 
 Deno.test('resolvePeerAuth: basic kind builds base64 Authorization', () => {
   const peer = makePeer({
-    auth: { kind: 'basic', user_env: 'USER', pass_env: 'PASS' },
+    auth: { kind: 'basic', user_env: 'BASIC_USER', pass_env: 'BASIC_PASS' },
   });
-  const out = resolvePeerAuth(peer, { USER: 'alice', PASS: 'hunter2' });
+  const out = resolvePeerAuth(peer, { BASIC_USER: 'alice', BASIC_PASS: 'hunter2' });
   // base64 of "alice:hunter2"
   assertEquals(out.headers, { Authorization: `Basic ${btoa('alice:hunter2')}` });
   assertEquals(out.error, undefined);
@@ -212,18 +212,18 @@ Deno.test('resolvePeerAuth: basic kind builds base64 Authorization', () => {
 
 Deno.test('resolvePeerAuth: basic kind with missing user sets error', () => {
   const peer = makePeer({
-    auth: { kind: 'basic', user_env: 'USER', pass_env: 'PASS' },
+    auth: { kind: 'basic', user_env: 'BASIC_USER', pass_env: 'BASIC_PASS' },
   });
-  const out = resolvePeerAuth(peer, { PASS: 'x' });
-  assertEquals(out.error, 'env var USER is not set');
+  const out = resolvePeerAuth(peer, { BASIC_PASS: 'x' });
+  assertEquals(out.error, 'env var BASIC_USER is not set');
 });
 
 Deno.test('resolvePeerAuth: basic kind with missing pass sets error', () => {
   const peer = makePeer({
-    auth: { kind: 'basic', user_env: 'USER', pass_env: 'PASS' },
+    auth: { kind: 'basic', user_env: 'BASIC_USER', pass_env: 'BASIC_PASS' },
   });
-  const out = resolvePeerAuth(peer, { USER: 'alice' });
-  assertEquals(out.error, 'env var PASS is not set');
+  const out = resolvePeerAuth(peer, { BASIC_USER: 'alice' });
+  assertEquals(out.error, 'env var BASIC_PASS is not set');
 });
 
 // ============================================================================
@@ -235,12 +235,12 @@ Deno.test('proxyGet: builds URL from peer.url + path + client_query + auth query
   try {
     const peer = makePeer({
       url: 'https://sheet.example.com',
-      auth: { kind: 'query', name: 'key', value_env: 'K' },
+      auth: { kind: 'query', name: 'key', value_env: 'API_KEY' },
     });
     const result = await proxyGet({
       peer,
       path: '/data',
-      env: { K: 'secret' },
+      env: { API_KEY: 'secret' },
       client_query: { filter: 'foo' },
     });
     assertEquals(result.ok, true);
@@ -258,12 +258,12 @@ Deno.test('proxyGet: injects bearer Authorization header', async () => {
   const mock = installFetchMock({ status: 200, body: '{}' });
   try {
     const peer = makePeer({
-      auth: { kind: 'bearer', token_env: 'TOK' },
+      auth: { kind: 'bearer', token_env: 'API_TOKEN' },
     });
     const result = await proxyGet({
       peer,
       path: '/a',
-      env: { TOK: 'T-123' },
+      env: { API_TOKEN: 'T-123' },
     });
     assertEquals(result.ok, true);
     assertEquals(mock.calls[0].headers['Authorization'], 'Bearer T-123');
@@ -277,12 +277,12 @@ Deno.test('proxyGet: merges peer.headers + client_headers, auth wins', async () 
   try {
     const peer = makePeer({
       headers: { 'X-Peer': 'static', 'X-Shared': 'peer-wins-over-client' },
-      auth: { kind: 'header', name: 'X-Shared', value_env: 'V' },
+      auth: { kind: 'header', name: 'X-Shared', value_env: 'API_KEY' },
     });
     const result = await proxyGet({
       peer,
       path: '/',
-      env: { V: 'auth-wins' },
+      env: { API_KEY: 'auth-wins' },
       client_headers: {
         'X-Client': 'c',
         'X-Shared': 'from-client',
@@ -423,14 +423,74 @@ Deno.test('proxyGet: missing auth env short-circuits without fetch', async () =>
   const mock = installFetchMock({ status: 200 });
   try {
     const peer = makePeer({
-      auth: { kind: 'bearer', token_env: 'MISSING_TOKEN' },
+      auth: { kind: 'bearer', token_env: 'API_MISSING_TOKEN' },
     });
     const result = await proxyGet({ peer, path: '/', env: {} });
     assertEquals(result.ok, false);
     assertEquals(result.status, 0);
-    assertEquals(result.error, 'env var MISSING_TOKEN is not set');
+    assertEquals(result.error, 'env var API_MISSING_TOKEN is not set');
     assertEquals(result.latency_ms, 0);
     // Critical: no fetch was dispatched
+    assertEquals(mock.calls.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+// ============================================================================
+// resolvePeerAuth — env-var allowlist (B002)
+// ============================================================================
+
+Deno.test('resolvePeerAuth: bearer with disallowed token_env (SMALLSTORE_TOKEN) rejects with generic error', () => {
+  const peer = makePeer({
+    auth: { kind: 'bearer', token_env: 'SMALLSTORE_TOKEN' },
+  });
+  // Even if the env actually has SMALLSTORE_TOKEN set, the allowlist must
+  // gate the lookup so a hostile peer URL can't exfiltrate the master token.
+  const out = resolvePeerAuth(peer, { SMALLSTORE_TOKEN: 'super-secret' });
+  assertEquals(out.headers, {});
+  assertEquals(out.error, 'auth env var name not on allowlist');
+  // Critical: the actual secret value is NOT echoed in any field.
+  for (const v of Object.values(out.headers)) {
+    assertEquals(v.includes('super-secret'), false);
+  }
+  assertEquals(out.error?.includes('super-secret'), false);
+});
+
+Deno.test('resolvePeerAuth: header with disallowed value_env (CF_API_TOKEN) rejects', () => {
+  const peer = makePeer({
+    auth: { kind: 'header', name: 'X-Auth', value_env: 'CF_API_TOKEN' },
+  });
+  const out = resolvePeerAuth(peer, { CF_API_TOKEN: 'cf-secret' });
+  assertEquals(out.error, 'auth env var name not on allowlist');
+});
+
+Deno.test('resolvePeerAuth: basic with disallowed user_env (AWS_ACCESS_KEY_ID) rejects', () => {
+  const peer = makePeer({
+    auth: { kind: 'basic', user_env: 'AWS_ACCESS_KEY_ID', pass_env: 'AWS_SECRET_ACCESS_KEY' },
+  });
+  const out = resolvePeerAuth(peer, {
+    AWS_ACCESS_KEY_ID: 'AKIA...',
+    AWS_SECRET_ACCESS_KEY: '...',
+  });
+  assertEquals(out.error, 'auth env var name not on allowlist');
+});
+
+Deno.test('proxyGet: forbidden token_env short-circuits without fetch (B002)', async () => {
+  const mock = installFetchMock({ status: 200 });
+  try {
+    const peer = makePeer({
+      auth: { kind: 'bearer', token_env: 'SMALLSTORE_TOKEN' },
+    });
+    const result = await proxyGet({
+      peer,
+      path: '/',
+      env: { SMALLSTORE_TOKEN: 'master-token' },
+    });
+    assertEquals(result.ok, false);
+    assertEquals(result.status, 0);
+    assertEquals(result.error, 'auth env var name not on allowlist');
+    // Critical: no fetch was dispatched, so the master token never left the worker
     assertEquals(mock.calls.length, 0);
   } finally {
     mock.restore();

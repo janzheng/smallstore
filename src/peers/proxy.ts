@@ -41,6 +41,7 @@ import type {
   ProxyResult,
   ResolvedAuth,
 } from './types.ts';
+import { defaultEnvAllowlist, type EnvAllowlist } from './env-allowlist.ts';
 
 // ============================================================================
 // Constants
@@ -86,18 +87,42 @@ const STRIPPED_CLIENT_HEADERS = new Set([
  * config is missing, sets `error` with a clear "env var X is not set"
  * message and returns empty headers/params — the proxy helpers short-circuit
  * on this without ever dispatching the request.
+ *
+ * Defense-in-depth: every env-var name (`token_env`, `value_env`, `user_env`,
+ * `pass_env`) is run through the allowlist before lookup. A peer registered
+ * with `token_env: "SMALLSTORE_TOKEN"` (or any other reserved name) returns
+ * an `error` instead of resolving the value — the master bearer token
+ * cannot be exfiltrated via a hostile peer URL. The HTTP route validator
+ * also gates this at peer-create time; this is the second line.
  */
 export function resolvePeerAuth(
   peer: Peer,
   env: Record<string, string | undefined>,
+  allowlist: EnvAllowlist = defaultEnvAllowlist,
 ): ResolvedAuth {
   const auth: PeerAuth = peer.auth ?? { kind: 'none' };
+
+  // Reject disallowed env var names without leaking which name was bad. The
+  // server-side log surfaces the name for operator debugging; the returned
+  // `error` is generic so we don't echo it back to a request handler that
+  // may reflect it to a client.
+  const rejectName = (name: string): ResolvedAuth | null => {
+    if (allowlist.isAllowed(name)) return null;
+    console.warn(`[peer-auth] rejected env var name "${name}" for peer "${peer.name}" — not on allowlist`);
+    return {
+      headers: {},
+      query_params: [],
+      error: 'auth env var name not on allowlist',
+    };
+  };
 
   switch (auth.kind) {
     case 'none':
       return { headers: {}, query_params: [] };
 
     case 'bearer': {
+      const rejected = rejectName(auth.token_env);
+      if (rejected) return rejected;
       const token = env[auth.token_env];
       if (!token) {
         return {
@@ -110,6 +135,8 @@ export function resolvePeerAuth(
     }
 
     case 'header': {
+      const rejected = rejectName(auth.value_env);
+      if (rejected) return rejected;
       const value = env[auth.value_env];
       if (!value) {
         return {
@@ -122,6 +149,8 @@ export function resolvePeerAuth(
     }
 
     case 'query': {
+      const rejected = rejectName(auth.value_env);
+      if (rejected) return rejected;
       const value = env[auth.value_env];
       if (!value) {
         return {
@@ -134,6 +163,10 @@ export function resolvePeerAuth(
     }
 
     case 'basic': {
+      const userRejected = rejectName(auth.user_env);
+      if (userRejected) return userRejected;
+      const passRejected = rejectName(auth.pass_env);
+      if (passRejected) return passRejected;
       const user = env[auth.user_env];
       const pass = env[auth.pass_env];
       if (!user) {

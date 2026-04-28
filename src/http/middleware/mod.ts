@@ -33,6 +33,8 @@
 
 import type { Context, Hono } from 'hono';
 
+import { timingSafeEqualString } from '../timing-safe.ts';
+
 // Re-export individual middleware
 export { cacheHeaders } from './cache-headers.ts';
 export type { CacheHeadersConfig } from './cache-headers.ts';
@@ -265,8 +267,11 @@ export function createSmallstoreMiddleware(
       const isLocal = c.req.header('host')?.startsWith('localhost') || c.req.header('host')?.startsWith('127.0.0.1');
       const adminToken = config.adminToken;
       if (adminToken) {
-        const auth = c.req.header('authorization');
-        if (auth !== `Bearer ${adminToken}`) {
+        const auth = c.req.header('authorization') ?? '';
+        const expected = `Bearer ${adminToken}`;
+        // Constant-time compare so token-prefix-guess attacks don't leak
+        // bits through Authorization header timing.
+        if (!timingSafeEqualString(auth, expected)) {
           return c.json({ error: 'Unauthorized' }, 401);
         }
       } else if (!isLocal) {

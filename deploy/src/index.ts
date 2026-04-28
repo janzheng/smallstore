@@ -26,7 +26,7 @@ import type { Context, Next } from 'hono';
 // the full adapter barrel — the root re-exports SQLite/local-file etc that
 // reference `Deno` at module init and break in the Workers runtime.
 import { createSmallstore } from '@yawnxyz/smallstore/factory-slim';
-import { createHonoRoutes } from '@yawnxyz/smallstore/http';
+import { createHonoRoutes, timingSafeEqualString } from '@yawnxyz/smallstore/http';
 import { createMemoryAdapter } from '@yawnxyz/smallstore/adapters/memory';
 import { createCloudflareD1Adapter } from '@yawnxyz/smallstore/adapters/cloudflare-d1';
 import { createCloudflareR2Adapter } from '@yawnxyz/smallstore/adapters/cloudflare-r2';
@@ -66,6 +66,7 @@ import {
 } from '@yawnxyz/smallstore/messaging';
 import {
   createPeerStore,
+  defaultEnvAllowlist,
   registerPeersRoutes,
   type PeerStore,
 } from '@yawnxyz/smallstore/peers';
@@ -199,13 +200,31 @@ function buildApp(env: Env): AppHandle {
     typeRouting: { blob: 'mailroom_r2' },
   });
 
-  // Auth middleware (reused by both /api and /inbox + /admin)
+  // Auth middleware (reused by both /api and /inbox + /admin).
+  //
+  // Three-state token handling (B001):
+  //   - undefined  → routes open. Documented dev-mode behavior; keep for
+  //                  back-compat with local wrangler dev workflows.
+  //   - "" / "  "  → fail closed. Operator clearly intended auth on but the
+  //                  value is botched (CI mistake, accidental clobber). The
+  //                  pre-fix behavior here was to silently open the routes
+  //                  because empty string is falsy — that's the bug.
+  //   - non-empty  → require bearer match (constant-time, B011).
+  const tokenRaw = env.SMALLSTORE_TOKEN;
+  const token = typeof tokenRaw === 'string' ? tokenRaw.trim() : undefined;
+  const tokenMisconfigured = typeof tokenRaw === 'string' && !token;
+  if (tokenMisconfigured) {
+    console.error('[auth] SMALLSTORE_TOKEN is set but empty/whitespace — failing closed on protected routes');
+  }
   const requireAuth = (c: Context, next: Next) => {
-    const token = env.SMALLSTORE_TOKEN;
-    if (!token) return next();
-    const header = c.req.header('authorization') || '';
+    if (tokenRaw === undefined) return next();
+    if (!token) {
+      // Set-but-empty: never open routes silently.
+      return c.json({ error: 'Unauthorized', message: 'Server token misconfigured' }, 401);
+    }
+    const header = c.req.header('authorization') ?? '';
     const m = header.match(/^Bearer\s+(.+)$/i);
-    if (!m || m[1] !== token) {
+    if (!m || !timingSafeEqualString(m[1], token)) {
       return c.json({ error: 'Unauthorized', message: 'Missing or invalid Authorization bearer token' }, 401);
     }
     return next();
@@ -472,8 +491,20 @@ function buildApp(env: Env): AppHandle {
       if (!cfg || typeof cfg !== 'object' || !cfg.target_inbox) return null;
       return cfg;
     },
-    resolveHmacSecret: (envName: string) =>
-      (env as unknown as Record<string, string | undefined>)[envName],
+    // HMAC secret resolver — gated through the same env-var allowlist that
+    // peer auth uses. A webhook config with `secret_env: "SMALLSTORE_TOKEN"`
+    // (or any reserved name) returns undefined here; the caller logs +
+    // responds with a generic configuration-error 500. Defense-in-depth:
+    // the webhook channel's HMAC config is also subject to validateAuthShape-
+    // adjacent checks at peer-create time once peer-side webhook validators
+    // adopt the same gate.
+    resolveHmacSecret: (envName: string) => {
+      if (!defaultEnvAllowlist.isAllowed(envName)) {
+        console.warn(`[webhook] HMAC secret_env "${envName}" rejected — not on allowlist`);
+        return undefined;
+      }
+      return (env as unknown as Record<string, string | undefined>)[envName];
+    },
     // Hook replay — register the hooks that are safe to re-run retroactively.
     // The forward-detect hook is the first concrete use case (back-fills
     // `original_sent_at` / `newsletter_slug` etc. on existing items). New

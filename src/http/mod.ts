@@ -136,3 +136,6 @@ export type { DistributedCacheConfig, DistributedCacheAdapter } from './middlewa
 // Unified middleware factory
 export { createSmallstoreMiddleware, configFromEnv } from './middleware/mod.ts';
 export type { SmallstoreMiddlewareConfig, SmallstoreMiddlewareResult } from './middleware/mod.ts';
+
+// Constant-time bearer-token compare (used by every Authorization check)
+export { timingSafeEqualString } from './timing-safe.ts';

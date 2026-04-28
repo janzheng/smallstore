@@ -1,8 +1,17 @@
 # Smallstore
 
-Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN.md`, `TASKS-AUDIT.md`, `TASKS-TESTS.md`, `TASKS-MESSAGING.md` for area backlogs.
+Active work. See `TASKS.done.md` for shipped work; `TASKS-MAP.md`, `TASKS-DESIGN.md`, `TASKS-AUDIT.md`, `TASKS-TESTS.md`, `TASKS-MESSAGING.md`, `TASKS-SECURITY.md` for area backlogs.
 
 ## Current
+
+### Security remediation — 2026-04-28 audit
+
+41 substantive findings from the 2026-04-28 security audit; full plan in `TASKS-SECURITY.md`, brief at `.brief/2026-04-28-security-audit.md`.
+
+- [!] **Sprint 0 — Token + auth hardening** — empty-token bypass (B001), env-var allowlist (B002/B003/B010), timing-safe compare (B011). Single PR. `-> TASKS-SECURITY.md § Sprint 0` #security #goal:token-hardening
+- [ ] **Sprint 1 — Auto-confirm safety** — `redirect: 'manual'` (B007) + URL extraction validation (B016). Single PR. `-> TASKS-SECURITY.md § Sprint 1` #security #goal:auto-confirm-safety #needs:goal:token-hardening
+- [ ] **Sprints 2-5 — Pipeline correctness, races, budgets, hygiene** — 33 findings, fan-out by file across five sprints. `-> TASKS-SECURITY.md` #security
+
 
 *(Nine sprints shipped 2026-04-23 → 2026-04-27 — mailroom pipeline, curation, peer registry, MCP reorg + tool families, RSS pull-runner, forward-notes (capture + newsletter views + retroactive backfill), notes/todos derived views + markdown export + cross-newsletter aggregation, public-manifest lockdown, the cron-driven tigerflare mirror (closes the Phase 2b open from `.brief/notes-todos-and-mirror.md`), direct-sub mirror coverage + SSE stability, self-contained mirror with body inlining, and orphan garbage-collection in the mirror (deleting an item now cleans up its mirror file on the next cron tick — closes the "stale .md files lingering" loop), and the cross-publisher `recent.md` reading list (one file = "what's new this week" across all publishers, body-inlined, jump-to-publisher links), and the stale-unread auto-mark-read sweep (cron-driven, default 30-day cutoff, configurable via `UNREAD_SWEEP_DAYS` env). All live at `smallstore.labspace.ai`. 41 MCP tools across 3 families (core/inbox/peers). Deploy uses `link:../dist` symlink (no more stale-code trap). 826/826 messaging tests green. See `TASKS.done.md` for daily detail; `.brief/forward-notes-and-newsletter-profiles.md`, `.brief/notes-todos-and-mirror.md`, `.brief/api-access-and-notes.md` for design.)*
 
