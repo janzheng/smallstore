@@ -412,3 +412,129 @@ Deno.test('inbox — keyPrefix isolates list/query/cursor/delete', async () => {
   assertEquals((await a.list()).items.length, 2);
   assertEquals((await b.list()).items.length, 0);
 });
+
+// ============================================================================
+// B004 — atomicity / pending sidecar / recoverOrphans
+// ============================================================================
+
+Deno.test('inbox — happy path: pending key cleared after successful ingest (B004)', async () => {
+  const items = new MemoryAdapter();
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items } });
+  await inbox._ingest(makeItem('x1', '2026-04-28T10:00:00Z'));
+  // After a successful ingest, no pending sidecar should remain.
+  const pendingKeys = await items.keys('_pending/');
+  assertEquals(pendingKeys.length, 0);
+});
+
+Deno.test('inbox — recoverOrphans: re-indexes items written without index update (B004)', async () => {
+  // Wrap the items adapter so we can simulate "appendIndex throws on the first
+  // call." The crash leaves a pending sidecar + an item, but the index is
+  // never updated. recoverOrphans() should detect and re-index.
+  const items = new MemoryAdapter();
+  let nextSetThrows = false;
+  const wrapped = new Proxy(items, {
+    get(target, prop, receiver) {
+      const orig = Reflect.get(target, prop, receiver);
+      if (prop === 'set') {
+        return async (k: string, v: unknown) => {
+          if (nextSetThrows && k.endsWith('_index')) {
+            nextSetThrows = false;
+            throw new Error('simulated mid-write crash');
+          }
+          return await orig.call(target, k, v);
+        };
+      }
+      return orig;
+    },
+  });
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items: wrapped as any } });
+
+  nextSetThrows = true;
+  let threw = false;
+  try {
+    await inbox._ingest(makeItem('x1', '2026-04-28T10:00:00Z'));
+  } catch {
+    threw = true;
+  }
+  assertEquals(threw, true);
+
+  // Item exists, but is orphaned (not in index) and pending key still set.
+  assertEquals((await items.has('items/x1')), true);
+  assertEquals((await items.has('_pending/x1')), true);
+  // List shouldn't see it (index was never updated).
+  const before = await inbox.list();
+  assertEquals(before.items.length, 0);
+
+  // Recovery brings it back into the index.
+  const summary = await inbox.recoverOrphans();
+  assertEquals(summary.recovered, 1);
+  assertEquals(summary.reaped, 0);
+  assertEquals(summary.cleaned, 0);
+
+  const after = await inbox.list();
+  assertEquals(after.items.length, 1);
+  assertEquals(after.items[0].id, 'x1');
+  // Pending key is gone.
+  assertEquals((await items.has('_pending/x1')), false);
+});
+
+Deno.test('inbox — recoverOrphans: reaps pending without item (crash before items.set)', async () => {
+  const items = new MemoryAdapter();
+  // Simulate a crash where we wrote pending but not the item itself.
+  await items.set('_pending/orphan', { at: '2026-04-28T10:00:00Z', id: 'orphan', started_at: '2026-04-28T10:00:00Z' });
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items } });
+
+  const summary = await inbox.recoverOrphans();
+  assertEquals(summary.reaped, 1);
+  assertEquals((await items.has('_pending/orphan')), false);
+});
+
+Deno.test('inbox — recoverOrphans: cleans benign pending after late delete (item indexed)', async () => {
+  const items = new MemoryAdapter();
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items } });
+  await inbox._ingest(makeItem('x1', '2026-04-28T10:00:00Z'));
+  // Re-create a pending key as if the post-ingest delete had failed.
+  await items.set('_pending/x1', { at: '2026-04-28T10:00:00Z', id: 'x1', started_at: '2026-04-28T10:00:00Z' });
+
+  const summary = await inbox.recoverOrphans();
+  assertEquals(summary.cleaned, 1);
+  assertEquals(summary.recovered, 0);
+  assertEquals(summary.reaped, 0);
+  assertEquals((await items.has('_pending/x1')), false);
+});
+
+// ============================================================================
+// B014 — concurrent appendIndex serialization
+// ============================================================================
+
+Deno.test('inbox — concurrent ingests do not lose entries (B014)', async () => {
+  const items = new MemoryAdapter();
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items } });
+
+  // 20 distinct ingests fired in parallel — without serialization the
+  // index can race read-modify-write and end up with fewer than 20 entries.
+  const ids = Array.from({ length: 20 }, (_, i) => `id-${i}`);
+  await Promise.all(ids.map((id, i) =>
+    inbox._ingest(makeItem(id, `2026-04-28T10:00:${String(i).padStart(2, '0')}Z`))
+  ));
+
+  const result = await inbox.list({ limit: 100 });
+  assertEquals(result.items.length, 20);
+  // No duplicates either.
+  const seen = new Set(result.items.map((i) => i.id));
+  assertEquals(seen.size, 20);
+});
+
+Deno.test('inbox — concurrent ingests of same id stay deduplicated (B014)', async () => {
+  const items = new MemoryAdapter();
+  const inbox = createInbox({ name: 't', channel: 'cf-email', storage: { items } });
+
+  // Same id ingested 10x in parallel — should land as exactly one index entry.
+  await Promise.all(
+    Array.from({ length: 10 }, () => inbox._ingest(makeItem('dup', '2026-04-28T10:00:00Z'))),
+  );
+
+  const result = await inbox.list({ limit: 100 });
+  assertEquals(result.items.length, 1);
+  assertEquals(result.items[0].id, 'dup');
+});

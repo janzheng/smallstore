@@ -53,6 +53,7 @@ interface IndexFile {
 
 const INDEX_KEY = '_index';
 const ITEM_PREFIX = 'items/';
+const PENDING_PREFIX = '_pending/';
 const INDEX_VERSION = 1;
 
 export interface InboxOptions {
@@ -73,6 +74,17 @@ export interface InboxOptions {
   keyPrefix?: string;
 }
 
+/**
+ * Sidecar pending entry — written before the item, cleared after the item
+ * is in the index. Lets `recoverOrphans()` find ingests that crashed
+ * mid-write (B004). Stored at `${keyPrefix}_pending/<id>`.
+ */
+interface PendingEntry {
+  at: string;
+  id: string;
+  started_at: string;
+}
+
 export class Inbox implements InboxInterface {
   readonly name: string;
   readonly channel: string;
@@ -80,6 +92,16 @@ export class Inbox implements InboxInterface {
   private readonly storage: InboxStorage;
   private readonly indexKey: string;
   private readonly itemPrefix: string;
+  private readonly pendingPrefix: string;
+  /**
+   * Index-write serialization chain (B014). Concurrent `appendIndex`
+   * calls — same-id duplicates or different-id sibling ingests under
+   * load — would otherwise race the read-modify-write on `_index` and
+   * either lose entries or duplicate them. Chaining writes through one
+   * promise serializes them at the price of in-Worker latency; for the
+   * push-channel volumes the mailroom sees this is a non-issue.
+   */
+  private indexWriteChain: Promise<unknown> = Promise.resolve();
 
   constructor(opts: InboxOptions) {
     this.name = opts.name;
@@ -88,10 +110,15 @@ export class Inbox implements InboxInterface {
     this.keyPrefix = opts.keyPrefix ?? '';
     this.indexKey = `${this.keyPrefix}${INDEX_KEY}`;
     this.itemPrefix = `${this.keyPrefix}${ITEM_PREFIX}`;
+    this.pendingPrefix = `${this.keyPrefix}${PENDING_PREFIX}`;
   }
 
   private itemKey(id: string): string {
     return `${this.itemPrefix}${id}`;
+  }
+
+  private pendingKey(id: string): string {
+    return `${this.pendingPrefix}${id}`;
   }
 
   // --------------------------------------------------------------------------
@@ -316,9 +343,82 @@ export class Inbox implements InboxInterface {
       }
     }
 
+    // B004 atomicity: write a pending-sidecar entry BEFORE the item, and
+    // clear it AFTER the index update settles. Three crash windows are now
+    // recoverable via `recoverOrphans()`:
+    //
+    //   1. Crash between pending-set and item-set:
+    //      → recoverOrphans sees pending key with no item → reaps pending.
+    //   2. Crash between item-set and appendIndex:
+    //      → recoverOrphans sees pending + item, item NOT in index → re-indexes.
+    //   3. Crash between appendIndex and pending-delete:
+    //      → recoverOrphans sees pending + item + indexed → benign cleanup.
+    //
+    // Pending entries do NOT participate in `loadIndex` or any list/query
+    // path, so the only cost in the steady state is one extra adapter
+    // round-trip on each ingest. No O(N) loadIndex regression.
+    const pendingEntry: PendingEntry = {
+      at: finalItem.received_at,
+      id: finalItem.id,
+      started_at: new Date().toISOString(),
+    };
+    await this.storage.items.set(this.pendingKey(finalItem.id), pendingEntry);
+
     await this.storage.items.set(this.itemKey(finalItem.id), finalItem);
     await this.appendIndex({ at: finalItem.received_at, id: finalItem.id });
+
+    // Clear the pending marker. Best-effort: a delete failure here just
+    // means recoverOrphans() will see a benign-cleanup case on its next
+    // sweep and idempotently remove the marker.
+    await this.storage.items.delete(this.pendingKey(finalItem.id)).catch(() => {/* recoverable */});
+
     return finalItem;
+  }
+
+  /**
+   * Recover ingests that crashed mid-write (B004). Scans pending sidecar
+   * entries and brings each to a consistent state:
+   *
+   *   - pending key + no item       → reap pending (partial-write before items.set)
+   *   - pending key + item + no idx → re-index (crashed between items.set + appendIndex)
+   *   - pending key + item + idx    → cleanup pending (crashed before delete)
+   *
+   * Idempotent — safe to call from cron, an admin endpoint, or boot.
+   * Returns a counter summary suitable for logging.
+   */
+  async recoverOrphans(): Promise<{ recovered: number; reaped: number; cleaned: number }> {
+    const pendingKeys = await this.storage.items.keys(this.pendingPrefix);
+    let recovered = 0;
+    let reaped = 0;
+    let cleaned = 0;
+
+    for (const pkey of pendingKeys) {
+      const pending = (await this.storage.items.get(pkey)) as PendingEntry | null;
+      if (!pending || typeof pending.id !== 'string') {
+        // Malformed pending entry — drop it.
+        await this.storage.items.delete(pkey).catch(() => {/* noop */});
+        continue;
+      }
+
+      const item = (await this.storage.items.get(this.itemKey(pending.id))) as InboxItem | null;
+      if (!item) {
+        await this.storage.items.delete(pkey).catch(() => {/* noop */});
+        reaped++;
+        continue;
+      }
+
+      const index = await this.loadIndex();
+      const indexed = index.entries.some((e) => e.id === pending.id);
+      if (!indexed) {
+        await this.appendIndex({ at: pending.at, id: pending.id });
+        recovered++;
+      } else {
+        cleaned++;
+      }
+      await this.storage.items.delete(pkey).catch(() => {/* noop */});
+    }
+
+    return { recovered, reaped, cleaned };
   }
 
   // --------------------------------------------------------------------------
@@ -334,11 +434,24 @@ export class Inbox implements InboxInterface {
   }
 
   private async appendIndex(entry: IndexEntry): Promise<void> {
-    const index = await this.loadIndex();
-    if (index.entries.some(e => e.id === entry.id)) return; // already indexed
-    index.entries.push(entry);
-    index.entries.sort(compareNewestFirst);
-    await this.storage.items.set(this.indexKey, index);
+    // Serialize on `indexWriteChain` so concurrent appendIndex calls don't
+    // race the read-modify-write on `_index` (B014). Without this, two
+    // sibling _ingest paths can both load the same pre-state, both decide
+    // "not present", both push, both write — the later write wins and
+    // the earlier entry's add is lost. Chaining promises trades a small
+    // amount of latency for correctness.
+    const next = this.indexWriteChain.then(async () => {
+      const index = await this.loadIndex();
+      if (index.entries.some((e) => e.id === entry.id)) return;
+      index.entries.push(entry);
+      index.entries.sort(compareNewestFirst);
+      await this.storage.items.set(this.indexKey, index);
+    });
+    // Swallow chain errors so a single failed append doesn't poison every
+    // subsequent appendIndex on this Inbox. The current call's caller
+    // still sees the rejection via `next`.
+    this.indexWriteChain = next.catch(() => {/* recoverable */});
+    return next;
   }
 
   private async paginateAndHydrate(
