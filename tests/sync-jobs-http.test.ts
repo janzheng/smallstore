@@ -212,3 +212,61 @@ Deno.test('sync-jobs-http: GET /_sync/jobs/:id rejects path-traversal ids', asyn
     await srv.stop();
   }
 });
+
+Deno.test('sync-jobs-http: POST /_sync/jobs/prune dryRun + actual reap (A201)', async () => {
+  const srv = await startServer();
+  try {
+    // Seed a couple of finished jobs so listJobs() has something to enumerate.
+    for (let i = 0; i < 2; i++) {
+      const r = await fetch(`${srv.url}/api/source/seed-${i}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { i } }),
+      });
+      await r.body?.cancel();
+      const sync = await fetch(`${srv.url}/_sync?wait=true`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'source', target: 'target', options: { mode: 'push' } }),
+      });
+      await sync.body?.cancel();
+    }
+
+    // Backdate one of the on-disk JSONL files so it falls past the cutoff.
+    const jobsDir = `${srv.dataDir}/jobs`;
+    const entries: string[] = [];
+    for await (const e of Deno.readDir(jobsDir)) {
+      if (e.isFile && e.name.endsWith('.jsonl')) entries.push(e.name);
+    }
+    assert(entries.length >= 1, 'expected at least one jsonl file');
+    const oldFile = `${jobsDir}/${entries[0]}`;
+    const past = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000);
+    await Deno.utime(oldFile, past, past);
+
+    // Dry run with a 30-day cutoff: should plan to reap exactly the backdated file.
+    const dryRes = await fetch(`${srv.url}/_sync/jobs/prune?older_than_days=30&dry_run=true`, {
+      method: 'POST',
+    });
+    assertEquals(dryRes.status, 200);
+    const dry = await dryRes.json();
+    assertEquals(dry.dry_run, true);
+    assertEquals(dry.pruned.length, 1);
+
+    // File still on disk after dryRun.
+    const stillThere = await Deno.stat(oldFile).then(() => true).catch(() => false);
+    assert(stillThere, 'dryRun must NOT delete files');
+
+    // Real prune: file gone, counters match.
+    const realRes = await fetch(`${srv.url}/_sync/jobs/prune?older_than_days=30`, {
+      method: 'POST',
+    });
+    assertEquals(realRes.status, 200);
+    const real = await realRes.json();
+    assertEquals(real.dry_run, false);
+    assertEquals(real.pruned.length, 1);
+    const goneNow = await Deno.stat(oldFile).then(() => true).catch(() => false);
+    assertEquals(goneNow, false);
+  } finally {
+    await srv.stop();
+  }
+});

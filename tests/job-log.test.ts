@@ -5,7 +5,7 @@
  */
 
 import { assert, assertEquals } from 'jsr:@std/assert';
-import { createJobLog, generateJobId, listJobs, summarizeJob, tailJobLog } from '../src/utils/job-log.ts';
+import { createJobLog, generateJobId, listJobs, pruneJobs, summarizeJob, tailJobLog } from '../src/utils/job-log.ts';
 
 async function withTempDir(fn: (dir: string) => Promise<void>) {
   const dir = await Deno.makeTempDir({ prefix: 'smallstore-joblog-' });
@@ -124,5 +124,100 @@ Deno.test('job-log - summarizeJob reports "failed" with error', async () => {
     const summary = await summarizeJob(`${dir}/jobs/oops.jsonl`);
     assertEquals(summary.status, 'failed');
     assertEquals(summary.error, 'rate limited');
+  });
+});
+
+// ============================================================================
+// pruneJobs (A201)
+// ============================================================================
+
+/**
+ * Backdate a file's mtime by N ms. Used to simulate "old" job logs without
+ * sleeping. Deno.utime sets atime + mtime simultaneously.
+ */
+async function backdateFile(path: string, ageMs: number): Promise<void> {
+  const past = new Date(Date.now() - ageMs);
+  await Deno.utime(path, past, past);
+}
+
+Deno.test('pruneJobs — reaps files older than the cutoff, retains fresher ones', async () => {
+  await withTempDir(async (dir) => {
+    const oldLog = await createJobLog({ jobId: 'old-job', dataDir: dir });
+    await oldLog.append({ event: 'completed' });
+    await oldLog.close();
+    const newLog = await createJobLog({ jobId: 'new-job', dataDir: dir });
+    await newLog.append({ event: 'completed' });
+    await newLog.close();
+
+    // Backdate old-job to 100 days ago.
+    await backdateFile(`${dir}/jobs/old-job.jsonl`, 100 * 24 * 60 * 60 * 1000);
+
+    const result = await pruneJobs(dir, { olderThanMs: 30 * 24 * 60 * 60 * 1000 });
+    assertEquals(result.scanned, 2);
+    assertEquals(result.pruned, ['old-job']);
+    assertEquals(result.retained, 1);
+    assertEquals(result.errors.length, 0);
+
+    // old-job is gone, new-job stays.
+    const remaining = await listJobs(dir);
+    assertEquals(remaining.map((j) => j.jobId), ['new-job']);
+  });
+});
+
+Deno.test('pruneJobs — dryRun returns plan without deleting', async () => {
+  await withTempDir(async (dir) => {
+    const log = await createJobLog({ jobId: 'old-job', dataDir: dir });
+    await log.append({ event: 'completed' });
+    await log.close();
+    await backdateFile(`${dir}/jobs/old-job.jsonl`, 100 * 24 * 60 * 60 * 1000);
+
+    const result = await pruneJobs(dir, {
+      olderThanMs: 30 * 24 * 60 * 60 * 1000,
+      dryRun: true,
+    });
+    assertEquals(result.pruned, ['old-job']);
+    // File still on disk.
+    const remaining = await listJobs(dir);
+    assertEquals(remaining.length, 1);
+  });
+});
+
+Deno.test('pruneJobs — empty dir returns zeroed counters', async () => {
+  await withTempDir(async (dir) => {
+    const result = await pruneJobs(dir);
+    assertEquals(result.scanned, 0);
+    assertEquals(result.pruned, []);
+    assertEquals(result.retained, 0);
+    assertEquals(result.errors, []);
+    assert(typeof result.cutoffIso === 'string');
+  });
+});
+
+Deno.test('pruneJobs — olderThanMs <= 0 is a no-op', async () => {
+  await withTempDir(async (dir) => {
+    const log = await createJobLog({ jobId: 'fresh', dataDir: dir });
+    await log.append({ event: 'completed' });
+    await log.close();
+
+    const result = await pruneJobs(dir, { olderThanMs: 0 });
+    assertEquals(result.scanned, 0);
+    assertEquals(result.pruned, []);
+    // File still there.
+    const remaining = await listJobs(dir);
+    assertEquals(remaining.length, 1);
+  });
+});
+
+Deno.test('pruneJobs — default cutoff (30 days) retains fresh files', async () => {
+  await withTempDir(async (dir) => {
+    const log = await createJobLog({ jobId: 'fresh', dataDir: dir });
+    await log.append({ event: 'completed' });
+    await log.close();
+    // Backdate by 5 days — within the 30-day default window.
+    await backdateFile(`${dir}/jobs/fresh.jsonl`, 5 * 24 * 60 * 60 * 1000);
+
+    const result = await pruneJobs(dir);
+    assertEquals(result.pruned, []);
+    assertEquals(result.retained, 1);
   });
 });

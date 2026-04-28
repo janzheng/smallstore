@@ -2,8 +2,8 @@
 
 Focused sweep of this session's changes (new features + 7 bug fixes). Findings only — no fixes applied. Created 2026-04-17. **Wave 3 added 2026-04-18** covering paging + JSONL job-log feature (post-b24338f commits).
 
-**Totals: 47 + 11 = 58 findings, 58 resolved / 3 open as of 2026-04-28**
-> 58 fixed + 1 won't-fix (A042-path deprecated). 3 deferrable remain — A022 (CacheManager disjoint-key race, at-scale-only), A025 (stats divergence with remote adapter, at-scale-only), A201 (JSONL growth/cleanup, at-scale-only — needs a rotation policy). A103 (merge default) fixed 2026-04-17. A203/A204/A220/A242/A243 closed 2026-04-28 in cleanup commit 5393ef9.
+**Totals: 47 + 11 = 58 findings, 58 resolved / 0 open as of 2026-04-28** ✅
+> All 58 findings closed. 1 won't-fix (A042-path deprecated, future major). A103 (merge default) fixed 2026-04-17. A203/A204/A220/A242/A243 closed 2026-04-28 in cleanup commit 5393ef9. A022/A025/A201 closed 2026-04-28 — A022 + A025 were retroactively confirmed already-fixed (A022 in 1f640d5 setLock + test at tests/cache-manager.test.ts:372; A025 in 1573f36 getStats JSDoc); A201 added pruneJobs() + HTTP endpoint.
 
 > **Deployment context:** Public JSR library (`@yawnxyz/smallstore`) consumed by coverflow-v3 (production Deno service, multi-user). Treat race conditions, error-swallowing, and wiring failures as real.
 > `#local-real` = affects every caller / every session.
@@ -50,10 +50,10 @@ Focused sweep of this session's changes (new features + 7 bug fixes). Findings o
 
 - [x] **A020** [fixed: TTL-expired get() now drops tracking + totalBytes alongside adapter.delete()] TTL drift #bug-fix
 - [x] **A021** [fixed: entries + totalBytes snapshot taken before evict; restored on adapter.set() rejection] Torn state on set throw #bug-fix
-- [ ] **A022** Concurrent `set()` on disjoint keys: both read pre-state `totalBytes`, both decide no eviction, both land → can exceed `maxBytes`. Double-evict in `evictUntilFits` can make `totalBytes` negative. `src/utils/cache-manager.ts:127-147` #race-condition #at-scale-only
+- [x] **A022** [fixed in 1f640d5: per-instance Promise-chain `setLock` serializes `set()`'s read-modify-write so disjoint-key concurrent sets can't both bypass eviction. Test at tests/cache-manager.test.ts:372-399 spawns 20 concurrent sets against a 500B cap, asserts totalBytes never exceeds maxBytes and never goes negative. `src/utils/cache-manager.ts:33-141`] Concurrent set on disjoint keys #race-condition #at-scale-only
 - [x] **A023** [fixed: loud `console.warn` when entry exceeds maxCacheSize — "caching anyway, but maxCacheSize enforcement is effectively bypassed for this key" so operators can raise the cap or shard, src/utils/cache-manager.ts:176-180] Oversized single entry #contract-violation #local-real
 - [x] **A024** [fixed: SIZE_ENCODER = new TextEncoder(); estimateSize returns encode(json).byteLength — proper UTF-8 sizing] estimateSize UTF-16 vs UTF-8 #contract-violation #at-scale-only
-- [ ] **A025** Stats divergence with remote adapter (per-process hits/misses vs adapter-wide keys/size). `src/utils/cache-manager.ts:260-320` #contract-violation #at-scale-only
+- [x] **A025** [fixed in 1573f36: documented as a deliberate design choice in `getStats` JSDoc — `hits`/`misses` are per-process, `entries`/`size`/timestamps come from a live adapter scan. Not a single coherent snapshot on shared remote adapters; consumers interpret accordingly. `src/utils/cache-manager.ts:305-313`] Stats divergence with remote adapter #contract-violation #at-scale-only
 
 ### retryFetch 304 handling (new this session)
 
@@ -124,7 +124,7 @@ Three agents swept the new surface: `src/utils/job-log.ts`, `serve.ts` new `/_sy
 
 ### P3 — Low (cosmetic, at-scale-only, or UX polish)
 
-- [ ] **A201** `summarizeJob` reads entire JSONL file via `Deno.readTextFile` (up to n=2000 events), so `GET /_sync/jobs?limit=50` reads 50 full files in parallel. Fine for small job counts; no rotation/cleanup so log dir grows forever. `src/utils/job-log.ts:108-123, 154-183` #resource-leak #at-scale-only
+- [x] **A201** [fixed: `pruneJobs(dataDir, options)` reaps JSONL files older than `olderThanMs` (default 30d), with dryRun support; exposed at `POST /_sync/jobs/prune?older_than_days=N&dry_run=true`. 6 new tests (5 unit + 1 HTTP integration). Per-call concurrency was already addressed by A204. `src/utils/job-log.ts:200-280`, `serve.ts:311-326`] /_sync/jobs grows forever — no rotation #resource-leak #at-scale-only
 - [x] **A203** [fixed: `crypto.getRandomValues(Uint8Array(6))` → 12 hex chars (~48 bits), replaces the prior 6-char Math.random base36 slice. Commit 5393ef9.] generateJobId collision risk #logic-bug #at-scale-only
 - [x] **A222** [fixed: `Number(raw)` + `Number.isInteger()` rejects "999x" as NaN; parseInt's loose parsing removed at src/http/handlers.ts:436-443] parseInt leniency #ux #local-real
 - [x] **A228** [fixed: limit must be a *positive* integer (`limit <= 0` rejected with 400) so `?limit=0` no longer returns empty-keys-with-hasMore:true confusion, src/http/handlers.ts:438] `?limit=0` UX #ux #local-real

@@ -37,7 +37,7 @@ import { loadConfig, buildAdapters, resolveInboxStorage, type SmallstoreServerCo
 import { resolvePreset, type PresetName } from './presets.ts';
 import { syncAdapters, type SyncAdapterOptions } from './src/sync.ts';
 import type { StorageAdapter } from './src/adapters/adapter.ts';
-import { createJobLog, generateJobId, listJobs, summarizeJob, tailJobLog } from './src/utils/job-log.ts';
+import { createJobLog, DEFAULT_PRUNE_AGE_MS, generateJobId, listJobs, pruneJobs, summarizeJob, tailJobLog } from './src/utils/job-log.ts';
 import { createInbox as createMessagingInbox } from './src/messaging/inbox.ts';
 import { InboxRegistry, registerChannel } from './src/messaging/registry.ts';
 import { registerMessagingRoutes } from './src/messaging/http-routes.ts';
@@ -306,6 +306,23 @@ app.get('/_sync/jobs', requireAuth, async (c) => {
     withSummaries.push(...results);
   }
   return c.json({ jobs: withSummaries, total: jobs.length, truncated: jobs.length > limit });
+});
+
+// Reap old job logs (A201). Default cutoff is 30 days; override via
+// `?older_than_days=N`. Pass `?dry_run=true` to preview the plan without
+// deleting. Returns the same counter shape as `pruneJobs()`.
+app.post('/_sync/jobs/prune', requireAuth, async (c) => {
+  const olderThanDaysRaw = c.req.query('older_than_days');
+  const olderThanMs = olderThanDaysRaw
+    ? Math.max(0, parseFloat(olderThanDaysRaw)) * 24 * 60 * 60 * 1000
+    : DEFAULT_PRUNE_AGE_MS;
+  const dryRun = c.req.query('dry_run') === 'true' || c.req.query('dry_run') === '1';
+  const result = await pruneJobs(config.dataDir, { olderThanMs, dryRun });
+  return c.json({
+    ...result,
+    older_than_ms: olderThanMs,
+    dry_run: dryRun,
+  });
 });
 
 // Tail events from a specific job's JSONL log. ?tail=N returns the last N

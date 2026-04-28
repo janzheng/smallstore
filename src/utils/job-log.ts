@@ -135,6 +135,9 @@ export const DEFAULT_TAIL_EVENTS = 50;
 /** Cap used by `summarizeJob` when looking for the last `started`/`completed`/`failed` event. Has to be large enough that the summary still finds the terminal event even if a sync emitted thousands of `progress` lines. */
 export const SUMMARY_SCAN_EVENTS = 2000;
 
+/** Default retention window for `pruneJobs` — 30 days. JSONL files older than this get reaped. */
+export const DEFAULT_PRUNE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
 /**
  * Read (up to) the last N events from a job log file.
  * Returns parsed events, skipping any malformed lines.
@@ -222,4 +225,99 @@ export async function summarizeJob(path: string): Promise<{
     error: errorMsg,
     lastEvent: last.event,
   };
+}
+
+// ============================================================================
+// Pruning (A201)
+// ============================================================================
+
+export interface PruneJobsOptions {
+  /**
+   * Reap JSONL files whose mtime is older than this many ms. Default 30 days.
+   * Pass 0 (or a negative) to disable age-based reaping (no-op).
+   */
+  olderThanMs?: number;
+  /**
+   * If true, return the list that *would* be pruned without deleting.
+   * Useful for safe inspection before flipping to a real prune.
+   */
+  dryRun?: boolean;
+}
+
+export interface PruneJobsResult {
+  /** Total job files scanned. */
+  scanned: number;
+  /** jobIds reaped (or jobIds that *would* be reaped under `dryRun: true`). */
+  pruned: string[];
+  /** Job files retained because their mtime is within the window. */
+  retained: number;
+  /** Per-file delete errors (if any). Other deletes still proceed. */
+  errors: Array<{ jobId: string; error: string }>;
+  /** ISO cutoff timestamp used for the prune (echoed for log clarity). */
+  cutoffIso: string;
+}
+
+/**
+ * Reap old job-log JSONL files by mtime.
+ *
+ * The job-log directory grows monotonically — every `/_sync` writes a new
+ * `<jobId>.jsonl` and nothing reaps them. For long-lived dev servers this
+ * accumulates indefinitely. `pruneJobs` is the on-demand sweep:
+ *
+ *   - mtime older than `olderThanMs` (default 30 days) → delete
+ *   - mtime within window → retain
+ *   - delete failures recorded but don't abort the sweep
+ *
+ * Returns counters suitable for logging to a job log itself or as JSON.
+ *
+ * Trade-offs deliberately NOT made here:
+ *   - No status-aware retention (keep failures longer than completions).
+ *     The current shape is "1 knob, 1 cutoff" — callers wanting different
+ *     policies for completed vs failed can run pruneJobs twice with
+ *     different windows after filtering by summary status themselves.
+ *   - No size cap. Single JSONL is bounded at ~tens of MB even for
+ *     long syncs (one line per event); the directory is the growth axis,
+ *     and age handles that.
+ */
+export async function pruneJobs(
+  dataDir: string,
+  options: PruneJobsOptions = {},
+): Promise<PruneJobsResult> {
+  const olderThanMs = options.olderThanMs ?? DEFAULT_PRUNE_AGE_MS;
+  const cutoffEpoch = Date.now() - olderThanMs;
+  const cutoffIso = new Date(cutoffEpoch).toISOString();
+
+  if (olderThanMs <= 0) {
+    return { scanned: 0, pruned: [], retained: 0, errors: [], cutoffIso };
+  }
+
+  const jobs = await listJobs(dataDir);
+  const pruned: string[] = [];
+  const errors: Array<{ jobId: string; error: string }> = [];
+  let retained = 0;
+
+  for (const job of jobs) {
+    const mtime = job.modifiedAt ? new Date(job.modifiedAt).getTime() : 0;
+    // mtime === 0 happens when stat couldn't read it (rare). Treat as
+    // ancient + reap rather than risk holding orphaned files forever.
+    if (mtime > 0 && mtime >= cutoffEpoch) {
+      retained++;
+      continue;
+    }
+    if (options.dryRun) {
+      pruned.push(job.jobId);
+      continue;
+    }
+    try {
+      await Deno.remove(job.path);
+      pruned.push(job.jobId);
+    } catch (err) {
+      errors.push({
+        jobId: job.jobId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { scanned: jobs.length, pruned, retained, errors, cutoffIso };
 }
