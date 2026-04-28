@@ -1,7 +1,9 @@
 # 2026-04-28 — Security audit: smallstore + mailroom
 
-**Status:** findings only — no fixes applied
+**Status:** remediated 2026-04-28 — all 41 findings closed (40 fixed, 1 verified non-issue) across 12 commits in a single session.
 **Detail doc:** `TASKS-AUDIT-2026-04-28.md` (mxit-compatible Tier 0/1/2 list, 41 substantive findings)
+**Plan:** `TASKS-SECURITY.md` (5-sprint by-theme breakdown, executed as 10 by-file lanes per Plan-agent recommendation)
+**Commit log:** `git log --oneline 7d7ffe6..213feb4` — Phase A (1) + Phase B (1) + Phase C (10 lanes) = 12 commits.
 **Scope:** `src/messaging/` (mailroom inbox + hooks + cron) + smallstore core (`router.ts`, `sync.ts`, adapters, peers, HTTP) + `deploy/src/index.ts` Worker wiring
 **Method:** 8 parallel `Explore` agents reading ~22k lines across 60+ files; 158 raw findings → 41 substantive after dedup + manual verification of every Tier 0/1 claim
 
@@ -127,4 +129,45 @@ Full descriptions, file:line, and reasoning are in `TASKS-AUDIT-2026-04-28.md`.
 
 ## Status
 
-Findings only. Awaiting a decision on the fix-order sprint plan above.
+Remediated 2026-04-28. All 41 findings closed in a single autonomous fan-out session.
+
+### Execution summary
+
+| Phase | Lane | Commit | Findings |
+|---|---|---|---|
+| A | token + auth hardening | 7d7ffe6 | B001 B002 B003 B010 B011 |
+| B | auto-confirm hardening | 888cf87 | B007 B015 B016 |
+| C1 | inbox.ts (sidecar + serialized appendIndex) | 27d4861 | B004 B013-non-issue B014 |
+| C2 | cloudflare-d1.ts | ce964fa | B005 B034 B035 B036 |
+| C3 | router.ts | 2de92b2 | B006 B017 B018 |
+| C4 | dispatch.ts | d65873d | B009 |
+| C5 | rules.ts + rules-hook.ts | 1925532 | B008 B024 |
+| C6 | mirror.ts | 71b069d | B019 B020 B021 B022 |
+| C7 | deploy/src/index.ts polish | 213feb4 | B012 B039 B040 |
+| C8 | mailroom hygiene | f4fd25e | B025 B027 B028 B029 |
+| C9 | channels + markdown | 3ba9499 | B030 B031 B032 |
+| C10 | adapters + peers + cursor | 35c7891 | B033 B037 B038 B041 |
+
+**B013** was downgraded to "verified non-issue" — the audit agent misread the existing code; the dedup gate already precedes blob writes.
+
+### Verification
+
+- `deno check mod.ts` clean throughout
+- `deno task build:npm` clean
+- 1831/1832 tests passing — the 1 failure is a pre-existing stale tool list in `tests/mcp-server.test.ts:229` (verified via `git stash` round-trip, unrelated to this audit work)
+- New tests added: ~75 across 14 test files (env-allowlist, timing-safe, peers-proxy B002/B033 cases, auto-confirm B007/B015 redirect-walk, confirm-detect B016 anchor extraction + B027 transactional-mail rejection, inbox B004/B014 atomicity, d1 B005/B034/B035/B036, router-routing B006/B017/B018, dispatch B009, rules B008/B024, mirror B019/B021/B022, sender-aliases B029, forward-detect B025, rss B030/B031, newsletter-markdown B032, memory B037, cursor B041)
+
+### What changed in scope from the original plan
+
+Plan agent recommended re-cutting Phase C from "by theme" (correctness/concurrency/budget/hygiene) to "by file" — adopted. Critical path dropped from 6 sequential phases to 3 (A → B → 10 parallel lanes). All 10 lanes shipped in two waves of subagent fan-out + two solo design-sensitive lanes (C1 inbox, C7 deploy).
+
+### Out of scope (still)
+
+- **Production deploy** — local code is remediated; `cd deploy && yarn deploy` requires user approval per CLAUDE.md.
+- **Push to remote** — no `git push` performed; 12 commits stacked on `main` locally for review.
+- The 8 still-open items in `TASKS-AUDIT.md` (A001-A244 history) — separate scope, not touched by this audit.
+
+### Follow-ups worth scheduling
+
+- **Re-audit incremental** in 90 days — sweep just new code, exclude closed B-prefix IDs.
+- **Pre-existing test failure** at `tests/mcp-server.test.ts:229` (stale MCP tool list) — quick win to fix the assertion since the audit pass surfaced it.

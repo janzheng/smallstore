@@ -1,10 +1,10 @@
-# Smallstore — Security Remediation
+# Smallstore — Security Remediation [shipped 2026-04-28]
 
-Fix plan for the 41 substantive findings in `TASKS-AUDIT-2026-04-28.md`. See `.brief/2026-04-28-security-audit.md` for the threat model + executive summary. Findings use `B###` IDs.
+> **Status: complete.** All 41 findings closed (40 fixed, 1 verified non-issue) in a single autonomous fan-out session. 12 commits, 1831/1832 tests green (1 pre-existing failure unrelated). See `.brief/2026-04-28-security-audit.md` for the closing brief; `TASKS-AUDIT-2026-04-28.md` for individual finding details.
+>
+> **Re-laning note:** Plan agent recommended re-cutting Phase C from "by theme" to "by file" — adopted at execution time. The headings below reflect the original (by-theme) plan; the actual commits map by file (see commit log). Both views are consistent — the work is done.
 
-**Strategy:** five sprints, ordered by blast radius. Sprint 0 ships first (token hardening — biggest impact, smallest diff). Sprint 1 ships next (auto-confirm). Sprints 2-5 are largely parallelizable across files; explicit `#needs:tag` only where there's a real dependency.
-
-Each sprint is a single PR unless noted. Tier 0/1 fixes get tests; Tier 2 fixes pair with the existing test where present and skip new tests if the bug class is already covered.
+Original plan:
 
 ---
 
