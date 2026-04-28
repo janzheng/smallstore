@@ -243,7 +243,7 @@ Deno.test('MCP: tools/list returns all expected tools with inputSchemas', async 
       // core (10)
       'sm_adapters', 'sm_append', 'sm_delete', 'sm_list', 'sm_query', 'sm_read',
       'sm_sync', 'sm_sync_jobs', 'sm_sync_status', 'sm_write',
-      // inbox — items + confirmations + notes/todos + replay (19) + admin (3)
+      // inbox — items + confirmations + notes/todos + replay + spam triage (21) + admin (3)
       'sm_inbox_attachments_list',
       'sm_inbox_confirm',
       'sm_inbox_create',
@@ -252,8 +252,10 @@ Deno.test('MCP: tools/list returns all expected tools with inputSchemas', async 
       'sm_inbox_export',
       'sm_inbox_list',
       'sm_inbox_list_admin',
+      'sm_inbox_mark_not_spam',
       'sm_inbox_mark_read',
       'sm_inbox_mark_read_many',
+      'sm_inbox_mark_spam',
       'sm_inbox_mark_unread',
       'sm_inbox_mirror',
       'sm_inbox_notes',

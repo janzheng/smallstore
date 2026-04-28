@@ -246,6 +246,34 @@ export const INBOX_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'sm_inbox_mark_spam',
+    description:
+      'Mark an item as spam. Adds the `spam` label, updates the attributed sender\'s spam_count, and writes marked_at. Idempotent — calling twice on the same item returns `{ already_spam: true }` without double-counting. Attribution per `.brief/spam-layers.md` § decision #2: if the item is forwarded AND the forwarder is `trusted`, the forwarder gets the bump (their curation choice ≠ original sender\'s fault); else the original sender; else the item\'s from_email. Response includes a sender summary `{ count, spam_count, not_spam_count, spam_rate, trusted }` plus `consider_demote: true` when a trusted sender accumulates ≥5 user-marks AND spam_rate > 0.5 — operator should revisit the trust call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        id: { type: 'string', description: 'Item id to mark spam.' },
+        reason: { type: 'string', description: 'Optional human reason for the mark — recorded in the operator log only, not surfaced.' },
+      },
+      required: ['inbox', 'id'],
+    },
+  },
+  {
+    name: 'sm_inbox_mark_not_spam',
+    description:
+      'Mark an item as NOT spam — the inverse of `sm_inbox_mark_spam` and the recovery path for false positives. Removes both `spam` and `quarantined` labels, bumps the attributed sender\'s not_spam_count, writes marked_at. Idempotent — `{ already_not_spam: true }` when item carries neither label. **Auto-confirm revocation (decision #3):** if the item carries `auto-confirmed`, finds the matching pattern in `auto-confirm-senders` and revokes it; response includes `revoked_auto_confirm: { pattern, source }` for the undo path (`sm_auto_confirm_add(pattern, { source: "runtime" })` to restore). The same attribution rules as mark-spam apply.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        id: { type: 'string', description: 'Item id to mark not-spam.' },
+        reason: { type: 'string', description: 'Optional human reason for the mark.' },
+      },
+      required: ['inbox', 'id'],
+    },
+  },
+  {
     name: 'sm_inbox_mark_read_many',
     description:
       'Bulk mark-read. Pass `ids: string[]` for an explicit list, OR `filter: InboxFilter` to mark-read everything matching (server intersects with `labels:["unread"]` so already-read items are skipped; empty filter `{}` marks-read every unread item). Exactly one of `ids` / `filter` must be provided. With `ids`, returns `{ total, changed, missing }`. With `filter`, returns `{ matched, changed, capped }` — `capped: true` means the 10k safety cap was hit; page via `sm_inbox_query` + explicit ids for larger batches.',
@@ -839,6 +867,26 @@ export async function handleInboxTool(
       const id = requireString(args, 'id');
       const r = await http('POST', `/inbox/${encName(inbox)}/items/${encId(id)}/unread`);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_mark_unread failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_mark_spam': {
+      const inbox = requireString(args, 'inbox');
+      const id = requireString(args, 'id');
+      const body: Record<string, unknown> = {};
+      if (typeof args.reason === 'string') body.reason = args.reason;
+      const r = await http('POST', `/inbox/${encName(inbox)}/items/${encId(id)}/mark-spam`, body);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_mark_spam failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_mark_not_spam': {
+      const inbox = requireString(args, 'inbox');
+      const id = requireString(args, 'id');
+      const body: Record<string, unknown> = {};
+      if (typeof args.reason === 'string') body.reason = args.reason;
+      const r = await http('POST', `/inbox/${encName(inbox)}/items/${encId(id)}/mark-not-spam`, body);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_mark_not_spam failed', r));
       return r.body;
     }
 

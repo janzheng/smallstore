@@ -43,6 +43,23 @@ export interface SenderRecord {
   count: number;
   /** Items from this sender tagged `spam` or `quarantine`. */
   spam_count: number;
+  /**
+   * Items from this sender explicitly marked NOT spam by the user (via
+   * the mark-not-spam endpoint). Pairs with `spam_count` to form the
+   * `spam_rate = spam_count / max(1, spam_count + not_spam_count)`
+   * predicate that the reputation hook acts on. Default 0 for legacy
+   * rows (`existing?.not_spam_count ?? 0` on read). See
+   * `.brief/spam-layers.md`.
+   */
+  not_spam_count: number;
+  /**
+   * ISO timestamp of the most recent user-driven spam/not-spam mark
+   * on any item from this sender. Distinguishes "stale spam history"
+   * (sender hasn't been marked in a year — reputation may have shifted)
+   * from "actively flagged" (recent decisions). Undefined for legacy
+   * rows + senders never explicitly marked.
+   */
+  marked_at?: string;
   /** Merged tags: `newsletter`, `unsubscribed`, `trusted`, `bounce-source`, etc. */
   tags: string[];
   /** Parsed URL from the `List-Unsubscribe` header, if present. */
@@ -212,6 +229,13 @@ export function createSenderIndex(
         last_seen: receivedAt,
         count: (existing?.count ?? 0) + 1,
         spam_count: (existing?.spam_count ?? 0) + spamDelta,
+        // Default 0 for legacy rows that pre-date the schema bump
+        // (.brief/spam-layers.md decision). Auto-ingest doesn't bump
+        // not_spam_count — only the explicit mark-not-spam endpoint does.
+        not_spam_count: existing?.not_spam_count ?? 0,
+        // Preserve an existing marked_at — the upsert path is auto-ingest;
+        // only mark-spam / mark-not-spam endpoints update this timestamp.
+        marked_at: existing?.marked_at,
         tags: mergedTags,
         // Preserve an existing unsub URL rather than overwrite with a fresh parse.
         list_unsubscribe_url: existing?.list_unsubscribe_url ?? parsedUnsubUrl,

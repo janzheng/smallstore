@@ -90,6 +90,7 @@ export {
   type UnsubscribeOptions,
   type UnsubscribeResult,
 } from './unsubscribe.ts';
+export { resolveSpamAttribution } from './spam-attribution.ts';
 export {
   DEFAULT_QUARANTINE_LABEL,
   listQuarantined,

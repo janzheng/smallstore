@@ -45,8 +45,10 @@
 import type { Context, Hono, Next } from 'hono';
 import type { InboxConfig, InboxFilter, InboxItem, ListOptions } from './types.ts';
 import { listChannels, type InboxRegistry } from './registry.ts';
-import type { SenderIndex } from './sender-index.ts';
+import type { SenderIndex, SenderRecord } from './sender-index.ts';
 import { unsubscribeSender } from './unsubscribe.ts';
+import { resolveSpamAttribution } from './spam-attribution.ts';
+import { isSenderAllowed } from './auto-confirm.ts';
 import type { MailroomRule, RuleAction, RulesStore } from './rules.ts';
 import type { AutoConfirmSendersStore } from './auto-confirm-senders.ts';
 import { listQuarantined, restoreItem } from './quarantine.ts';
@@ -1090,6 +1092,218 @@ export function registerMessagingRoutes(
   });
 
   /**
+   * Mark a single item as spam — Sprint 1 of `.brief/spam-layers.md`.
+   *
+   * POST /inbox/:name/items/:id/mark-spam
+   * Body: { reason?: string }   (optional — for the user's own audit trail)
+   *
+   * Idempotent (decision #1): if the item already carries `spam`, returns
+   * `{ already_spam: true, item, sender_summary }` and does NOT bump the
+   * counter. The item's own `spam` label IS the dedup key.
+   *
+   * Attribution (decision #2): the sender whose `spam_count` bumps is
+   * resolved via `resolveSpamAttribution()` — trusted forwarder + original
+   * sender → forwarder; untrusted forwarder → original; no forward → from_email.
+   *
+   * Demote prompt (decision #4): when the attributed sender carries the
+   * `trusted` tag AND total user-marks (spam + not-spam) reaches 5 AND
+   * spam_rate > 0.5, the response carries `consider_demote: true` so the
+   * caller can prompt the operator to revisit the trust call.
+   *
+   * Returns 501 when senderIndexFor isn't wired (the deploy must provide
+   * a sender index for this inbox; if not, the spam triage primitives
+   * are inert).
+   */
+  app.post('/inbox/:name/items/:id/mark-spam', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    if (!senderIndexFor) {
+      return c.json(
+        { error: 'NotImplemented', message: 'senderIndexFor not provided — spam triage unavailable' },
+        501,
+      );
+    }
+    const senderIndex = await senderIndexFor(name);
+    if (!senderIndex) {
+      return c.json(
+        { error: 'NotImplemented', message: `inbox "${name}" has no sender index — spam triage unavailable` },
+        501,
+      );
+    }
+
+    const existing = await inbox.read(id);
+    if (!existing) return notFound(c, `item "${id}" not in inbox "${name}"`);
+
+    const labels = existing.labels ?? [];
+    const attributedAddress = await resolveSpamAttribution(existing, senderIndex);
+
+    // Idempotent: already spam → no counter bump, return the same shape.
+    if (labels.includes('spam')) {
+      const senderRecord = attributedAddress ? await senderIndex.get(attributedAddress) : null;
+      return c.json({
+        inbox: name,
+        item: existing,
+        already_spam: true,
+        attributed_to: attributedAddress,
+        sender_summary: senderSummary(senderRecord),
+      });
+    }
+
+    // Apply the spam label — single ingest with force:true. NB: postClassify
+    // hooks (incl. the deploy's senderUpsertHook) only fire on the dispatch
+    // pipeline, NOT on raw `_ingest({ force: true })`. So we must bump the
+    // sender counters explicitly here — relying on the hook would silently
+    // skip the bump when the user marks spam on an existing item.
+    const nextLabels = [...labels, 'spam'];
+    const updated = { ...existing, labels: nextLabels };
+    const saved = await inbox._ingest(updated, { force: true });
+
+    // Explicit bump: spam_count + marked_at. Bootstrap a sender record via
+    // upsert if none exists yet (rare — auto-ingest usually creates one
+    // first, but a manual mark-spam on an item from an as-yet-untracked
+    // sender shouldn't silently fail to bump the counter).
+    let senderRecord = attributedAddress ? await senderIndex.get(attributedAddress) : null;
+    if (!senderRecord && attributedAddress) {
+      // Bootstrap: upsert seeds the record using the item's fields. The new
+      // record's spam_count will already be 1 from the `spam` label we just
+      // added. We then write marked_at on top.
+      await senderIndex.upsert(saved);
+      senderRecord = await senderIndex.get(attributedAddress);
+      if (senderRecord) {
+        senderRecord = { ...senderRecord, marked_at: new Date().toISOString() };
+        await senderIndex.setRecord(senderRecord);
+      }
+    } else if (senderRecord) {
+      senderRecord = {
+        ...senderRecord,
+        spam_count: (senderRecord.spam_count ?? 0) + 1,
+        marked_at: new Date().toISOString(),
+      };
+      await senderIndex.setRecord(senderRecord);
+    }
+
+    // Demote-prompt: trusted sender accumulating real spam marks.
+    const considerDemote = computeConsiderDemote(senderRecord);
+
+    return c.json({
+      inbox: name,
+      item: saved,
+      already_spam: false,
+      attributed_to: attributedAddress,
+      sender_summary: senderSummary(senderRecord),
+      ...(considerDemote ? { consider_demote: true } : {}),
+    });
+  });
+
+  /**
+   * Mark a single item as NOT spam — Sprint 1 of `.brief/spam-layers.md`.
+   *
+   * POST /inbox/:name/items/:id/mark-not-spam
+   * Body: { reason?: string }
+   *
+   * Removes both `spam` and `quarantined` labels. Bumps the attributed
+   * sender's `not_spam_count` and writes `marked_at`.
+   *
+   * Auto-confirm revocation (decision #3): when the item carries
+   * `auto-confirmed`, finds patterns in `AutoConfirmSendersStore` that
+   * match the item's `from_email` and removes them. Response carries
+   * `revoked_auto_confirm: { pattern, source } | null` so the caller can
+   * undo via `sm_auto_confirm_add(pattern, { source: 'runtime' })`
+   * preserving provenance.
+   *
+   * Idempotent: if the item carries neither `spam` nor `quarantined`,
+   * returns `{ already_not_spam: true }` without bumping counters.
+   */
+  app.post('/inbox/:name/items/:id/mark-not-spam', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const id = c.req.param('id')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    if (!senderIndexFor) {
+      return c.json(
+        { error: 'NotImplemented', message: 'senderIndexFor not provided — spam triage unavailable' },
+        501,
+      );
+    }
+    const senderIndex = await senderIndexFor(name);
+    if (!senderIndex) {
+      return c.json(
+        { error: 'NotImplemented', message: `inbox "${name}" has no sender index — spam triage unavailable` },
+        501,
+      );
+    }
+
+    const existing = await inbox.read(id);
+    if (!existing) return notFound(c, `item "${id}" not in inbox "${name}"`);
+
+    const labels = existing.labels ?? [];
+    const wasSpam = labels.includes('spam');
+    const wasQuarantined = labels.includes('quarantined');
+    const wasAutoConfirmed = labels.includes('auto-confirmed');
+    const attributedAddress = await resolveSpamAttribution(existing, senderIndex);
+
+    // Idempotent: nothing to remove → no counter bump.
+    if (!wasSpam && !wasQuarantined) {
+      const senderRecord = attributedAddress ? await senderIndex.get(attributedAddress) : null;
+      return c.json({
+        inbox: name,
+        item: existing,
+        already_not_spam: true,
+        attributed_to: attributedAddress,
+        sender_summary: senderSummary(senderRecord),
+      });
+    }
+
+    // Strip both spam-flavored labels.
+    const nextLabels = labels.filter((l) => l !== 'spam' && l !== 'quarantined');
+    const updated = {
+      ...existing,
+      labels: nextLabels.length > 0 ? nextLabels : undefined,
+    };
+    const saved = await inbox._ingest(updated, { force: true });
+
+    // Bump not_spam_count + write marked_at on the attributed sender.
+    let senderRecord = attributedAddress ? await senderIndex.get(attributedAddress) : null;
+    if (senderRecord) {
+      senderRecord = {
+        ...senderRecord,
+        not_spam_count: (senderRecord.not_spam_count ?? 0) + 1,
+        marked_at: new Date().toISOString(),
+      };
+      await senderIndex.setRecord(senderRecord);
+    }
+
+    // Auto-confirm revocation: revoke any matching pattern, preserving
+    // the source for the undo path.
+    let revokedAutoConfirm: { pattern: string; source: 'env' | 'runtime' } | null = null;
+    if (wasAutoConfirmed && autoConfirmSendersStore) {
+      const fromEmail = typeof existing.fields?.from_email === 'string' ? existing.fields.from_email : '';
+      const allPatterns = await autoConfirmSendersStore.list();
+      const matching = allPatterns.filter((p) => isSenderAllowed(fromEmail, [p.pattern]));
+      if (matching.length > 0) {
+        // Revoke the first matching pattern (most-specific is unsorted; an
+        // operator with multiple matching patterns can re-revoke if needed).
+        const target = matching[0];
+        await autoConfirmSendersStore.delete(target.pattern);
+        revokedAutoConfirm = { pattern: target.pattern, source: target.source };
+      }
+    }
+
+    return c.json({
+      inbox: name,
+      item: saved,
+      already_not_spam: false,
+      attributed_to: attributedAddress,
+      sender_summary: senderSummary(senderRecord),
+      revoked_auto_confirm: revokedAutoConfirm,
+    });
+  });
+
+  /**
    * Bulk mark-read by id.
    *
    * POST /inbox/:name/read
@@ -1858,6 +2072,52 @@ function validateRuleInput(body: any): string | null {
     return 'body.action_args.tag must be a string when provided';
   }
   return null;
+}
+
+/**
+ * Project a `SenderRecord` to the public summary the spam-triage routes
+ * return alongside the mutated item. Computes `spam_rate` defensively
+ * (returns 0 when no marks exist either way). `null` record → all zeros
+ * (e.g. item with no resolvable sender — extremely rare for email).
+ */
+function senderSummary(record: SenderRecord | null): {
+  address: string | null;
+  count: number;
+  spam_count: number;
+  not_spam_count: number;
+  spam_rate: number;
+  marked_at?: string;
+  trusted: boolean;
+} {
+  if (!record) {
+    return { address: null, count: 0, spam_count: 0, not_spam_count: 0, spam_rate: 0, trusted: false };
+  }
+  const total = (record.spam_count ?? 0) + (record.not_spam_count ?? 0);
+  const spam_rate = total > 0 ? (record.spam_count ?? 0) / total : 0;
+  return {
+    address: record.address,
+    count: record.count ?? 0,
+    spam_count: record.spam_count ?? 0,
+    not_spam_count: record.not_spam_count ?? 0,
+    spam_rate,
+    marked_at: record.marked_at,
+    trusted: !!record.tags?.includes('trusted'),
+  };
+}
+
+/**
+ * Demote-prompt predicate from `.brief/spam-layers.md` § decision #4:
+ * trusted sender accumulating real spam marks (≥5 total user-marks AND
+ * spam_rate > 0.5) → caller should prompt the operator to revisit the
+ * trust call. Returns true when the prompt should fire.
+ */
+function computeConsiderDemote(record: SenderRecord | null): boolean {
+  if (!record) return false;
+  if (!record.tags?.includes('trusted')) return false;
+  const total = (record.spam_count ?? 0) + (record.not_spam_count ?? 0);
+  if (total < 5) return false;
+  const spam_rate = total > 0 ? (record.spam_count ?? 0) / total : 0;
+  return spam_rate > 0.5;
 }
 
 function serializeRegistration(name: string, reg: import('./registry.ts').InboxRegistration) {
