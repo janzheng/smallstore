@@ -13,6 +13,7 @@
 
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert';
 import {
+  isValidPath,
   probePeer,
   proxyGet,
   proxyPost,
@@ -640,5 +641,195 @@ Deno.test('probePeer: 2xx and 3xx both count as ok=true', async () => {
     } finally {
       mock.restore();
     }
+  }
+});
+
+// ============================================================================
+// isValidPath / proxy path validation (B033)
+// ============================================================================
+
+Deno.test('isValidPath: accepts ordinary paths and query forms', () => {
+  assertEquals(isValidPath('/'), true);
+  assertEquals(isValidPath(''), true);
+  assertEquals(isValidPath('/api/v1/items'), true);
+  assertEquals(isValidPath('/items?id=42&kind=foo'), true);
+  assertEquals(isValidPath('/path/with-dash_and.dot/'), true);
+  assertEquals(isValidPath('/encoded/%2Fslash/%20space'), true);
+  assertEquals(isValidPath('/items?q=hello+world'), true);
+  assertEquals(isValidPath('/users/@alice/posts'), true);
+  assertEquals(isValidPath('/foo#fragment'), true);
+});
+
+Deno.test('isValidPath: rejects raw CRLF (header smuggling)', () => {
+  assertEquals(isValidPath('/foo\r\nX-Inject: bad'), false);
+  assertEquals(isValidPath('/foo\nX-Inject: bad'), false);
+  assertEquals(isValidPath('/foo\rX-Inject: bad'), false);
+});
+
+Deno.test('isValidPath: rejects control chars and null bytes', () => {
+  assertEquals(isValidPath('/foo\x00bar'), false);
+  assertEquals(isValidPath('/foo\tbar'), false);
+  assertEquals(isValidPath('/foo\x07bar'), false);
+  assertEquals(isValidPath('/foo\x1fbar'), false);
+  assertEquals(isValidPath('/foo\x7fbar'), false);
+});
+
+Deno.test('isValidPath: rejects raw spaces and non-ASCII', () => {
+  assertEquals(isValidPath('/foo bar'), false);
+  assertEquals(isValidPath('/foo café'), false);
+  assertEquals(isValidPath('/foo bar'), false); // non-breaking space
+});
+
+Deno.test('proxyGet: CRLF in path returns error pre-fetch (B033)', async () => {
+  const mock = installFetchMock({ status: 200 });
+  try {
+    const peer = makePeer();
+    const result = await proxyGet({
+      peer,
+      path: '/foo\r\nX-Inject: bad',
+      env: {},
+    });
+    assertEquals(result.ok, false);
+    assertEquals(result.status, 0);
+    assertEquals(result.error, 'invalid path: contains disallowed characters');
+    // Critical: no fetch was dispatched
+    assertEquals(mock.calls.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+Deno.test('proxyGet: control char in path returns error pre-fetch (B033)', async () => {
+  const mock = installFetchMock({ status: 200 });
+  try {
+    const peer = makePeer();
+    const result = await proxyGet({
+      peer,
+      path: '/foo\x00bar',
+      env: {},
+    });
+    assertEquals(result.ok, false);
+    assertEquals(result.error, 'invalid path: contains disallowed characters');
+    assertEquals(mock.calls.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+Deno.test('proxyGet: normal paths still work after B033 gate', async () => {
+  const mock = installFetchMock({ status: 200, body: 'ok' });
+  try {
+    const peer = makePeer({ url: 'https://peer.example.com' });
+    const result = await proxyGet({
+      peer,
+      path: '/api/items?id=42',
+      env: {},
+    });
+    assertEquals(result.ok, true);
+    assertEquals(mock.calls.length, 1);
+  } finally {
+    mock.restore();
+  }
+});
+
+Deno.test('proxyPost: CRLF in path returns error pre-fetch (B033)', async () => {
+  const mock = installFetchMock({ status: 200 });
+  try {
+    const peer = makePeer();
+    const result = await proxyPost({
+      peer,
+      path: '/items\r\nX-Inject: bad',
+      env: {},
+      body: { foo: 'bar' },
+    });
+    assertEquals(result.ok, false);
+    assertEquals(result.status, 0);
+    assertEquals(result.error, 'invalid path: contains disallowed characters');
+    assertEquals(mock.calls.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+// ============================================================================
+// HTTP route boundary path validation (B033)
+// ============================================================================
+
+Deno.test('http /peers/:name/fetch: path with %0d%0a returns 400 (B033)', async () => {
+  // Build an in-process Hono app with the peers routes mounted; hit it
+  // directly with a hostile path query and assert 400 + no fetch dispatch.
+  const { Hono } = await import('hono');
+  const { registerPeersRoutes } = await import('../src/peers/http-routes.ts');
+  const { createPeerStore } = await import('../src/peers/peer-registry.ts');
+  const { MemoryAdapter } = await import('../src/adapters/memory.ts');
+
+  const adapter = new MemoryAdapter();
+  const peerStore = createPeerStore(adapter);
+  await peerStore.create({
+    name: 'test-peer',
+    type: 'generic',
+    url: 'https://peer.example.com',
+  });
+
+  const app = new Hono();
+  registerPeersRoutes(app, {
+    peerStore,
+    requireAuth: (_c, next) => next(), // open for the test
+    env: {},
+  });
+
+  const mock = installFetchMock({ status: 200 });
+  try {
+    // %0d%0a → CR LF after URL decoding by Hono's query parser
+    const req = new Request(
+      'http://localhost/peers/test-peer/fetch?path=foo%0d%0aX-Inject:%20bad',
+    );
+    const res = await app.fetch(req);
+    assertEquals(res.status, 400);
+    const body = await res.json();
+    // `badRequest` returns { error: "BadRequest", message: "..." }
+    assert(
+      typeof body.message === 'string' && body.message.includes('path query param'),
+      `expected disallowed-characters error, got ${JSON.stringify(body)}`,
+    );
+    // Critical: no upstream fetch was dispatched
+    assertEquals(mock.calls.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+Deno.test('http /peers/:name/query: path with %0d%0a returns 400 (B033)', async () => {
+  const { Hono } = await import('hono');
+  const { registerPeersRoutes } = await import('../src/peers/http-routes.ts');
+  const { createPeerStore } = await import('../src/peers/peer-registry.ts');
+  const { MemoryAdapter } = await import('../src/adapters/memory.ts');
+
+  const adapter = new MemoryAdapter();
+  const peerStore = createPeerStore(adapter);
+  await peerStore.create({
+    name: 'q-peer',
+    type: 'generic',
+    url: 'https://peer.example.com',
+  });
+
+  const app = new Hono();
+  registerPeersRoutes(app, {
+    peerStore,
+    requireAuth: (_c, next) => next(),
+    env: {},
+  });
+
+  const mock = installFetchMock({ status: 200 });
+  try {
+    const req = new Request(
+      'http://localhost/peers/q-peer/query?path=foo%0d%0aX-Inject:%20bad',
+      { method: 'POST', body: '{}' },
+    );
+    const res = await app.fetch(req);
+    assertEquals(res.status, 400);
+    assertEquals(mock.calls.length, 0);
+  } finally {
+    mock.restore();
   }
 });

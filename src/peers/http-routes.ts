@@ -34,7 +34,7 @@
 import type { Context, Hono, Next } from 'hono';
 import type { Peer, PeerAuth, PeerStore, PeerType, PeerQueryFilter } from './types.ts';
 import { defaultEnvAllowlist } from './env-allowlist.ts';
-import { probePeer, proxyGet, proxyPost } from './proxy.ts';
+import { isValidPath, probePeer, proxyGet, proxyPost } from './proxy.ts';
 
 export type RequireAuth = (c: Context, next: Next) => Promise<Response | void> | Response | void;
 
@@ -167,6 +167,12 @@ export function registerPeersRoutes(
     }
 
     const path = c.req.query('path') ?? '/';
+    // B033: reject hostile path query at the HTTP boundary before any further
+    // processing. CRLF, control chars, and raw spaces could smuggle headers
+    // through the URL constructor's fallback path in `buildUrl`.
+    if (!isValidPath(path)) {
+      return badRequest(c, 'path query param contains disallowed characters');
+    }
     // Forward every query param EXCEPT `path` (which we consumed) to the peer.
     const client_query: Record<string, string> = {};
     for (const [k, v] of Object.entries(c.req.queries() ?? {})) {
@@ -200,6 +206,10 @@ export function registerPeersRoutes(
     }
 
     const path = c.req.query('path') ?? '/';
+    // B033: same gate as the GET proxy route.
+    if (!isValidPath(path)) {
+      return badRequest(c, 'path query param contains disallowed characters');
+    }
     const clientCT = c.req.header('content-type') ?? 'application/json';
 
     // Read body as text to preserve whatever the client sent.

@@ -47,6 +47,14 @@ export class MemoryAdapter implements StorageAdapter {
   private store: Map<string, TTLEntry> = new Map();
   private _searchProvider: SearchProvider;
 
+  // B037: amortized TTL eviction. ~1% of `set` calls fire an opportunistic
+  // background sweep that walks the Map and drops expired entries. The on-
+  // demand `keys()` scan stays as the correctness guarantee — a long-lived
+  // process with bursty TTL inserts no longer accumulates dead entries
+  // indefinitely between manual `cleanupExpired()` calls.
+  private static readonly EVICT_PROBABILITY = 0.01;
+  private evictInFlight = false;
+
   constructor(config: MemoryAdapterConfig = {}) {
     this._searchProvider = config.searchProvider ?? new MemoryBm25SearchProvider();
   }
@@ -132,6 +140,42 @@ export class MemoryAdapter implements StorageAdapter {
     // Pass the cloned storedValue so async providers (vector, zvec) can't
     // observe later mutations the caller makes to their original object.
     try { this.searchProvider.index(key, storedValue); } catch { /* best-effort */ }
+
+    // B037: amortized TTL eviction. Fire-and-forget — the set call returns
+    // immediately and the sweep runs on a microtask. A guard prevents
+    // overlapping sweeps even if the caller bursts thousands of sets.
+    this.maybeEvictExpired();
+  }
+
+  /**
+   * Probabilistic background TTL sweep, called from `set()`. ~1% of set
+   * calls schedule a microtask that walks the Map once and drops expired
+   * entries. Never throws; never blocks the caller.
+   *
+   * Correctness invariants:
+   * - `keys()` and `get()` still verify TTL on read, so a stale entry can
+   *   never leak into a query result even between sweeps.
+   * - The `evictInFlight` flag prevents two overlapping sweeps; sets during
+   *   a sweep simply skip scheduling a new one.
+   */
+  private maybeEvictExpired(): void {
+    if (this.evictInFlight) return;
+    if (Math.random() >= MemoryAdapter.EVICT_PROBABILITY) return;
+    this.evictInFlight = true;
+    queueMicrotask(() => {
+      try {
+        const now = Date.now();
+        for (const [key, entry] of this.store.entries()) {
+          if (entry.expiresAt !== null && now > entry.expiresAt) {
+            this.store.delete(key);
+            // Also drop search index entries; best-effort, never throws.
+            try { this.searchProvider.remove(key); } catch { /* best-effort */ }
+          }
+        }
+      } finally {
+        this.evictInFlight = false;
+      }
+    });
   }
   
   /**

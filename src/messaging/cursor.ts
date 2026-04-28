@@ -29,9 +29,32 @@ export function encodeCursor(c: Cursor): string {
 }
 
 /**
+ * Maximum length of `id` in a decoded cursor. Inbox ids today are short
+ * UUIDs / short slugs (~40 chars); 256 is generous headroom while still
+ * bounding pathological input.
+ */
+const MAX_ID_LENGTH = 256;
+
+/**
+ * ISO-8601 with optional fractional seconds and either `Z` or `±HH:MM`
+ * offset. Matches the shape `encodeCursor` produces (`InboxItem.received_at`)
+ * without admitting open-ended Date.parse-able inputs like `"2026"` or
+ * arbitrary RFC 2822 strings that would skew range queries.
+ */
+const ISO_8601_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
  * Decode an opaque cursor string. Returns null if malformed.
  *
  * Throws nothing — callers should treat null as "start from beginning".
+ *
+ * B041: shape validation after JSON.parse. A base64-encoded JSON payload is
+ * caller-controlled (it's a query param), so we can't trust `at` to be a
+ * sane ISO date or `id` to be a bounded string. Validate both, returning
+ * null on mismatch — callers already handle null as "start from beginning"
+ * so a hostile cursor degrades gracefully instead of producing absurd date
+ * ranges or carrying multi-megabyte ids through the pagination layer.
  */
 export function decodeCursor(s: string | undefined | null): Cursor | null {
   if (!s) return null;
@@ -43,7 +66,17 @@ export function decodeCursor(s: string | undefined | null): Cursor | null {
   try {
     const json = base64urlDecode(payload);
     const obj = JSON.parse(json);
-    if (typeof obj?.at !== 'string' || typeof obj?.id !== 'string') return null;
+    if (!obj || typeof obj !== 'object') return null;
+    if (typeof obj.at !== 'string' || typeof obj.id !== 'string') return null;
+    // `at` must look like ISO-8601 AND parse to a real timestamp. Date.parse
+    // alone is too permissive (accepts "1995", "Jan 1", numeric strings, etc.)
+    // — gate on the regex first, then sanity-check via Date.parse.
+    if (!obj.at || !ISO_8601_RE.test(obj.at)) return null;
+    if (Number.isNaN(Date.parse(obj.at))) return null;
+    // `id` is bounded. Empty string is allowed: `inbox.cursor()` uses the
+    // sentinel `{ at: epoch, id: '' }` for an empty inbox (see inbox.ts:234)
+    // — rejecting it would regress the round-trip contract.
+    if (obj.id.length > MAX_ID_LENGTH) return null;
     return { at: obj.at, id: obj.id };
   } catch {
     return null;

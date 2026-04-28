@@ -50,6 +50,33 @@ import { defaultEnvAllowlist, type EnvAllowlist } from './env-allowlist.ts';
 /** Default proxy timeout for GET/POST. */
 const DEFAULT_PROXY_TIMEOUT_MS = 10_000;
 
+/**
+ * RFC 3986 path/query character class plus `+` (form-encoded space). Anything
+ * outside this set — CRLF, control chars, null bytes, tabs, non-printable
+ * ASCII, raw spaces — is rejected by `isValidPath` before the path string is
+ * concatenated to `peer.url`. The `URL` constructor would catch most bypass
+ * attempts on its own, but `buildUrl` falls back to the raw string when `URL`
+ * parsing fails (e.g. an exotic peer.url shape) and a CRLF in `path` could
+ * smuggle headers when later passed to `fetch`. This validator is the
+ * upstream gate so the fallback path stays safe by construction.
+ */
+const VALID_PATH_RE = /^[A-Za-z0-9._~/?#@:&=+%-]*$/;
+
+/**
+ * Strict path validation for the proxy `path` query param. Allowed characters
+ * are RFC 3986 unreserved + reserved path/query chars plus `+` for form-encoded
+ * spaces. Empty string returns `true` (caller treats undefined→'/' upstream).
+ *
+ * Rejects: CRLF, tabs, raw spaces, control chars (U+0000..U+001F, U+007F),
+ * null bytes, and any non-ASCII printable. Encoded forms (`%0d%0a`) pass the
+ * char-class but are validated as percent-encoded triplets — the runtime
+ * `URL` constructor will normalize them safely.
+ */
+export function isValidPath(path: string): boolean {
+  if (typeof path !== 'string') return false;
+  return VALID_PATH_RE.test(path);
+}
+
 /** Default health-probe timeout. Shorter than proxy since probes are interactive. */
 const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 
@@ -291,6 +318,22 @@ function headersToRecord(headers: Headers): Record<string, string> {
  */
 export async function proxyGet(args: ProxyGetArgs): Promise<ProxyResult> {
   const timeoutMs = args.timeout_ms ?? DEFAULT_PROXY_TIMEOUT_MS;
+
+  // B033: reject path strings containing CRLF, control chars, raw spaces, etc.
+  // before any URL plumbing. Same gate as the HTTP route boundary; this is
+  // the second line so non-HTTP callers (MCP server, internal helpers) can't
+  // smuggle headers via a hostile path either.
+  if (!isValidPath(args.path)) {
+    return {
+      status: 0,
+      ok: false,
+      headers: {},
+      body: '',
+      error: 'invalid path: contains disallowed characters',
+      latency_ms: 0,
+    };
+  }
+
   const resolved = resolvePeerAuth(args.peer, args.env);
 
   if (resolved.error) {
@@ -334,6 +377,20 @@ export async function proxyGet(args: ProxyGetArgs): Promise<ProxyResult> {
  */
 export async function proxyPost(args: ProxyPostArgs): Promise<ProxyResult> {
   const timeoutMs = args.timeout_ms ?? DEFAULT_PROXY_TIMEOUT_MS;
+  const path = args.path ?? '/';
+
+  // B033: reject hostile path strings before URL plumbing — see proxyGet.
+  if (!isValidPath(path)) {
+    return {
+      status: 0,
+      ok: false,
+      headers: {},
+      body: '',
+      error: 'invalid path: contains disallowed characters',
+      latency_ms: 0,
+    };
+  }
+
   const resolved = resolvePeerAuth(args.peer, args.env);
 
   if (resolved.error) {
@@ -346,8 +403,6 @@ export async function proxyPost(args: ProxyPostArgs): Promise<ProxyResult> {
       latency_ms: 0,
     };
   }
-
-  const path = args.path ?? '/';
   const url = buildUrl(args.peer, path, args.client_query, resolved.query_params);
   const headers = mergeHeaders(args.peer.headers, args.client_headers, resolved.headers);
 

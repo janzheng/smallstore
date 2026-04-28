@@ -321,17 +321,23 @@ export class CloudflareR2Adapter implements StorageAdapter {
         const response = await this.httpRequest<Response>(
           `/r2/${fullKey}`
         );
-        
+
         if (!response.success) {
           return null;
         }
-        
-        // Response.data is the raw fetch Response object wrapped in our ApiResponse.
-        // The double cast is needed because httpRequest types data as T (generic)
-        // but for file GET requests it returns the raw Response (not parsed JSON).
-        const fetchResponse = response.data as unknown as Response;
-        if (!fetchResponse || typeof fetchResponse.text !== 'function') {
-          return null;
+
+        // For file GET requests `httpRequest` returns the raw fetch `Response`
+        // wrapped in our ApiResponse — the generic data slot is honoured but
+        // the wrapper itself is the only narrowing point. B038: replace the
+        // previous `as unknown as Response` double cast with a runtime
+        // instanceof guard so a future wrapper change that swaps in a parsed
+        // JSON object surfaces as a typed error instead of crashing in
+        // `.text()`.
+        const fetchResponse = response.data;
+        if (!(fetchResponse instanceof Response)) {
+          throw new TypeError(
+            `R2 GET returned non-Response payload for key "${fullKey}" — wrapper contract violated`,
+          );
         }
         const bodyText = await fetchResponse.text();
         
