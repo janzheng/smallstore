@@ -1,6 +1,6 @@
 # Smallstore — Test Coverage
 
-**Total: 1864 offline tests passing, 13 live-adapter tests, 13 specialized live tests passing**
+**Total: 1986 offline tests passing, 13 live-adapter tests, 13 specialized live tests passing**
 
 Last verified: 2026-04-28 (full suite: `deno test --allow-all --no-check tests/`)
 
@@ -189,6 +189,18 @@ All landed in `main` between commits `7d7ffe6` (Phase A — security audit Sprin
 
 - [x] [pass: 19/19, `deno test --no-check tests/mcp-server.test.ts`] +3 mock-roundtrip cases: sm_inbox_create forwards `POST /admin/inboxes` with body, sm_inbox_list_admin forwards `GET /admin/inboxes`, sm_inbox_delete_inbox forwards `DELETE /admin/inboxes/:name`. Plus tools/list assertion bumped 26 → 49 → 52 (the 2026-04-28 refresh + the +3 admin tools). #test #mcp #admin
 
+### Adapter offline mock coverage (2026-04-28)
+
+Closed all 5 entries in the "Adapters without offline (mocked) tests"
+gap list. 122 new tests across 5 new files, all stubbing the adapter's
+HTTP / SDK surface so no live credentials are needed.
+
+- [x] [pass: 28/28, `deno test --no-check tests/adapter-sheetlog.test.ts`] **`tests/adapter-sheetlog.test.ts`** (commit fb20b23) — companion to adapter-sheetlog-guard.test.ts. Constructor + capabilities, get/has/keys (sheet-as-collection), upsert (single, array, explicit idField, keyGenerator with __generatedKey injection, non-object rejection, empty-array short-circuit, auto-detect failure on non-unique first key), insert (delegates to upsert), merge (3 dedup strategies: id / hash / fields), query/list pagination. Stubs the underlying `client` directly. #test #adapter #sheetlog
+- [x] [pass: 26/26, `deno test --no-check tests/adapter-upstash.test.ts`] **`tests/adapter-upstash.test.ts`** (commit 2928ff9) — full REST surface. Constructor (rejects without url+token after env clear), get (200, double-stringification, 404, null result, plain text, 500 propagation), set (SET vs SETEX URL shape, content-type text/plain, body shape), delete (POST /del/<key>), has (result=1/0), keys (pattern building + namespace stripping), listKeys (SCAN cursor walking, A220 cursor+offset precedence), clear (lists then bulk-deletes), namespace prefixing. Stubs globalThis.fetch with URL-pattern responder. #test #adapter #upstash
+- [x] [pass: 28/28, `deno test --no-check tests/adapter-f2-r2.test.ts`] **`tests/adapter-f2-r2.test.ts`** (commit 651e53d) — full F2 + R2 surface. parseKey (smallstore: prefix stripping, slash split, defaultScope fallback), get (JSON content-type → parsed, non-JSON → Uint8Array, 404/403 → null, bearer auth injection), set (cmd:data for objects/strings/numbers/booleans, cmd:presign + PUT to presigned URL for binary, presign-no-url throws), delete (cmd:delete with authKey, missing-authKey skips, 404 tolerated for idempotency, 500 propagated), has (HEAD → true/false, network error → false), keys (cmd:list maps to smallstore: prefixed keys), clear (cmd:delete with prefix). Stubs globalThis.fetch with URL+bodyJson responder. #test #adapter #f2-r2
+- [x] [pass: 23/23, `deno test --no-check tests/adapter-r2-direct.test.ts`] **`tests/adapter-r2-direct.test.ts`** (commit ebcb522) — full S3-via-AWS-SDK surface. Constructor + capabilities, set (PutObjectCommand for JSON object/string/Uint8Array with right Body+ContentType), get (parsed JSON / raw bytes / null on NoSuchKey / null when Body missing / autoParse off), delete (DeleteObjectCommand), has (HeadObjectCommand → true / false on NotFound or NoSuchKey / rethrow other errors), keys (ListObjectsV2Command maps Contents[].Key, prefix passes through), clear (lists then deletes each), getSignedUploadUrl + getSignedDownloadUrl + filename variant (use real S3Client; presigner is pure-local URL building so synthetic credentials work offline). Stubs s3Client.send via private-property injection; per-command-name dispatch. #test #adapter #r2-direct
+- [x] [pass: 17/17, `deno test --no-check tests/adapter-notion.test.ts`] **`tests/adapter-notion.test.ts`** (commit 10d2184) — CRUD + paginated key paths. Constructor (rejects without mappings/introspectSchema, accepts with mappings, cleans databaseId dashes), get (queryDatabase filter shape + transformFromNotion result + null on empty + null on error), delete (queries by key + updatePage(in_trash:true) + no-op when not found + idempotent on object_not_found), has (true/false/false-on-error), keys (paged via has_more + next_cursor + prefix filter + [] on error), listKeys (cursor walking + limit + prefix + A220 cursor+offset precedence). Stubs the entire NotionModernClient surface (queryDatabase / updatePage / createPage / getPage / listBlockChildren / appendBlockChildren / deleteBlock / getDatabase / getDataSource); per-method dispatch. Out of scope (live-only via tests/live/notion/test.ts): set + upsert (transformer pipeline + createPage vs updatePage), dynamic field creation, contentProperty body reads/writes, schema introspection. #test #adapter #notion
+
 ### Peer registry HTTP CRUD coverage
 
 - [x] [pass: 23/23, `deno test --no-check tests/peers-http-routes.test.ts`] **`tests/peers-http-routes.test.ts`** — full CRUD + health-probe coverage. New file. Mounts `registerPeersRoutes` onto an in-process Hono app + MemoryAdapter-backed peerStore; auth middleware stubbed open. Coverage:
@@ -204,18 +216,11 @@ All landed in `main` between commits `7d7ffe6` (Phase A — security audit Sprin
 
 ### Adapters without offline (mocked) tests
 
-- [ ] Upstash adapter — live tests pass, no mocked offline test #gap #adapter
-  - [*] `src/adapters/upstash.ts` — HTTP REST API, could mock fetch like CF adapters
-- [ ] Notion adapter — live tests pass, no mocked offline test #gap #adapter
-  - [*] `src/adapters/notion.ts` — uses @notionhq/client, would need to mock Client
-- [ ] Sheetlog adapter — live tests pass, no mocked offline test #gap #adapter
-  - [*] `src/adapters/sheetlog.ts` — HTTP to Google Sheets proxy
-- [ ] R2 Direct adapter — live tests pass, no mocked offline test #gap #adapter
-  - [*] `src/adapters/r2-direct.ts` — uses @aws-sdk/client-s3, could mock S3Client
-  - [*] Signed URL methods (getSignedUploadUrl, getSignedDownloadUrl) verified live via R2 test
-- [ ] F2-R2 adapter — no dedicated offline test #gap #adapter
-  - [*] `src/adapters/f2-r2.ts` — HTTP proxy to R2 via F2 service
-  - [*] Exercised indirectly via blob middleware live test (upload + delete via F2 protocol)
+- [x] [shipped 2026-04-28: 26/26 in tests/adapter-upstash.test.ts; commit 2928ff9. Mocks globalThis.fetch with URL-pattern responder.] Upstash adapter — live tests pass, no mocked offline test #gap #adapter
+- [x] [shipped 2026-04-28: 17/17 in tests/adapter-notion.test.ts; commit 10d2184. Stubs NotionModernClient via private-property injection.] Notion adapter — live tests pass, no mocked offline test #gap #adapter
+- [x] [shipped 2026-04-28: 28/28 in tests/adapter-sheetlog.test.ts; commit fb20b23. Companion to adapter-sheetlog-guard.test.ts (which covers the destructive-set/delete guards).] Sheetlog adapter — live tests pass, no mocked offline test #gap #adapter
+- [x] [shipped 2026-04-28: 23/23 in tests/adapter-r2-direct.test.ts; commit ebcb522. Stubs s3Client.send via private-property injection; signed-URL tests use real S3Client (presigner is pure-local, works offline).] R2 Direct adapter — live tests pass, no mocked offline test #gap #adapter
+- [x] [shipped 2026-04-28: 28/28 in tests/adapter-f2-r2.test.ts; commit 651e53d. Mocks globalThis.fetch with URL+bodyJson responder.] F2-R2 adapter — no dedicated offline test #gap #adapter
 
 ### Infrastructure
 
