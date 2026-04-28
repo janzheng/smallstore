@@ -235,27 +235,51 @@ Deno.test('MCP: tools/list returns all expected tools with inputSchemas', async 
     const result = resp.result as { tools: Array<{ name: string; description: string; inputSchema: unknown }> };
     assertExists(result?.tools);
     const names = result.tools.map((t) => t.name).sort();
+    // Tool registry as of 2026-04-28. If you add or remove an MCP tool,
+    // update this list. The test exists to catch unintentional drift in
+    // the public tool surface — every entry here is something an
+    // already-shipped MCP client may depend on.
     assertEquals(names, [
-      // core
+      // core (10)
       'sm_adapters', 'sm_append', 'sm_delete', 'sm_list', 'sm_query', 'sm_read',
       'sm_sync', 'sm_sync_jobs', 'sm_sync_status', 'sm_write',
-      // inbox (2026-04-25 reorg)
+      // inbox — items + confirmations + notes/todos + replay (21)
+      'sm_inbox_attachments_list',
+      'sm_inbox_confirm',
       'sm_inbox_delete',
       'sm_inbox_export',
       'sm_inbox_list',
+      'sm_inbox_mark_read',
+      'sm_inbox_mark_read_many',
+      'sm_inbox_mark_unread',
+      'sm_inbox_mirror',
+      'sm_inbox_notes',
       'sm_inbox_quarantine_list',
       'sm_inbox_query',
       'sm_inbox_read',
+      'sm_inbox_replay_hook',
       'sm_inbox_restore',
+      'sm_inbox_set_note',
+      'sm_inbox_tag',
+      'sm_inbox_todos',
+      'sm_inbox_unsubscribe',
+      // inbox — rules CRUD (6)
       'sm_inbox_rules_apply_retroactive',
       'sm_inbox_rules_create',
       'sm_inbox_rules_delete',
       'sm_inbox_rules_get',
       'sm_inbox_rules_list',
       'sm_inbox_rules_update',
-      'sm_inbox_tag',
-      'sm_inbox_unsubscribe',
-      // peers (2026-04-25 reorg)
+      // newsletter views (4)
+      'sm_newsletter_get',
+      'sm_newsletter_items',
+      'sm_newsletter_notes',
+      'sm_newsletters_list',
+      // auto-confirm allowlist (3)
+      'sm_auto_confirm_add',
+      'sm_auto_confirm_list',
+      'sm_auto_confirm_remove',
+      // peers (8)
       'sm_peers_create',
       'sm_peers_delete',
       'sm_peers_fetch',
