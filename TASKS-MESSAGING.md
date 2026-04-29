@@ -271,7 +271,7 @@ User trigger 2026-04-27: forwarded a Rosieland newsletter with `forward_note: "r
 
 ### email() handler enhancements
 
-- [?] **Per-address routing in `email()` handler.** Today, `email-handler.ts` `findByChannel('cf-email')` returns ALL inboxes registered for `cf-email` and ingests the same parsed item into every one (intentional fan-out). To support multi-inbox-per-channel by address (e.g. `mailroom@labspace.ai → mailroom`, `support@labspace.ai → support`), the handler needs to filter by `msg.to` (envelope_to) against either an inbox's `channel_config.address` OR a new `routes:` array on the inbox config. **Triggered by:** tigerflare bridge activation (see `_deno/apps/tigerflare/.brief/smallstore-bridge-activation.md`) OR any time we want a second receive address on labspace.ai. **Not blocking** anything today — we have one inbox + one route. #messaging #channel-cf-email #envelope-to-routing
+- [?] **Per-address routing in `email()` handler.** Today, `email-handler.ts` `findByChannel('cf-email')` returns ALL inboxes registered for `cf-email` and ingests the same parsed item into every one (intentional fan-out). To support multi-inbox-per-channel by address (e.g. `mailroom@labspace.ai → mailroom`, `support@labspace.ai → support`), the handler needs to filter by `msg.to` (envelope_to) against either an inbox's `channel_config.address` OR a new `routes:` array on the inbox config. **Triggered by:** tigerflare bridge activation (see `__active/_apps/tigerflare/.brief/smallstore-bridge-activation.md`) OR any time we want a second receive address on labspace.ai. **Not blocking** anything today — we have one inbox + one route. #messaging #channel-cf-email #envelope-to-routing
 
 ### Future ideas — promote when use case lands
 

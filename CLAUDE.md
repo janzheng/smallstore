@@ -58,7 +58,7 @@ claude mcp add smallstore -s user \
   -e "SMALLSTORE_URL=https://smallstore.labspace.ai" \
   -e "SMALLSTORE_TOKEN=$SMALLSTORE_TOKEN" \
   -- deno run --allow-net --allow-read --allow-env \
-     /Users/janzheng/Desktop/Projects/_deno/apps/smallstore/src/mcp-server.ts
+     /Users/janzheng/Desktop/Projects/__active/_apps/smallstore/src/mcp-server.ts
 ```
 
 **MCP caveat:** tools load at Claude Code startup. Re-registering does not update the current session — restart Claude Code for the new config to take effect.

@@ -19,7 +19,7 @@ Smallstore is a **peer** to TigerFlare — not a replacement. TigerFlare = agent
 Before the first `mcp__smallstore__sm_*` call, check the local HTTP server and start it detached if needed. The MCP server is stdio-only and forwards to this HTTP server:
 
 ```bash
-curl -sf http://localhost:9998/ >/dev/null 2>&1 || (cd /Users/janzheng/Desktop/Projects/_deno/apps/smallstore && nohup deno task serve > /tmp/smallstore.log 2>&1 & disown && sleep 3)
+curl -sf http://localhost:9998/ >/dev/null 2>&1 || (cd /Users/janzheng/Desktop/Projects/__active/_apps/smallstore && nohup deno task serve > /tmp/smallstore.log 2>&1 & disown && sleep 3)
 ```
 
 `nohup ... & disown` detaches the process so the server survives this session. Only tell the user about the autostart if it fails. Logs: `/tmp/smallstore.log`. The repo's `.smallstore.json` pins port **9998**; if your `.smallstore.json` sets a different port, update the URL. On machines with a different smallstore path, check `mcp__deno-hub__list_projects` first.
