@@ -47,6 +47,32 @@ If any items come back, surface them as a separate callout (not buried in the ge
 | Restore from quarantine | `sm_inbox_restore` |
 | Export | `sm_inbox_export` |
 | List/create/edit rules | `sm_inbox_rules_*` |
+| Mark spam (the source of truth) | `sm_inbox_mark_spam` |
+| Mark NOT spam (false-positive recovery) | `sm_inbox_mark_not_spam` |
+| Inspect spam ranks + suggestions | `sm_inbox_spam_stats` |
+| Promote a sender to a permanent rule | `sm_inbox_promote_spam_rule` |
+
+## Spam triage workflow
+
+Spam handling is **operator-driven** — the user's mark-spam decisions are the source of truth, the system never hides items the user hasn't seen, and `trusted` always overrides every spam layer below.
+
+The loop:
+
+1. **See spam → mark it.** When you spot a clearly-spammy item, run `sm_inbox_mark_spam(inbox: "mailroom", id: <item-id>)`. This adds the `spam` label, bumps the attributed sender's `spam_count`, and writes `marked_at`. Idempotent — calling twice returns `{ already_spam: true }` without double-counting.
+   - **Attribution rule:** for forwarded mail, if the forwarder is `trusted` the forwarder takes the bump (their curation choice ≠ original sender's fault); otherwise the original sender. No forward chain → just from_email.
+   - **Trusted-sender warning:** if a `trusted` sender accumulates 5+ marks with spam_rate > 0.5, the response includes `consider_demote: true` — revisit whether they still belong on the trusted list.
+
+2. **False positive → undo.** `sm_inbox_mark_not_spam(inbox: "mailroom", id: <item-id>)` removes `spam` + `quarantined`, bumps `not_spam_count`. If the item was previously `auto-confirmed`, the matching auto-confirm pattern is **revoked** (decision #3); response includes `revoked_auto_confirm: { pattern, source }` so you can `sm_auto_confirm_add` it back if you change your mind.
+
+3. **After 3-5 marks from the same sender, check the ranks.** `sm_inbox_spam_stats(inbox: "mailroom")` returns four lists:
+   - `senders_top_spam` — highest absolute spam_count (worst offenders)
+   - `senders_recently_marked` — anyone marked in the last 30 days (window_days configurable)
+   - `suggested_blocklist` — spam_rate >= 0.7 AND count >= 5, trusted excluded → ready to promote
+   - `suggested_whitelist` — explicit not-spam > spam, ≥ 3 explicit marks, trusted excluded → ready to lock in
+
+4. **Lock in the decision.** `sm_inbox_promote_spam_rule(inbox: "mailroom", sender: "...", kind: "blocklist")` creates a priority-100 quarantine rule for that sender; future mail lands in quarantine automatically. `kind: "whitelist"` creates a priority-0 `tag: "trusted"` rule and runs retroactive apply so existing items pick up the trusted label immediately. From then on every spam layer short-circuits for that sender.
+
+5. **Reverse course later if needed.** Whitelist > blocklist (priority 0 wins), so promoting a sender to whitelist later overrides any earlier blocklist rule. The blocklist rule remains in `sm_inbox_rules_list` — delete via `sm_inbox_rules_delete` if you want a clean slate.
 
 ## Newsletter views — chronological + per-publisher notes
 

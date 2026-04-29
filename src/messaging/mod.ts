@@ -92,6 +92,12 @@ export {
 } from './unsubscribe.ts';
 export { resolveSpamAttribution } from './spam-attribution.ts';
 export {
+  getSpamStats,
+  type SpamStats,
+  type SpamStatsOptions,
+  type SpamStatsRow,
+} from './spam-stats.ts';
+export {
   createContentHashHook,
   createContentHashStore,
   hashBody,

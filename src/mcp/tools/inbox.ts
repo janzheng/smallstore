@@ -274,6 +274,34 @@ export const INBOX_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'sm_inbox_spam_stats',
+    description:
+      'Spam triage rankings derived from the sender index. Returns four lists for an inbox: `senders_top_spam` (highest absolute spam_count), `senders_recently_marked` (any sender marked spam OR not-spam within window_days), `suggested_blocklist` (count >= 5 AND spam_rate >= 0.7, trusted excluded — feed these into `sm_inbox_promote_spam_rule(kind: "blocklist")`), and `suggested_whitelist` (>= 3 explicit marks AND not_spam > spam, trusted excluded). Each row includes spam_rate, marked_at, and tags. Use this after a few rounds of mark-spam/mark-not-spam to find what to promote into a rule. Optional `window_days` (default 30) and `limit` (default 50, max 500).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        window_days: { type: 'integer', description: 'Recency window for senders_recently_marked. Default 30.', minimum: 1 },
+        limit: { type: 'integer', description: 'Max items per ranked list. Default 50, max 500.', minimum: 1 },
+      },
+      required: ['inbox'],
+    },
+  },
+  {
+    name: 'sm_inbox_promote_spam_rule',
+    description:
+      'Promote a sender to a permanent rule based on spam-stats decisions. `kind: "blocklist"` creates a priority-100 quarantine rule for `from_email: <sender>` (future mail from that sender lands quarantined; quarantine is terminal so retroactive apply is a no-op — manually quarantine existing items if needed). `kind: "whitelist"` creates a priority-0 tag rule that stamps `trusted` on every match — runs `applyRetroactive` so existing items pick up the tag immediately, and from then on the trusted-bypass short-circuits every spam layer for that sender. Sender is normalized to lowercase before storage. Returns the created rule + items_affected (whitelist) or 0 (blocklist).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox: { type: 'string', description: 'Registered inbox name.' },
+        sender: { type: 'string', description: 'Sender email address (lowercased on insert).' },
+        kind: { type: 'string', enum: ['blocklist', 'whitelist'], description: 'Rule shape to create.' },
+      },
+      required: ['inbox', 'sender', 'kind'],
+    },
+  },
+  {
     name: 'sm_inbox_mark_read_many',
     description:
       'Bulk mark-read. Pass `ids: string[]` for an explicit list, OR `filter: InboxFilter` to mark-read everything matching (server intersects with `labels:["unread"]` so already-read items are skipped; empty filter `{}` marks-read every unread item). Exactly one of `ids` / `filter` must be provided. With `ids`, returns `{ total, changed, missing }`. With `filter`, returns `{ matched, changed, capped }` — `capped: true` means the 10k safety cap was hit; page via `sm_inbox_query` + explicit ids for larger batches.',
@@ -887,6 +915,38 @@ export async function handleInboxTool(
       if (typeof args.reason === 'string') body.reason = args.reason;
       const r = await http('POST', `/inbox/${encName(inbox)}/items/${encId(id)}/mark-not-spam`, body);
       if (!r.ok) throw new Error(formatHttpError('sm_inbox_mark_not_spam failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_spam_stats': {
+      const inbox = requireString(args, 'inbox');
+      const params = new URLSearchParams();
+      if (typeof args.window_days === 'number' && args.window_days > 0) {
+        params.set('window_days', String(Math.floor(args.window_days)));
+      }
+      if (typeof args.limit === 'number' && args.limit > 0) {
+        params.set('limit', String(Math.floor(args.limit)));
+      }
+      const qs = params.toString();
+      const path = `/inbox/${encName(inbox)}/spam-stats${qs ? `?${qs}` : ''}`;
+      const r = await http('GET', path);
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_spam_stats failed', r));
+      return r.body;
+    }
+
+    case 'sm_inbox_promote_spam_rule': {
+      const inbox = requireString(args, 'inbox');
+      const sender = requireString(args, 'sender');
+      const kindRaw = args.kind;
+      if (kindRaw !== 'blocklist' && kindRaw !== 'whitelist') {
+        throw new Error('sm_inbox_promote_spam_rule: kind must be "blocklist" or "whitelist"');
+      }
+      const r = await http(
+        'POST',
+        `/inbox/${encName(inbox)}/spam-stats/promote-rule`,
+        { sender, kind: kindRaw },
+      );
+      if (!r.ok) throw new Error(formatHttpError('sm_inbox_promote_spam_rule failed', r));
       return r.body;
     }
 

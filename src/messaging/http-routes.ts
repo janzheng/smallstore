@@ -48,6 +48,7 @@ import { listChannels, type InboxRegistry } from './registry.ts';
 import type { SenderIndex, SenderRecord } from './sender-index.ts';
 import { unsubscribeSender } from './unsubscribe.ts';
 import { resolveSpamAttribution } from './spam-attribution.ts';
+import { getSpamStats } from './spam-stats.ts';
 import { isSenderAllowed } from './auto-confirm.ts';
 import type { MailroomRule, RuleAction, RulesStore } from './rules.ts';
 import type { AutoConfirmSendersStore } from './auto-confirm-senders.ts';
@@ -1301,6 +1302,110 @@ export function registerMessagingRoutes(
       sender_summary: senderSummary(senderRecord),
       revoked_auto_confirm: revokedAutoConfirm,
     });
+  });
+
+  /**
+   * GET /inbox/:name/spam-stats
+   *
+   * Sprint 3 of the spam triage feedback loop. Returns four ranked
+   * lists (top spam, recently marked, suggested blocklist, suggested
+   * whitelist) computed from the sender-index. Pure read; safe to
+   * poll. Optional query params:
+   *   - window_days (default 30) — recency window for "recently marked"
+   *   - limit (default 50) — max items per list
+   *
+   * Returns 501 when senderIndexFor isn't wired.
+   */
+  app.get('/inbox/:name/spam-stats', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const inbox = registry.get(name);
+    if (!inbox) return notFound(c, `inbox "${name}" not registered`);
+
+    if (!senderIndexFor) {
+      return c.json(
+        { error: 'NotImplemented', message: 'senderIndexFor not provided — spam-stats unavailable' },
+        501,
+      );
+    }
+    const senderIndex = await senderIndexFor(name);
+    if (!senderIndex) {
+      return c.json(
+        { error: 'NotImplemented', message: `no sender index wired for inbox "${name}"` },
+        501,
+      );
+    }
+
+    const windowDaysRaw = c.req.query('window_days');
+    const limitRaw = c.req.query('limit');
+    const windowDays = windowDaysRaw ? Math.max(1, parseInt(windowDaysRaw, 10) || 30) : 30;
+    const limit = limitRaw ? Math.max(1, Math.min(500, parseInt(limitRaw, 10) || 50)) : 50;
+
+    const stats = await getSpamStats(senderIndex, { windowDays, limit });
+    return c.json({ inbox: name, ...stats });
+  });
+
+  /**
+   * POST /inbox/:name/spam-stats/promote-rule
+   *
+   * Body: { sender: string, kind: 'blocklist' | 'whitelist' }
+   *
+   * Creates a rule via the existing rules engine using the canonical
+   * priority + match shape from `.brief/spam-layers.md`:
+   *   - blocklist → priority 100, action 'quarantine', match { from_email: sender }
+   *   - whitelist → priority 0,   action 'tag', tag: 'trusted',
+   *                 match { from_email: sender }
+   *
+   * Then runs `applyRetroactive` so existing items from the sender
+   * pick up the new state. Returns the created rule + items_affected.
+   *
+   * Requires both `senderIndexFor` (for context — currently unused
+   * but reserved for "do we already have a rule for this?" lookups
+   * in a follow-up) and `rulesStoreFor`. Returns 501 when missing.
+   */
+  app.post('/inbox/:name/spam-stats/promote-rule', requireAuth, async (c) => {
+    const name = c.req.param('name')!;
+    const resolved = await resolveRulesStore(c, name);
+    if (resolved instanceof Response) return resolved;
+
+    const body = (await readJson(c)) as { sender?: unknown; kind?: unknown } | null;
+    if (!body || typeof body !== 'object') {
+      return badRequest(c, 'body must be { sender: string, kind: "blocklist" | "whitelist" }');
+    }
+    const sender = typeof body.sender === 'string' ? body.sender.trim().toLowerCase() : '';
+    const kind = body.kind;
+    if (!sender) return badRequest(c, 'body.sender must be a non-empty string');
+    if (kind !== 'blocklist' && kind !== 'whitelist') {
+      return badRequest(c, 'body.kind must be "blocklist" or "whitelist"');
+    }
+
+    const ruleInput =
+      kind === 'blocklist'
+        ? {
+            match: { from_email: sender } as InboxFilter,
+            action: 'quarantine' as RuleAction,
+            priority: 100,
+            notes: `Auto-promoted from spam-stats (blocklist) on ${new Date().toISOString()}`,
+          }
+        : {
+            match: { from_email: sender } as InboxFilter,
+            action: 'tag' as RuleAction,
+            action_args: { tag: 'trusted' },
+            priority: 0,
+            notes: `Auto-promoted from spam-stats (whitelist) on ${new Date().toISOString()}`,
+          };
+
+    const rule = await resolved.store.create(ruleInput);
+
+    // Retroactive apply only works for tag-style; quarantine is terminal so
+    // applyRetroactive returns an error string. We surface both shapes.
+    let items_affected = 0;
+    let retro_error: string | undefined;
+    if (kind === 'whitelist') {
+      const retro = await resolved.store.applyRetroactive(rule, resolved.inbox);
+      items_affected = retro.affected;
+      retro_error = retro.error;
+    }
+    return c.json({ inbox: name, created: rule, items_affected, retro_error }, 201);
   });
 
   /**

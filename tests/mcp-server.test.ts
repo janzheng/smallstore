@@ -243,7 +243,7 @@ Deno.test('MCP: tools/list returns all expected tools with inputSchemas', async 
       // core (10)
       'sm_adapters', 'sm_append', 'sm_delete', 'sm_list', 'sm_query', 'sm_read',
       'sm_sync', 'sm_sync_jobs', 'sm_sync_status', 'sm_write',
-      // inbox — items + confirmations + notes/todos + replay + spam triage (21) + admin (3)
+      // inbox — items + confirmations + notes/todos + replay + spam triage (23) + admin (3)
       'sm_inbox_attachments_list',
       'sm_inbox_confirm',
       'sm_inbox_create',
@@ -259,12 +259,14 @@ Deno.test('MCP: tools/list returns all expected tools with inputSchemas', async 
       'sm_inbox_mark_unread',
       'sm_inbox_mirror',
       'sm_inbox_notes',
+      'sm_inbox_promote_spam_rule',
       'sm_inbox_quarantine_list',
       'sm_inbox_query',
       'sm_inbox_read',
       'sm_inbox_replay_hook',
       'sm_inbox_restore',
       'sm_inbox_set_note',
+      'sm_inbox_spam_stats',
       'sm_inbox_tag',
       'sm_inbox_todos',
       'sm_inbox_unsubscribe',
@@ -664,6 +666,109 @@ Deno.test('MCP: unreachable server surfaces clear error, does not hang', async (
     );
   } finally {
     await mcp.close();
+  }
+});
+
+// ============================================================================
+// Spam triage Sprint 3 — sm_inbox_spam_stats + sm_inbox_promote_spam_rule
+// ============================================================================
+
+Deno.test('MCP: sm_inbox_spam_stats forwards to GET /inbox/:name/spam-stats with query params', async () => {
+  const mock = await startMockServer();
+  mock.setResponder(() => ({
+    status: 200,
+    body: {
+      inbox: 'mailroom',
+      senders_top_spam: [],
+      senders_recently_marked: [],
+      suggested_blocklist: [],
+      suggested_whitelist: [],
+    },
+  }));
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    const resp = await callTool(mcp, 'sm_inbox_spam_stats', {
+      inbox: 'mailroom',
+      window_days: 14,
+      limit: 25,
+    });
+    assertEquals(extractText(resp).isError, false);
+    assertEquals(mock.requests.length, 1);
+    const req = mock.requests[0];
+    assertEquals(req.method, 'GET');
+    assert(req.path.startsWith('/inbox/mailroom/spam-stats'), `path: ${req.path}`);
+    assert(req.path.includes('window_days=14'), `query: ${req.path}`);
+    assert(req.path.includes('limit=25'), `query: ${req.path}`);
+  } finally {
+    await mcp.close();
+    await mock.stop();
+  }
+});
+
+Deno.test('MCP: sm_inbox_spam_stats omits query string when no opts provided', async () => {
+  const mock = await startMockServer();
+  mock.setResponder(() => ({
+    status: 200,
+    body: {
+      inbox: 'mailroom',
+      senders_top_spam: [],
+      senders_recently_marked: [],
+      suggested_blocklist: [],
+      suggested_whitelist: [],
+    },
+  }));
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    await callTool(mcp, 'sm_inbox_spam_stats', { inbox: 'mailroom' });
+    assertEquals(mock.requests[0].path, '/inbox/mailroom/spam-stats');
+  } finally {
+    await mcp.close();
+    await mock.stop();
+  }
+});
+
+Deno.test('MCP: sm_inbox_promote_spam_rule forwards to POST with sender + kind body', async () => {
+  const mock = await startMockServer();
+  mock.setResponder(() => ({
+    status: 201,
+    body: {
+      inbox: 'mailroom',
+      created: { id: 'rule-1', match: { from_email: 'spammy@x.com' }, action: 'quarantine', priority: 100 },
+      items_affected: 0,
+    },
+  }));
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    const resp = await callTool(mcp, 'sm_inbox_promote_spam_rule', {
+      inbox: 'mailroom',
+      sender: 'spammy@x.com',
+      kind: 'blocklist',
+    });
+    assertEquals(extractText(resp).isError, false);
+    const req = mock.requests[0];
+    assertEquals(req.method, 'POST');
+    assertEquals(req.path, '/inbox/mailroom/spam-stats/promote-rule');
+    assertEquals(req.body, { sender: 'spammy@x.com', kind: 'blocklist' });
+  } finally {
+    await mcp.close();
+    await mock.stop();
+  }
+});
+
+Deno.test('MCP: sm_inbox_promote_spam_rule rejects unknown kind locally (no HTTP call)', async () => {
+  const mock = await startMockServer();
+  const mcp = startMcp({ SMALLSTORE_URL: mock.url });
+  try {
+    const resp = await callTool(mcp, 'sm_inbox_promote_spam_rule', {
+      inbox: 'mailroom',
+      sender: 'a@x.com',
+      kind: 'graylist',
+    });
+    assertEquals(extractText(resp).isError, true);
+    assertEquals(mock.requests.length, 0);
+  } finally {
+    await mcp.close();
+    await mock.stop();
   }
 });
 
