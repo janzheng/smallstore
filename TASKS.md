@@ -55,7 +55,7 @@ Level 2 (metadata + authenticated proxy) live since 2026-04-25 (`b1c385d1`). Two
 
 - [?] **npm publish — PARKED indefinitely.** Smallstore is JSR-first; the dist build (`deno task build:npm`) is Node-compatible and the Worker already consumes it via `link:../dist`, so npm-shape correctness is exercised. But there's no real Node consumer asking for it on the registry today. Promote when a real Node consumer materializes — `cd dist && npm publish` is the one-shot, peerDeps split is already correct. Do NOT surface as a default next-step. #npm-publish #parked
 - [?] **npm validation in Node.js projects** — same trigger as the publish task above. #npm-validate #parked
-- [ ] Migrate coverflow-workers into smallstore-owned worker → see `.brief/smallstore-workers-takeover.md`. #infra
+- [~] [wontdo 2026-04-28: already done. The standalone smallstore deploy at `smallstore.labspace.ai` owns its own CF bindings (MAILROOM_D1, MAILROOM_R2) end-to-end via `deploy/src/index.ts` — no dependency on coverflow's worker. The coverflow-side `coverflow-workers/` source has been archived to `_archive/` in coverflow-v3, and that project's TASKS.md:66 has the matching closure note. The brief `.brief/smallstore-workers-takeover.md` was never written and isn't needed.] Migrate coverflow-workers into smallstore-owned worker #infra
 
 ### Sheetlog — fully resolved
 
