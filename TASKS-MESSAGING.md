@@ -30,8 +30,8 @@ Full audit + `docs/design/PLUGIN-AUTHORING.md` + postal-mime lazy-load fix all s
 
 ## Risks
 
-- [!] **CF Email Routing free-tier inbound limits** (~few hundred/day historically) — fine for personal mailroom, may bottleneck if mailroom ever ingests high volume. Watch for; paid plan is the escape valve
-- [!] **CF Worker `email()` handler timeout** (sub-30s) — channel parser + storage write must complete synchronously; expensive ops (vector embedding, full-text indexing) deferred to follow-up Workflows
+- [*] **CF Email Routing free-tier inbound limits** (~225/day per address on free plan) — fine for personal mailroom today, may bottleneck under high volume. **Monitoring snippet** lives in `mailroom-inbox/CLAUDE.md § Monitoring the CF Email Routing free-tier quota`. Escape valve: paid plan (~$5/mo lifts to 250k/day).
+- [*] **CF Worker `email()` handler 30s timeout** — every postClassify hook runs synchronously in this budget. **Bounded-tail invariant documented in `deploy/src/index.ts` § Hook pipeline.** Currently the only outbound fetch is auto-confirm (10s capped via shared AbortController across redirect walk, see `src/messaging/auto-confirm.ts:307-308`); everything else is pure-JS or single D1/R2 round-trips. Worst case ~12s, ~18s slack. If you add a hook with outbound HTTP / vector embedding / large-blob processing, EITHER cap with timeout under 25s total OR move out of pipeline via `ctx.waitUntil()`.
 - [x] **Schema drift risk** — channel parsers' `fields` shape is the contract every downstream consumer reads. Plan: version channels (`source: 'email/v1'`); additive changes only; document in `inbox-pattern.md`
 - [x] **Runtime-inbox leak** — caller-created inboxes accumulate if TTL not enforced or admin forgets to DELETE. Mitigation: server-side TTL cleanup + admin list endpoint with creation timestamps
 - [x] **Auth-token-on-disk** — mailroom collection scripts need the bearer token in `.env`; standard "secret in dotfile" risk. Document rotation procedure

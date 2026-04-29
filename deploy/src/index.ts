@@ -312,6 +312,23 @@ async function buildApp(env: Env): Promise<AppHandle> {
   // Hook pipeline (curation-aware)
   // -------------------------------------------------------------------------
   //
+  // **Bounded-tail invariant — DO NOT BREAK THIS.** The CF Worker `email()`
+  // handler has a 30s wall-clock cap. Every postClassify hook below runs
+  // synchronously in that budget. The ONLY outbound fetch in this pipeline
+  // is `auto-confirm`, capped at 10s total via a shared AbortController
+  // across its redirect walk (`src/messaging/auto-confirm.ts:307-308`).
+  // Everything else is pure-JS or single D1/R2 round-trips. Worst-case sum
+  // is ~12s; we have ~18s of slack.
+  //
+  // If you add a hook that does ANY of:
+  //   - outbound HTTP fetch (LLM call, webhook, third-party API)
+  //   - vector embedding / full-text indexing
+  //   - large-blob processing (>10MB)
+  // then EITHER cap it with an AbortController/timeout AND keep the total
+  // synchronous tail under 25s, OR move it out of the pipeline via
+  // `ctx.waitUntil()` so it runs post-response. Don't blindly add work to
+  // the synchronous path.
+  //
   // preIngest order matters:
   //   1. forward-detect — detects mail the user forwarded from Gmail (via
   //      SELF_ADDRESSES match or X-Forwarded-* headers), tags 'forwarded' +

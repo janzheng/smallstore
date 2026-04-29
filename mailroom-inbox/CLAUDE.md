@@ -134,6 +134,22 @@ Patterns are stored in D1 and editable at runtime — no redeploy needed. Items 
 
 Currently seeded patterns: `*@substack.com`, `*@substackmail.com`, `*@convertkit.com`, `*@beehiiv.com`, `*@mailerlite.com`, `*@emailoctopus.com`, `*@uxdesign.cc`, `*@every.to`. New env patterns seed on cold start; runtime deletes survive (sentinel-tracked).
 
+## Monitoring the CF Email Routing free-tier quota
+
+CF Email Routing on the free plan caps inbound at ~225/day per address. The mailroom is well under today, but if newsletter signups or forwarding patterns shift it can creep up. Quick check (from the project root with `deploy/.env` sourced):
+
+```sh
+# Items received in the last 24h
+TODAY=$(date -u -v-1d +%Y-%m-%dT%H:%M:%SZ)
+curl -sS -H "Authorization: Bearer $SMALLSTORE_TOKEN" \
+  -X POST "https://smallstore.labspace.ai/inbox/mailroom/query" \
+  -H "Content-Type: application/json" \
+  -d "{\"received_after\":\"$TODAY\",\"limit\":500}" \
+  | jq '{count: (.items | length), capped: (.items | length) >= 500}'
+```
+
+If `capped: true` you're either being spammed OR brushing the quota — bump `limit` and recount, or cross-check against `sm_inbox_query`. Sustained >150/day is the early-warning signal to upgrade to paid (~$5/mo lifts the cap to 250k/day).
+
 ## When things break
 
 If MCP tools return 404, the Worker is down, or auto-confirm isn't firing — that's a development task. `cd ..` and follow the project-root `CLAUDE.md` (build, deploy, test, diagnose). Common pointer: rebuild + deploy with `deno task build:npm && cd deploy && yarn deploy`.
