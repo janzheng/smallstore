@@ -38,6 +38,8 @@ A portable storage abstraction where **data is the product** and any app is just
 - [x] [decided: keep in-tree for now] Episodic memory + progressive disclosure + graph store — useful for agentic/research use cases, not core path
 - [x] [decided: Hono] HTTP framework — Express stub intentionally not implemented
 - [x] [decided: JSR primary + npm via dnt] Package distribution — JSR is primary, npm build via @deno/dnt
+- [x] [decided: fail-closed] Empty `SMALLSTORE_TOKEN` rejects all protected requests — pre-2026-04-28, an empty/whitespace token silently disabled auth (`if (!token) return next()`). Now: `undefined` keeps routes open (dev-mode), but a *set-but-empty* value fails closed with 401 + a server log line. The set-but-empty case is almost always a CI/secret-rotation mistake; failing closed is the safe default. See `deploy/src/index.ts` `requireAuth`. Reference: security audit B001.
+- [x] [decided: static safe-prefix regex + hard denylist, no override] Peer auth env-var allowlist — peer/webhook auth resolvers can only resolve env-vars matching `/^(TF_|NOTION_|SHEET_|GH_|AIRTABLE_|UPSTASH_|...)[A-Z0-9_]+$/`. `SMALLSTORE_*`, `CLOUDFLARE_*`, `CF_*`, `AWS_*`, `SECRET_*`, `PRIVATE_*` are hard-denied. **No env-var-controlled override** — that would just relocate the bug. Module: `src/peers/env-allowlist.ts`; gating happens at both `validateAuthShape` (HTTP) and `resolvePeerAuth` (request-time) for defense-in-depth. Reference: security audit B002/B003.
 
 ## Risks
 
