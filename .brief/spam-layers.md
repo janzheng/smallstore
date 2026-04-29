@@ -1,6 +1,6 @@
 # Spam layers + triage feedback loop
 
-**Status:** ready (design complete, no code yet)
+**Status:** shipped 2026-04-28 (all three sprints — see `.brief/2026-04-28-spam-sprint.md` for the retrospective)
 **From:** preventive design — no real spam yet, but mailroom volume + the audit's "watch this surface" notes mean it'll happen
 **Tasks:** `-> TASKS-MESSAGING.md § Spam layers`
 
