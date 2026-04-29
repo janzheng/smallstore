@@ -47,6 +47,10 @@ import {
   createAutoConfirmSendersStore,
   seedAutoConfirmFromEnv,
   createStampUnreadHook,
+  createHeaderHeuristicsHook,
+  createSenderReputationHook,
+  createContentHashHook,
+  createContentHashStore,
   parseSelfAddresses,
   parseSenderAliases,
   registerChannel,
@@ -182,6 +186,10 @@ async function buildApp(env: Env): Promise<AppHandle> {
   // (tigerflare, sheetlogs, other smallstores, etc.). Same D1 binding.
   // See `.brief/peer-registry.md`.
   const peersD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'peers' });
+  // Content-hash table — Layer 4 of the layered spam defense. Sliding-window
+  // store keyed by `contenthash/<sender>/<sha256>` with a 24h repeat window.
+  // Generic kv shape (no custom DDL) — table created lazily on first write.
+  const contentHashD1 = createCloudflareD1Adapter({ binding: env.MAILROOM_D1, table: 'mailroom_content_hashes' });
 
   // Per-inbox D1 adapters. These boot-time inboxes were created BEFORE
   // `Inbox.keyPrefix` shipped, so each owns a dedicated table to keep the
@@ -329,14 +337,27 @@ async function buildApp(env: Env): Promise<AppHandle> {
   //      `needs-confirm` + writes `fields.confirm_url` for double-opt-in
   //      confirmation mail. Gated on `newsletter` label to avoid false
   //      positives from password-reset / account-verification flows.
-  //   3. auto-confirm — for senders matching AUTO_CONFIRM_SENDERS globs,
-  //      GETs the extracted confirm_url at ingest time; on success swaps
-  //      `needs-confirm` → `auto-confirmed`. Non-allowlisted senders fall
-  //      through to manual confirmation via POST /inbox/:name/confirm/:id.
-  //   4. stamp-unread — adds `unread` to new items so `{labels:["unread"]}`
+  //   3. header-heuristics — Layer 2 of spam defense. Emits `header:*`
+  //      labels (from-replyto-mismatch, generic-display-name, dmarc-fail,
+  //      bulk-without-listunsubscribe). No verdicts. Trusted senders
+  //      short-circuit. (.brief/spam-layers.md Layer 2)
+  //   4. sender-reputation — Layer 3. Emits `spam-suspect:high` /
+  //      `spam-suspect:medium` from the sender-index `spam_rate` predicate.
+  //      Trusted senders short-circuit (decision #4). Runs BEFORE
+  //      auto-confirm so high-reputation rules can keep auto-confirm from
+  //      clicking confirmation links for suspect senders.
+  //   5. content-hash — Layer 4. sha256 of normalized body in a 24h
+  //      sliding window per sender. Emits `campaign-blast` on repeat
+  //      (or `repeated:trusted` for trusted senders, decision #4
+  //      amplification). 7-day sliding window in `mailroom_content_hashes`.
+  //   6. auto-confirm — for senders matching the runtime allowlist (D1-backed
+  //      store), GETs the extracted confirm_url at ingest time; on success
+  //      swaps `needs-confirm` → `auto-confirmed`. Non-allowlisted senders
+  //      fall through to manual confirmation via POST /inbox/:name/confirm/:id.
+  //   7. stamp-unread — adds `unread` to new items so `{labels:["unread"]}`
   //      queries work. Idempotent + skips terminal labels (archived,
   //      quarantined) so re-ingests from /tag or /confirm don't resurrect it.
-  //   5. sender-index upsert — final, so the upsert sees every label above.
+  //   8. sender-index upsert — final, so the upsert sees every label above.
   const selfAddresses = parseSelfAddresses(env.SELF_ADDRESSES);
   const senderAliases = parseSenderAliases(env.SENDER_ALIASES);
   const forwardDetectHook = createForwardDetectHook({ selfAddresses });
@@ -348,6 +369,16 @@ async function buildApp(env: Env): Promise<AppHandle> {
   // can key off `newsletter` (classifier-applied) without ordering pain.
   const newsletterNameHook = createNewsletterNameHook();
   const confirmDetectHook = createConfirmDetectHook();
+
+  // Spam layers 2-4 — each emits labels only (no verdicts). Trusted-sender
+  // bypass at every layer (decision #4 in `.brief/spam-layers.md`).
+  const headerHeuristicsHook = createHeaderHeuristicsHook({ senderIndex: mailroomSenderIndex });
+  const senderReputationHook = createSenderReputationHook({ senderIndex: mailroomSenderIndex });
+  const mailroomContentHashStore = createContentHashStore(contentHashD1, { keyPrefix: 'contenthash/' });
+  const contentHashHook = createContentHashHook({
+    store: mailroomContentHashStore,
+    senderIndex: mailroomSenderIndex,
+  });
   // Auto-confirm: dynamic source (D1-backed store). Hook calls
   // `getPatterns()` on every invocation, cached for 30s. Adding a
   // pattern via `POST /admin/auto-confirm/senders` takes effect within
@@ -405,7 +436,16 @@ async function buildApp(env: Env): Promise<AppHandle> {
     inbox: mailroom,
     hooks: {
       preIngest: [forwardDetectHook, senderAliasHook, plusAddrHook, rulesHook],
-      postClassify: [newsletterNameHook, confirmDetectHook, autoConfirmHook, stampUnreadHook, senderUpsertHook],
+      postClassify: [
+        newsletterNameHook,
+        confirmDetectHook,
+        headerHeuristicsHook,
+        senderReputationHook,
+        contentHashHook,
+        autoConfirmHook,
+        stampUnreadHook,
+        senderUpsertHook,
+      ],
     },
     config: mailroomConfig,
     origin: 'boot',

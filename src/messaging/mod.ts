@@ -92,6 +92,16 @@ export {
 } from './unsubscribe.ts';
 export { resolveSpamAttribution } from './spam-attribution.ts';
 export {
+  createContentHashHook,
+  createContentHashStore,
+  hashBody,
+  normalizeBody,
+  type ContentHashHookOptions,
+  type ContentHashRecord,
+  type ContentHashStore,
+  type ContentHashStoreOptions,
+} from './content-hash.ts';
+export {
   DEFAULT_QUARANTINE_LABEL,
   listQuarantined,
   quarantineItem,
@@ -154,6 +164,19 @@ export {
   UNREAD_LABEL,
   type UnreadHookOptions,
 } from './unread.ts';
+export {
+  createSenderReputationHook,
+  computeConsiderDemote,
+  type SpamReputationHookOptions,
+} from './spam-reputation.ts';
+export {
+  createHeaderHeuristicsHook,
+  hasFromReplyToMismatch,
+  hasGenericDisplayName,
+  hasBulkWithoutListUnsubscribe,
+  hasDmarcFail,
+  type HeaderHeuristicsHookOptions,
+} from './spam-headers.ts';
 export {
   createRulesStore,
   deriveRuleLabel,
