@@ -21,7 +21,6 @@ All three deliverable phases of `.brief/notes-todos-and-mirror.md` are live. The
 
 - [?] **Cross-newsletter topic threading (LLM-extracted from notes)** — `/inbox/:name/topics`. Needs an LLM call path. From original forward-notes brief. #messaging #cross-newsletter-tags
 - [?] **Phase 3 — newsletter-level meta-notes — DEFERRED.** `POST /inbox/:name/newsletters/:slug/note` (separate from per-issue). Per-issue notes already aggregate well; revisit only if writing a meta-note feels awkward in practice. Detail: `.brief/notes-todos-and-mirror.md § Phase 3`. #messaging #newsletter-meta-note
-- [?] **Delete retired `com.smallstore.mailroom-sync.plist.disabled-2026-04-29`** — the plist's function (pull mailroom mirror from tigerflare cloud → local disk) was absorbed by `com.tigerflare.server`'s universal space-sync during the 2026-04-29 migration. **Trigger:** once we observe another successful end-to-end mirror cycle (smallstore prod cron → tigerflare cloud → tigerflare local) confirming the new wiring stays, delete outright. Currently `.disabled-2026-04-29` to preserve history. See `.journal/2026-04-29-migration-cleanup-and-mirror-handoff.md` for context. #ops #migration-cleanup
 
 ## Later
 
