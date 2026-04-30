@@ -222,7 +222,7 @@ The previous draft proposed staging via "preset + helpers + convention now → g
 1. **Ship `Outbox` interface + `CloudflareEmailOutbox` reference impl** as soon as the CF Email Sending binding is wired (per the email-for-agents post, public beta as of 2026-04-16).
 2. **Outbox can land same-cycle as Inbox or one cycle behind.** The agentic-email-responder use case wants both. If Inbox is week 1 and Outbox is week 2, mailroom-only consumers (browse / sync) work day 1.
 3. **Storage backing** — Outbox needs a queue + a log. CF: D1 (queue table + log table) + R2 (large payloads). Local: SQLite + local-file. Same composition pattern as Inbox.
-4. **The actual "send" worker** is its own thing — a Cloudflare Worker that polls the queue table (or is woken by DO alarms / Queues) and calls `env.EMAIL.send`. Smallstore's Outbox plugin is the API; the worker is the implementation. Like with mailroom: producer/sender code lives in `_deno/apps/<inbox-or-outbox-name>/`, consumer API lives in smallstore.
+4. **The actual "send" worker** is its own thing — a Cloudflare Worker that polls the queue table (or is woken by DO alarms / Queues) and calls `env.EMAIL.send`. Smallstore's Outbox plugin is the API; the worker is the implementation. Like with mailroom: producer/sender code lives in `__active/_apps/<inbox-or-outbox-name>/`, consumer API lives in smallstore.
 
 ### Concrete deltas to smallstore
 
@@ -291,7 +291,7 @@ The graduation-criteria framing in that earlier draft is *less load-bearing now*
 - **Don't bake the email-specific schema into the Inbox helper.** Field-level details (`from_email`, `subject`, `body_text`) belong in the inbox *instance*, not the plugin interface. The interface speaks `fields: Record<string, unknown>`.
 - **Don't ship Outbox without idempotency.** It's the one feature that distinguishes "a real outbox" from "a wrapper around `fetch`."
 - **Don't make the filter spec smallstore-specific syntax.** It's just markdown frontmatter; portable.
-- **Don't try to run the Cloudflare-side workers from inside smallstore.** Smallstore is the consumer API. Workers are separate `_deno/apps/<name>/` projects. They communicate via the shared D1+R2 (or DO).
+- **Don't try to run the Cloudflare-side workers from inside smallstore.** Smallstore is the consumer API. Workers are separate `__active/_apps/<name>/` projects. They communicate via the shared D1+R2 (or DO).
 
 ## References
 
