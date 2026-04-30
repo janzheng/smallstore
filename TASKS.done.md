@@ -4,6 +4,14 @@ Archive of shipped work, newest at top. See `git log` for full diffs and individ
 
 ---
 
+## 2026-04-29 — Single-instance preflight on `deno task serve`
+
+Discovered during the `_deno/apps → __active/_apps` migration: 1 orphan smallstore-server (PID 43304) had been running 5+ days from a closed terminal with no detection. Same orphan-from-terminal pattern as brigade. Brief at `.brief/orphan-server-instances.md`.
+
+- [x] [done 2026-04-29] **`preflightPort()` in `serve.ts` + `/health` instance fingerprint** — `serve.ts` now probes `http://127.0.0.1:<port>/health` (500ms timeout) before binding; refuses with a clear `Existing PID: <n> (since <iso>)` + `kill <pid>` message if another instance is already up. `/health` returns `{ status, pid, started_at }` so the preflight error identifies the running instance — additive change, existing `status: 'ok'` clients keep working. Runs after `loadConfig()` (we need the resolved port) but before adapter/inbox build, so a refused start doesn't open DBs or register inboxes. Verified end-to-end: fresh start → second start refused → `kill <pid>` → fresh start succeeds. Skipped `--force-replace` (low value; `kill <pid>` from the error message is one keystroke shorter than a flag). #ops
+
+---
+
 ## 2026-04-27 — Stale-unread auto-mark-read sweep
 
 User pitched: "auto-mark-read sweep, will pay off as my subscription list grows."

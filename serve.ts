@@ -65,6 +65,35 @@ function buildRouting(config: SmallstoreServerConfig): Record<string, { adapter:
 
 const config = await loadConfig();
 
+// Refuse to start if another smallstore is already serving on this port.
+// Without this, `deno task serve` from a closed terminal can leave an orphan
+// (PPID=1) running silently for days. See `.brief/orphan-server-instances.md`.
+async function preflightPort(port: number): Promise<void> {
+  try {
+    const resp = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(500),
+    });
+    if (!resp.ok && resp.status !== 404) return;
+    const info = (await resp.json().catch(() => ({}))) as { pid?: number; started_at?: string };
+    console.error(`\n  Port ${port} is already serving smallstore.`);
+    if (info.pid) {
+      const since = info.started_at ? ` (since ${info.started_at})` : '';
+      console.error(`  Existing PID: ${info.pid}${since}`);
+      console.error(`\n  Stop it:        kill ${info.pid}`);
+    } else {
+      console.error(`\n  Stop it:        pgrep -f "deno.*serve.ts" | xargs kill`);
+    }
+    console.error(`  Different port: SM_PORT=${port + 1} deno task serve\n`);
+    Deno.exit(1);
+  } catch {
+    // No response → port is free.
+  }
+}
+await preflightPort(config.port);
+
+const SERVER_PID = Deno.pid;
+const SERVER_STARTED_AT = new Date().toISOString();
+
 let smallstore;
 let adapterNames: string[];
 let defaultAdapter: string;
@@ -130,8 +159,8 @@ const app = new Hono();
 // CORS
 app.use('*', cors());
 
-// Health check
-app.get('/health', (c) => c.json({ status: 'ok' }));
+// Health check — pid + started_at let preflightPort() identify the running instance.
+app.get('/health', (c) => c.json({ status: 'ok', pid: SERVER_PID, started_at: SERVER_STARTED_AT }));
 
 // Info endpoint
 app.get('/', (c) => {

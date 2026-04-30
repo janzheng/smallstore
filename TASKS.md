@@ -21,6 +21,8 @@ All three deliverable phases of `.brief/notes-todos-and-mirror.md` are live. The
 
 - [?] **Cross-newsletter topic threading (LLM-extracted from notes)** — `/inbox/:name/topics`. Needs an LLM call path. From original forward-notes brief. #messaging #cross-newsletter-tags
 - [?] **Phase 3 — newsletter-level meta-notes — DEFERRED.** `POST /inbox/:name/newsletters/:slug/note` (separate from per-issue). Per-issue notes already aggregate well; revisit only if writing a meta-note feels awkward in practice. Detail: `.brief/notes-todos-and-mirror.md § Phase 3`. #messaging #newsletter-meta-note
+- [?] **Rename misleading `com.smallstore.mailroom-sync.plist`** — the launchd plist named `mailroom-sync` actually runs tigerflare's sync (`src/sync.ts` against `__active/_apps/tigerflare`), not a smallstore server. Either rename to `com.smallstore.inbox-mirror-sync.plist` or document. Naming nit, not load-bearing. #ops #naming
+- [?] **Delete stale `_deno/apps/{smallstore,tigerflare,brigade}` copies** — the 2026-04-29 migration to `__active/_apps/` was a copy, not a move; the old trees are dead weight (~1GB+). MCP registrations + launchd plists already point at the new paths. Destructive (`rm -rf`); needs explicit confirmation when run. Cross-project chore — also affects tigerflare + brigade. #ops #migration-cleanup
 
 ## Later
 
